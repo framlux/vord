@@ -1300,6 +1300,40 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task ResolveEffectiveLimits_OverrideSetForEveryLimit_ReportsTheOverrideNotTheTierRow()
+    {
+        // An Enterprise agreement's numbers live only in the override; the tier row beneath is a placeholder.
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Enterprise);
+        TierFeatureLimit row = new()
+        {
+            Tier = SubscriptionTier.Enterprise,
+            MachineLimit = 10000,
+            RetentionDays = 365,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 0,
+        };
+        TenantSubscriptionOverride over = new()
+        {
+            TenantId = 1,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            MemberLimit = 75,
+        };
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(sub, row, over, EffectiveLimitDefaults());
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(500);
+        await Assert.That(limits.RetentionDays).IsEqualTo(180);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(20);
+        await Assert.That(limits.MemberLimit).IsEqualTo(75);
+    }
+
+    [Test]
     public async Task ResolveEffectiveLimits_OverrideOfZero_IsKeptRatherThanFallingThrough()
     {
         // Zero means "none allowed" (and, for machines, "pause every host"); it is a value, not an absence.

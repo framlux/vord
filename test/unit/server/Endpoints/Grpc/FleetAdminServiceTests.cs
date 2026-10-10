@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -12,6 +13,8 @@ using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
@@ -27,6 +30,7 @@ using Hangfire.Storage.Monitoring;
 using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -278,19 +282,16 @@ public sealed class FleetAdminServiceTests
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        TierFeatureLimit tierLimits = new TierFeatureLimit
+        EffectiveLimits limits = new EffectiveLimits
         {
-            Tier = SubscriptionTier.Pro,
             MachineLimit = 50,
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
-            MemberLimit = 5,
-            MinimumBillableMachines = 1,
-            UpdatedAt = DateTimeOffset.UtcNow
+            MemberLimit = 5
         };
 
-        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 10, 3, subscription, tierLimits);
+        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 10, 3, subscription, limits, pausedMachineCount: 0);
 
         await Assert.That(result.Id).IsEqualTo(5);
         await Assert.That(result.ExternalId).IsEqualTo("ext-t5");
@@ -325,20 +326,8 @@ public sealed class FleetAdminServiceTests
             CreatedAt = DateTimeOffset.UnixEpoch,
             UpdatedAt = DateTimeOffset.UnixEpoch,
         };
-        TierFeatureLimit tier = new()
+        EffectiveLimits limits = new()
         {
-            Tier = SubscriptionTier.Enterprise,
-            MachineLimit = 10000,
-            RetentionDays = 365,
-            AlertRuleLimit = 25,
-            WebhookLimit = 15,
-            MemberLimit = int.MaxValue,
-            MinimumBillableMachines = 0,
-            UpdatedAt = DateTimeOffset.UnixEpoch,
-        };
-        TenantSubscriptionOverride tenantOverride = new()
-        {
-            TenantId = TenantInternalId,
             MachineLimit = 500,
             RetentionDays = 180,
             AlertRuleLimit = 40,
@@ -347,7 +336,7 @@ public sealed class FleetAdminServiceTests
         };
 
         FleetTenant result = FleetAdminService.MapToFleetTenant(
-            tenant, 4, 2, subscription, tier, tenantOverride, alertRuleCount: 7, webhookCount: 3);
+            tenant, 4, 2, subscription, limits, pausedMachineCount: 0, alertRuleCount: 7, webhookCount: 3);
 
         await Assert.That(result.AlertRuleCount).IsEqualTo(7);
         await Assert.That(result.WebhookCount).IsEqualTo(3);
@@ -370,27 +359,9 @@ public sealed class FleetAdminServiceTests
             CreatedByUserId = 1
         };
 
-        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 0, 0, null);
+        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 0, 0, null, new EffectiveLimits(), pausedMachineCount: 0);
 
         await Assert.That(result.Subscription).IsNull();
-    }
-
-    [Test]
-    public async Task MapSubscription_NullMachineLimit_SetsZero()
-    {
-        TenantSubscription subscription = new TenantSubscription
-        {
-            TenantId = 1,
-            Tier = SubscriptionTier.Team,
-            Status = SubscriptionStatus.Active,
-
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
-
-        FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
-
-        await Assert.That(result.MachineLimit).IsEqualTo(0);
     }
 
     [Test]
@@ -408,7 +379,7 @@ public sealed class FleetAdminServiceTests
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
+        FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription, new EffectiveLimits());
 
         await Assert.That(result.CurrentPeriodEnd).IsNotNull();
 
@@ -428,58 +399,44 @@ public sealed class FleetAdminServiceTests
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
+        FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription, new EffectiveLimits());
 
         await Assert.That(result.CurrentPeriodEnd).IsNull();
     }
 
     [Test]
-    public async Task MapSubscription_OverrideSet_ReportsTheOverrideNotTheTierValue()
+    public async Task MapSubscription_ReportsTheEffectiveLimitsItIsGiven()
     {
-        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Enterprise, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, AppliedAgreementRevision = 4, CancelAtPeriodEnd = false };
-        TierFeatureLimit tier = new() { Tier = SubscriptionTier.Enterprise, MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue, MinimumBillableMachines = 0 };
-        TenantSubscriptionOverride ov = new() { TenantId = 1, MachineLimit = 500, RetentionDays = 180, AlertRuleLimit = 40, WebhookLimit = 20, MemberLimit = 75 };
+        TenantSubscription sub = new()
+        {
+            TenantId = 1,
+            Tier = SubscriptionTier.Enterprise,
+            Status = SubscriptionStatus.Active,
+            CancelAtPeriodEnd = true,
+            AppliedAgreementRevision = 4,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        };
+        EffectiveLimits limits = new()
+        {
+            MachineLimit = 11,
+            RetentionDays = 22,
+            AlertRuleLimit = 33,
+            WebhookLimit = 44,
+            MemberLimit = 55,
+        };
 
-        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub, tier, ov);
+        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub, limits);
 
         await Assert.That(proto.Tier).IsEqualTo(BillingTier.Enterprise);
-        await Assert.That(proto.MachineLimit).IsEqualTo(500);
-        await Assert.That(proto.RetentionDays).IsEqualTo(180);
-        await Assert.That(proto.MemberLimit).IsEqualTo(75);
-        await Assert.That(proto.AlertRuleLimit).IsEqualTo(40);
-        await Assert.That(proto.WebhookLimit).IsEqualTo(20);
+        await Assert.That(proto.Status).IsEqualTo("Active");
+        await Assert.That(proto.MachineLimit).IsEqualTo(11);
+        await Assert.That(proto.RetentionDays).IsEqualTo(22);
+        await Assert.That(proto.AlertRuleLimit).IsEqualTo(33);
+        await Assert.That(proto.WebhookLimit).IsEqualTo(44);
+        await Assert.That(proto.MemberLimit).IsEqualTo(55);
+        await Assert.That(proto.CancelAtPeriodEnd).IsTrue();
         await Assert.That(proto.AppliedAgreementRevision).IsEqualTo(4);
-    }
-
-    [Test]
-    public async Task MapSubscription_OverrideFieldsUnset_FallBackToTheTierPerField()
-    {
-        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Pro, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch };
-        TierFeatureLimit tier = new() { Tier = SubscriptionTier.Pro, MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5, MinimumBillableMachines = 1 };
-        TenantSubscriptionOverride ov = new() { TenantId = 1, MachineLimit = 50 };
-
-        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub, tier, ov);
-
-        await Assert.That(proto.MachineLimit).IsEqualTo(50);
-        await Assert.That(proto.RetentionDays).IsEqualTo(60);
-        await Assert.That(proto.MemberLimit).IsEqualTo(5);
-        await Assert.That(proto.AlertRuleLimit).IsEqualTo(10);
-        await Assert.That(proto.WebhookLimit).IsEqualTo(5);
-        await Assert.That(proto.AppliedAgreementRevision).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task MapSubscription_NoOverrideAndNoTierRow_ReportsZeroForEveryLimit()
-    {
-        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch };
-
-        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub);
-
-        await Assert.That(proto.MachineLimit).IsEqualTo(0);
-        await Assert.That(proto.RetentionDays).IsEqualTo(0);
-        await Assert.That(proto.MemberLimit).IsEqualTo(0);
-        await Assert.That(proto.AlertRuleLimit).IsEqualTo(0);
-        await Assert.That(proto.WebhookLimit).IsEqualTo(0);
     }
 
     [Test]
@@ -500,13 +457,39 @@ public sealed class FleetAdminServiceTests
             RegistrationTokenId = 1
         };
 
-        FleetMachine result = FleetAdminService.MapToFleetMachine(machine, "My Tenant");
+        FleetMachine result = FleetAdminService.MapToFleetMachine(machine, "My Tenant", isPaused: false);
 
         await Assert.That(result.Id).IsEqualTo(100);
         await Assert.That(result.Name).IsEqualTo("server-01");
         await Assert.That(result.TenantId).IsEqualTo(5);
         await Assert.That(result.TenantName).IsEqualTo("My Tenant");
         await Assert.That(result.IsDeleted).IsFalse();
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(7)]
+    public async Task MapToFleetTenant_PausedMachineCount_IsCarriedOntoTheTenant(int paused)
+    {
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(TenantInternalId, SubscriptionTier.Pro);
+
+        FleetTenant withSubscription = FleetAdminService.MapToFleetTenant(
+            MakeTenant(), 10, 1, subscription, new EffectiveLimits { MachineLimit = 3 }, paused);
+        FleetTenant withoutSubscription = FleetAdminService.MapToFleetTenant(
+            MakeTenant(), 10, 1, null, new EffectiveLimits { MachineLimit = 3 }, paused);
+
+        await Assert.That(withSubscription.PausedMachineCount).IsEqualTo(paused);
+        await Assert.That(withoutSubscription.PausedMachineCount).IsEqualTo(paused);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task MapToFleetMachine_IsPaused_IsCarriedOntoTheMachine(bool isPaused)
+    {
+        FleetMachine result = FleetAdminService.MapToFleetMachine(MakeMachine(7), "My Tenant", isPaused);
+
+        await Assert.That(result.IsPaused).IsEqualTo(isPaused);
     }
 
     [Test]
@@ -1415,6 +1398,164 @@ public sealed class FleetAdminServiceTests
         return scopeFactory;
     }
 
+    /// <summary>
+    /// Registers what the RPCs that show paused hosts resolve from their scope. Unless a test hands in
+    /// its own pause service, the substitute answers with the default cutoff, which pauses nothing.
+    /// </summary>
+    private static void AddPauseServices(
+        Dictionary<Type, object> services,
+        IQuotaPauseService? quotaPause = null,
+        QuotaPauseMetrics? metrics = null,
+        TierDefaultOptions? defaults = null)
+    {
+        services[typeof(IQuotaPauseService)] = quotaPause ?? Substitute.For<IQuotaPauseService>();
+        services[typeof(QuotaPauseMetrics)] = metrics ?? TestMetricsFactory.CreateQuotaPauseMetrics();
+        services[typeof(IOptions<TierDefaultOptions>)] = Options.Create(defaults ?? new TierDefaultOptions());
+    }
+
+    private static TierDefaultOptions PauseDefaults()
+    {
+        return new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 2, WebhookLimit = 1, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+        };
+    }
+
+    /// <summary>
+    /// A scope for ListTenants with one tenant, so a test states only what decides its paused count:
+    /// the subscription, the registered machine count, an override and the tier rows in the database.
+    /// </summary>
+    private static IServiceScopeFactory CreateListTenantsScope(
+        TenantSubscription? subscription,
+        int machineCount,
+        TenantSubscriptionOverride? tenantOverride,
+        List<TierFeatureLimit> tierRows,
+        IQuotaPauseService quotaPause,
+        TierDefaultOptions defaults)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        tenantRepo.SearchTenantsPagedAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns((new List<Tenant> { MakeTenant() }, 1));
+        machineRepo.GetMachineCountsByTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<int, int> { { TenantInternalId, machineCount } });
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<UserTenantRole>());
+        subscriptionRepo.GetSubscriptionsForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(subscription is null ? new List<TenantSubscription>() : new List<TenantSubscription> { subscription });
+        tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>()).Returns(tierRows);
+        overrideRepo.GetOverridesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(tenantOverride is null ? new List<TenantSubscriptionOverride>() : new List<TenantSubscriptionOverride> { tenantOverride });
+
+        Dictionary<Type, object> services = new()
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+        };
+        AddPauseServices(services, quotaPause, defaults: defaults);
+
+        return CreateScopeFactoryWithServices(services);
+    }
+
+    /// <summary>
+    /// A scope for GetTenantDetail with a Pro tenant holding the given machines, whose pause service
+    /// is the one the test hands in.
+    /// </summary>
+    private static IServiceScopeFactory CreateTenantDetailScope(
+        List<Machine> machines, IQuotaPauseService quotaPause, QuotaPauseMetrics? metrics = null)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IUserRepository userRepo = Substitute.For<IUserRepository>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns((TierFeatureLimit?)null);
+        overrideRepo.GetOverrideForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns((TenantSubscriptionOverride?)null);
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>()).Returns(MakeTenant());
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<UserTenantRole>());
+        userRepo.GetUsersByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>()).Returns(new List<UserAccount>());
+        machineRepo.SearchMachinesPagedAsync(TenantInternalId, 0, 10000, Arg.Any<CancellationToken>())
+            .Returns((machines, machines.Count));
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(TestDataBuilder.BuildSubscription(TenantInternalId, SubscriptionTier.Pro));
+
+        Dictionary<Type, object> services = new()
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IUserRepository), userRepo },
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IAlertRuleRepository), Substitute.For<IAlertRuleRepository>() },
+            { typeof(IIntegrationRepository), Substitute.For<IIntegrationRepository>() },
+        };
+        AddPauseServices(services, quotaPause, metrics, PauseDefaults());
+
+        return CreateScopeFactoryWithServices(services);
+    }
+
+    /// <summary>
+    /// A scope for ListMachines without a tenant filter that returns the given page of machines,
+    /// whose tenants the test names.
+    /// </summary>
+    private static IServiceScopeFactory CreateMachinePageScope(
+        List<Machine> machines, IQuotaPauseService quotaPause, QuotaPauseMetrics? metrics = null)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.SearchMachinesPagedAsync((int?)null, 0, 50, Arg.Any<CancellationToken>())
+            .Returns((machines, machines.Count));
+        tenantRepo.ListTenantsByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(machines.Select(m => m.TenantId).Distinct().Select(id => MakeTenant(id, $"ext-{id}")).ToList());
+
+        Dictionary<Type, object> services = new()
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IMachineRepository), machineRepo },
+        };
+        AddPauseServices(services, quotaPause, metrics, PauseDefaults());
+
+        return CreateScopeFactoryWithServices(services);
+    }
+
+    private static Machine MakeMachine(long id, int tenantId = TenantInternalId, bool isDeleted = false)
+    {
+        return new Machine
+        {
+            Id = id,
+            Name = $"host-{id}",
+            TenantId = tenantId,
+            IsDeleted = isDeleted,
+            RegisteredOn = DateTimeOffset.UnixEpoch,
+            ApiKeyHash = "h",
+            SerialNumber = "S",
+            SystemId = "SYS",
+            MachineType = MachineTypes.BareMetalServer,
+            OperatingSystem = OperatingSystems.Ubuntu,
+            RegistrationTokenId = 1
+        };
+    }
+
+    private static IQuotaPauseService CutoffFor(QuotaCutoff cutoff)
+    {
+        IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
+        quotaPause.GetCutoffAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(cutoff);
+
+        return quotaPause;
+    }
+
     private static ServerCallContext CreateContext()
     {
         Metadata headers = new Metadata();
@@ -1621,14 +1762,16 @@ public sealed class FleetAdminServiceTests
         tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TierFeatureLimit>());
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(ITierFeatureLimitRepository), tierLimitRepo },
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -1687,14 +1830,16 @@ public sealed class FleetAdminServiceTests
         tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TierFeatureLimit> { limits });
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(ITierFeatureLimitRepository), tierLimitRepo },
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -1751,7 +1896,7 @@ public sealed class FleetAdminServiceTests
         tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
             .Returns((TierFeatureLimit?)null);
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IUserRepository), userRepo },
@@ -1761,7 +1906,9 @@ public sealed class FleetAdminServiceTests
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
             { typeof(IAlertRuleRepository), alertRuleRepo },
             { typeof(IIntegrationRepository), integrationRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -1860,7 +2007,7 @@ public sealed class FleetAdminServiceTests
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Team, Arg.Any<CancellationToken>())
             .Returns(limits);
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IUserRepository), userRepo },
@@ -1870,7 +2017,9 @@ public sealed class FleetAdminServiceTests
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
             { typeof(IAlertRuleRepository), alertRuleRepo },
             { typeof(IIntegrationRepository), integrationRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -1933,14 +2082,16 @@ public sealed class FleetAdminServiceTests
             {
                 new() { TenantId = TenantInternalId, MachineLimit = 500, RetentionDays = 180, AlertRuleLimit = 40, WebhookLimit = 20, MemberLimit = 75 },
             });
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(ITierFeatureLimitRepository), tierLimitRepo },
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
 
         ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
@@ -1991,7 +2142,7 @@ public sealed class FleetAdminServiceTests
             .Returns(new TenantSubscriptionOverride { TenantId = TenantInternalId, MachineLimit = 500, AlertRuleLimit = 40, WebhookLimit = 20 });
         alertRuleRepo.CountCustomAlertRulesForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(7);
         integrationRepo.CountIntegrationsForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(3);
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IUserRepository), userRepo },
@@ -2001,7 +2152,9 @@ public sealed class FleetAdminServiceTests
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
             { typeof(IAlertRuleRepository), alertRuleRepo },
             { typeof(IIntegrationRepository), integrationRepo },
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
 
         GetTenantDetailResponse response = await service.GetTenantDetail(
@@ -2045,11 +2198,13 @@ public sealed class FleetAdminServiceTests
         tenantRepo.ListTenantsByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<Tenant>());
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -2079,11 +2234,13 @@ public sealed class FleetAdminServiceTests
         tenantRepo.ListTenantsByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<Tenant>());
 
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo }
-        });
+        };
+        AddPauseServices(services);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(services);
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
         ServerCallContext context = CreateContext();
@@ -2093,6 +2250,251 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(response.TotalCount).IsEqualTo(0);
         await machineRepo.Received(1).SearchMachinesPagedAsync(TenantInternalId, 0, 50, Arg.Any<CancellationToken>());
+    }
+
+    // ── Paused hosts ──
+
+    /// <summary>
+    /// The console used to show a limit of zero for a tier whose row was missing, which read as "no
+    /// machines allowed". The limit now comes from the same fold pausing enforces, so a missing row
+    /// shows the tier's configured default.
+    /// </summary>
+    [Test]
+    public async Task ListTenants_ProTenantWithMissingTierRow_ReportsTheConfigDefaultNotZero()
+    {
+        IServiceScopeFactory scopeFactory = CreateListTenantsScope(
+            TestDataBuilder.BuildSubscription(TenantInternalId, SubscriptionTier.Pro),
+            machineCount: 2,
+            tenantOverride: null,
+            tierRows: new List<TierFeatureLimit>(),
+            CutoffFor(QuotaCutoff.None),
+            PauseDefaults());
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
+
+        await Assert.That(response.Tenants[0].Subscription.MachineLimit).IsEqualTo(1000);
+        await Assert.That(response.Tenants[0].PausedMachineCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ListTenants_TenantOverItsLimit_ReportsPausedMachineCount()
+    {
+        IQuotaPauseService quotaPause = CutoffFor(QuotaCutoff.None);
+        IServiceScopeFactory scopeFactory = CreateListTenantsScope(
+            TestDataBuilder.BuildSubscription(TenantInternalId, SubscriptionTier.Pro),
+            machineCount: 5,
+            new TenantSubscriptionOverride { TenantId = TenantInternalId, MachineLimit = 2 },
+            new List<TierFeatureLimit>(),
+            quotaPause,
+            PauseDefaults());
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
+
+        await Assert.That(response.Tenants[0].PausedMachineCount).IsEqualTo(3);
+        await Assert.That(response.Tenants[0].Subscription.MachineLimit).IsEqualTo(2);
+        // The list counts from the fold and the registered counts it already loaded, so a page of
+        // tenants costs no cutoff lookup per row.
+        await quotaPause.DidNotReceiveWithAnyArgs().GetCutoffAsync(default, default);
+    }
+
+    [Test]
+    public async Task ListTenants_TenantWithoutSubscription_ReportsPausedFromFreeDefaults()
+    {
+        IServiceScopeFactory scopeFactory = CreateListTenantsScope(
+            subscription: null,
+            machineCount: 10,
+            tenantOverride: new TenantSubscriptionOverride { TenantId = TenantInternalId, MachineLimit = 500 },
+            new List<TierFeatureLimit>(),
+            CutoffFor(QuotaCutoff.None),
+            PauseDefaults());
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
+
+        // A tenant with no subscription row is held to the Free limit and its override is ignored,
+        // exactly as the pause decision treats it.
+        await Assert.That(response.Tenants[0].PausedMachineCount).IsEqualTo(7);
+        await Assert.That(response.Tenants[0].Subscription).IsNull();
+    }
+
+    [Test]
+    public async Task ListTenants_ZeroLimit_CountsEveryMachinePaused()
+    {
+        IServiceScopeFactory scopeFactory = CreateListTenantsScope(
+            TestDataBuilder.BuildSubscription(TenantInternalId, SubscriptionTier.Pro),
+            machineCount: 4,
+            new TenantSubscriptionOverride { TenantId = TenantInternalId, MachineLimit = 0 },
+            new List<TierFeatureLimit>(),
+            CutoffFor(QuotaCutoff.None),
+            PauseDefaults());
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
+
+        await Assert.That(response.Tenants[0].PausedMachineCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_MarksMachinesAfterTheCutoffPaused_AndCountsThem()
+    {
+        List<Machine> machines = new()
+        {
+            MakeMachine(1),
+            MakeMachine(2, isDeleted: true),
+            MakeMachine(3),
+            MakeMachine(4),
+            MakeMachine(5),
+        };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateTenantDetailScope(machines, CutoffFor(QuotaCutoff.After(3))));
+
+        GetTenantDetailResponse response = await service.GetTenantDetail(
+            new GetTenantDetailRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        Dictionary<long, bool> paused = response.Machines.ToDictionary(m => m.Id, m => m.IsPaused);
+        await Assert.That(paused[1]).IsFalse();
+        await Assert.That(paused[2]).IsFalse();
+        await Assert.That(paused[3]).IsFalse();
+        await Assert.That(paused[4]).IsTrue();
+        await Assert.That(paused[5]).IsTrue();
+        await Assert.That(response.Tenant.PausedMachineCount).IsEqualTo(2);
+    }
+
+    /// <summary>
+    /// A deleted machine keeps its id, so one past the cutoff would read as paused if the flag
+    /// followed the id alone; it is gone, so it is neither badged nor counted.
+    /// </summary>
+    [Test]
+    public async Task GetTenantDetail_DeletedMachinePastTheCutoff_IsNeitherPausedNorCounted()
+    {
+        List<Machine> machines = new()
+        {
+            MakeMachine(1),
+            MakeMachine(2),
+            MakeMachine(3, isDeleted: true),
+        };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateTenantDetailScope(machines, CutoffFor(QuotaCutoff.After(1))));
+
+        GetTenantDetailResponse response = await service.GetTenantDetail(
+            new GetTenantDetailRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        Dictionary<long, bool> paused = response.Machines.ToDictionary(m => m.Id, m => m.IsPaused);
+        await Assert.That(paused[2]).IsTrue();
+        await Assert.That(paused[3]).IsFalse();
+        await Assert.That(response.Tenant.PausedMachineCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_EveryMachinePaused_CountsOnlyTheNonDeletedOnes()
+    {
+        List<Machine> machines = new()
+        {
+            MakeMachine(1),
+            MakeMachine(2, isDeleted: true),
+            MakeMachine(3),
+        };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateTenantDetailScope(machines, CutoffFor(QuotaCutoff.All)));
+
+        GetTenantDetailResponse response = await service.GetTenantDetail(
+            new GetTenantDetailRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        await Assert.That(response.Machines.Count(m => m.IsPaused)).IsEqualTo(2);
+        await Assert.That(response.Tenant.PausedMachineCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_PauseCheckUnavailable_ShowsNothingPausedAndCountsTheFailure()
+    {
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
+        quotaPause.GetCutoffAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<QuotaCutoff>(_ => throw new QuotaCheckUnavailableException(TenantInternalId, new InvalidOperationException("db")));
+        List<Machine> machines = new() { MakeMachine(1), MakeMachine(2), MakeMachine(3) };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateTenantDetailScope(machines, quotaPause, new QuotaPauseMetrics(meterFactory)));
+
+        GetTenantDetailResponse response = await service.GetTenantDetail(
+            new GetTenantDetailRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        await Assert.That(response.Machines.Any(m => m.IsPaused)).IsFalse();
+        await Assert.That(response.Tenant.PausedMachineCount).IsEqualTo(0);
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("display");
+    }
+
+    [Test]
+    public async Task ListMachines_PageSpanningTenants_UsesEachTenantsCutoff()
+    {
+        IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
+        quotaPause.GetCutoffAsync(1, Arg.Any<CancellationToken>()).Returns(QuotaCutoff.After(10));
+        quotaPause.GetCutoffAsync(2, Arg.Any<CancellationToken>()).Returns(QuotaCutoff.None);
+        List<Machine> machines = new()
+        {
+            MakeMachine(10, tenantId: 1),
+            MakeMachine(20, tenantId: 2),
+            MakeMachine(11, tenantId: 1),
+            MakeMachine(21, tenantId: 2),
+        };
+        FleetAdminService service = CreateFleetAdminService(CreateMachinePageScope(machines, quotaPause));
+
+        ListMachinesResponse response = await service.ListMachines(new ListMachinesRequest(), CreateContext());
+
+        Dictionary<long, bool> paused = response.Machines.ToDictionary(m => m.Id, m => m.IsPaused);
+        await Assert.That(paused[10]).IsFalse();
+        await Assert.That(paused[11]).IsTrue();
+        await Assert.That(paused[20]).IsFalse();
+        await Assert.That(paused[21]).IsFalse();
+        await quotaPause.Received(1).GetCutoffAsync(1, Arg.Any<CancellationToken>());
+        await quotaPause.Received(1).GetCutoffAsync(2, Arg.Any<CancellationToken>());
+        await quotaPause.ReceivedWithAnyArgs(2).GetCutoffAsync(default, default);
+    }
+
+    [Test]
+    public async Task ListMachines_DeletedMachinePastTheCutoff_IsNotPaused()
+    {
+        List<Machine> machines = new() { MakeMachine(1), MakeMachine(2), MakeMachine(3, isDeleted: true) };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateMachinePageScope(machines, CutoffFor(QuotaCutoff.After(1))));
+
+        ListMachinesResponse response = await service.ListMachines(new ListMachinesRequest(), CreateContext());
+
+        Dictionary<long, bool> paused = response.Machines.ToDictionary(m => m.Id, m => m.IsPaused);
+        await Assert.That(paused[2]).IsTrue();
+        await Assert.That(paused[3]).IsFalse();
+    }
+
+    /// <summary>
+    /// One tenant whose pause decision cannot be made must not blank the page: its hosts show as
+    /// active and the failure is counted, while the other tenants still show what they are.
+    /// </summary>
+    [Test]
+    public async Task ListMachines_PauseCheckUnavailableForOneTenant_OtherTenantsStillShowPaused()
+    {
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
+        quotaPause.GetCutoffAsync(1, Arg.Any<CancellationToken>())
+            .Returns<QuotaCutoff>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        quotaPause.GetCutoffAsync(2, Arg.Any<CancellationToken>()).Returns(QuotaCutoff.All);
+        List<Machine> machines = new() { MakeMachine(10, tenantId: 1), MakeMachine(20, tenantId: 2) };
+        FleetAdminService service = CreateFleetAdminService(
+            CreateMachinePageScope(machines, quotaPause, new QuotaPauseMetrics(meterFactory)));
+
+        ListMachinesResponse response = await service.ListMachines(new ListMachinesRequest(), CreateContext());
+
+        Dictionary<long, bool> paused = response.Machines.ToDictionary(m => m.Id, m => m.IsPaused);
+        await Assert.That(paused[10]).IsFalse();
+        await Assert.That(paused[20]).IsTrue();
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("display");
     }
 
     // ── ListAuditLogEntries ──

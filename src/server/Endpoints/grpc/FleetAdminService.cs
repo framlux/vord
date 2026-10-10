@@ -13,6 +13,8 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
@@ -150,6 +152,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
         ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
+        TierDefaultOptions tierDefaults = scope.ServiceProvider.GetRequiredService<IOptions<TierDefaultOptions>>().Value;
 
         (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
 
@@ -200,8 +203,14 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
                 tierLimitsMap.TryGetValue(subscription.Tier, out tierLimits);
             }
 
+            // The paused count comes from the registered count already loaded and the same fold the
+            // pause decision uses, so a page of tenants costs no cutoff lookup per row.
+            EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(
+                subscription, tierLimits, overrides.GetValueOrDefault(tenant.Id), tierDefaults);
+            int pausedMachineCount = QuotaPauseService.PausedCount(machineCount, limits.MachineLimit);
+
             response.Tenants.Add(MapToFleetTenant(
-                tenant, machineCount, userCount, subscription, tierLimits, overrides.GetValueOrDefault(tenant.Id)));
+                tenant, machineCount, userCount, subscription, limits, pausedMachineCount));
         }
 
         return response;
@@ -261,11 +270,16 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         int machineCount = machines.Count(m => m.IsDeleted == false);
         int userCount = roles.Count;
 
-        GetTenantDetailResponse response = new GetTenantDetailResponse
-        {
-            Tenant = MapToFleetTenant(
-                tenant, machineCount, userCount, subscription, tierLimits, tenantOverride, alertRuleCount, webhookCount)
-        };
+        TierDefaultOptions tierDefaults = scope.ServiceProvider.GetRequiredService<IOptions<TierDefaultOptions>>().Value;
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(subscription, tierLimits, tenantOverride, tierDefaults);
+
+        // One cutoff decides both the badges and the count, so the page can never disagree with itself.
+        IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
+        QuotaPauseMetrics quotaPauseMetrics = scope.ServiceProvider.GetRequiredService<QuotaPauseMetrics>();
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(
+            quotaPause, quotaPauseMetrics, _logger, tenant.Id, context.CancellationToken);
+
+        GetTenantDetailResponse response = new GetTenantDetailResponse();
 
         foreach (UserAccount user in users)
         {
@@ -273,10 +287,20 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             response.Users.Add(MapToFleetUser(user, userRoles, tenantNameMap));
         }
 
+        int pausedMachineCount = 0;
         foreach (Machine machine in machines)
         {
-            response.Machines.Add(MapToFleetMachine(machine, tenant.Name));
+            bool isPaused = (machine.IsDeleted == false) && cutoff.IsPaused(machine.Id);
+            if (isPaused)
+            {
+                pausedMachineCount++;
+            }
+
+            response.Machines.Add(MapToFleetMachine(machine, tenant.Name, isPaused));
         }
+
+        response.Tenant = MapToFleetTenant(
+            tenant, machineCount, userCount, subscription, limits, pausedMachineCount, alertRuleCount, webhookCount);
 
         return response;
     }
@@ -312,6 +336,17 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         List<Tenant> tenantList = await tenantRepo.ListTenantsByIdsAsync(tenantIds, context.CancellationToken);
         Dictionary<int, string> tenantNames = tenantList.ToDictionary(t => t.Id, t => t.Name);
 
+        // A page can span tenants, and each has its own limit, so each gets its own cutoff, asked for
+        // once however many of its machines are on the page.
+        IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
+        QuotaPauseMetrics quotaPauseMetrics = scope.ServiceProvider.GetRequiredService<QuotaPauseMetrics>();
+        Dictionary<int, QuotaCutoff> cutoffs = new Dictionary<int, QuotaCutoff>();
+        foreach (int tenantId in tenantIds)
+        {
+            cutoffs[tenantId] = await QuotaCutoffDisplay.GetOrNoneAsync(
+                quotaPause, quotaPauseMetrics, _logger, tenantId, context.CancellationToken);
+        }
+
         ListMachinesResponse response = new ListMachinesResponse
         {
             TotalCount = totalCount
@@ -320,7 +355,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         foreach (Machine machine in machines)
         {
             tenantNames.TryGetValue(machine.TenantId, out string? tenantName);
-            response.Machines.Add(MapToFleetMachine(machine, tenantName ?? string.Empty));
+            bool isPaused = (machine.IsDeleted == false) && cutoffs[machine.TenantId].IsPaused(machine.Id);
+            response.Machines.Add(MapToFleetMachine(machine, tenantName ?? string.Empty, isPaused));
         }
 
         return response;
@@ -1783,8 +1819,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         int machineCount,
         int userCount,
         TenantSubscription? subscription,
-        TierFeatureLimit? tierLimits = null,
-        TenantSubscriptionOverride? tenantOverride = null,
+        EffectiveLimits limits,
+        int pausedMachineCount,
         int alertRuleCount = 0,
         int webhookCount = 0)
     {
@@ -1800,32 +1836,29 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             UserCount = userCount,
             AlertRuleCount = alertRuleCount,
             WebhookCount = webhookCount,
+            PausedMachineCount = pausedMachineCount,
         };
 
         if (subscription is not null)
         {
-            fleetTenant.Subscription = MapSubscription(subscription, tierLimits, tenantOverride);
+            fleetTenant.Subscription = MapSubscription(subscription, limits);
         }
 
         return fleetTenant;
     }
 
-    internal static FleetTenantSubscription MapSubscription(
-        TenantSubscription subscription,
-        TierFeatureLimit? tierLimits = null,
-        TenantSubscriptionOverride? tenantOverride = null)
+    internal static FleetTenantSubscription MapSubscription(TenantSubscription subscription, EffectiveLimits limits)
     {
-        // Effective limits, matching SubscriptionService.GetEffectiveLimitsForTenantAsync's order:
-        // the tenant's override where set, otherwise the tier's row.
+        // The limits come from the shared fold, so the console shows what pausing and billing enforce.
         FleetTenantSubscription proto = new FleetTenantSubscription
         {
             Tier = MapSubscriptionTierToBillingTier(subscription.Tier),
             Status = subscription.Status.ToString(),
-            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit ?? 0,
-            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? 0,
-            MemberLimit = tenantOverride?.MemberLimit ?? tierLimits?.MemberLimit ?? 0,
-            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? 0,
-            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? 0,
+            MachineLimit = limits.MachineLimit,
+            RetentionDays = limits.RetentionDays,
+            MemberLimit = limits.MemberLimit,
+            AlertRuleLimit = limits.AlertRuleLimit,
+            WebhookLimit = limits.WebhookLimit,
             CancelAtPeriodEnd = subscription.CancelAtPeriodEnd,
             AppliedAgreementRevision = subscription.AppliedAgreementRevision ?? 0,
         };
@@ -1838,7 +1871,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         return proto;
     }
 
-    internal static FleetMachine MapToFleetMachine(Machine machine, string tenantName)
+    internal static FleetMachine MapToFleetMachine(Machine machine, string tenantName, bool isPaused)
     {
         return new FleetMachine
         {
@@ -1847,7 +1880,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             TenantId = machine.TenantId,
             TenantName = tenantName,
             IsDeleted = machine.IsDeleted,
-            RegisteredOn = Timestamp.FromDateTimeOffset(machine.RegisteredOn)
+            RegisteredOn = Timestamp.FromDateTimeOffset(machine.RegisteredOn),
+            IsPaused = isPaused
         };
     }
 
