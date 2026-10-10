@@ -287,16 +287,7 @@ public sealed class SubscriptionService : ISubscriptionService
 
         if (subscription is null)
         {
-            TierLimitDefaults freeDefaults = GetConfigDefaultsForTier(SubscriptionTier.Free);
-
-            return new EffectiveLimits
-            {
-                MachineLimit = freeDefaults.MachineLimit,
-                RetentionDays = freeDefaults.RetentionDays,
-                AlertRuleLimit = freeDefaults.AlertRuleLimit,
-                WebhookLimit = freeDefaults.WebhookLimit,
-                MemberLimit = freeDefaults.MemberLimit,
-            };
+            return ResolveEffectiveLimits(null, null, null, _tierDefaults);
         }
 
         TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, ct);
@@ -308,15 +299,51 @@ public sealed class SubscriptionService : ISubscriptionService
             _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, using configuration defaults", subscription.Tier);
         }
 
-        TierLimitDefaults configDefaults = GetConfigDefaultsForTier(subscription.Tier);
+        return ResolveEffectiveLimits(subscription, tierLimits, tenantOverride, _tierDefaults);
+    }
+
+    /// <summary>
+    /// The one fold for a tenant's effective limits, shared by the subscription service, the pause
+    /// decision and the admin contract so they can never disagree about which value wins. A tenant
+    /// with no subscription row gets the Free defaults and its override is ignored, matching how
+    /// every other entitlement treats a missing row.
+    /// </summary>
+    /// <param name="subscription">The tenant's subscription row, or null when it has none.</param>
+    /// <param name="tierRow">The live limits row for the subscription's tier, or null when it is missing.</param>
+    /// <param name="tenantOverride">The tenant's per-limit overrides, or null when it has none.</param>
+    /// <param name="defaults">The configured per-tier defaults, used for any limit neither the override nor the tier row sets.</param>
+    /// <returns>The limits that apply to the tenant.</returns>
+    public static EffectiveLimits ResolveEffectiveLimits(
+        TenantSubscription? subscription,
+        TierFeatureLimit? tierRow,
+        TenantSubscriptionOverride? tenantOverride,
+        TierDefaultOptions defaults)
+    {
+        ArgumentNullException.ThrowIfNull(defaults);
+
+        if (subscription is null)
+        {
+            TierLimitDefaults free = defaults.For(SubscriptionTier.Free);
+
+            return new EffectiveLimits
+            {
+                MachineLimit = free.MachineLimit,
+                RetentionDays = free.RetentionDays,
+                AlertRuleLimit = free.AlertRuleLimit,
+                WebhookLimit = free.WebhookLimit,
+                MemberLimit = free.MemberLimit,
+            };
+        }
+
+        TierLimitDefaults tierDefaults = defaults.For(subscription.Tier);
 
         return new EffectiveLimits
         {
-            MachineLimit = ResolveLimit(tenantOverride?.MachineLimit, tierLimits?.MachineLimit, configDefaults.MachineLimit),
-            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? configDefaults.RetentionDays,
-            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? configDefaults.AlertRuleLimit,
-            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,
-            MemberLimit = tenantOverride?.MemberLimit ?? tierLimits?.MemberLimit ?? configDefaults.MemberLimit,
+            MachineLimit = ResolveLimit(tenantOverride?.MachineLimit, tierRow?.MachineLimit, tierDefaults.MachineLimit),
+            RetentionDays = tenantOverride?.RetentionDays ?? tierRow?.RetentionDays ?? tierDefaults.RetentionDays,
+            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierRow?.AlertRuleLimit ?? tierDefaults.AlertRuleLimit,
+            WebhookLimit = tenantOverride?.WebhookLimit ?? tierRow?.WebhookLimit ?? tierDefaults.WebhookLimit,
+            MemberLimit = tenantOverride?.MemberLimit ?? tierRow?.MemberLimit ?? tierDefaults.MemberLimit,
         };
     }
 
@@ -338,13 +365,6 @@ public sealed class SubscriptionService : ISubscriptionService
     /// </summary>
     private TierLimitDefaults GetConfigDefaultsForTier(SubscriptionTier tier)
     {
-        return tier switch
-        {
-            SubscriptionTier.Free => _tierDefaults.Free,
-            SubscriptionTier.Pro => _tierDefaults.Pro,
-            SubscriptionTier.Team => _tierDefaults.Team,
-            SubscriptionTier.Enterprise => _tierDefaults.Enterprise,
-            _ => _tierDefaults.Free,
-        };
+        return _tierDefaults.For(tier);
     }
 }
