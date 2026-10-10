@@ -76,8 +76,7 @@ message AgentPingRequest {
 
 message AgentPingResponse {
     bool success = 1;
-    // Why the server is not taking this machine's telemetry, if it is not. The heartbeat itself
-    // still succeeds, so this is how the agent learns it is paused without polling the ack.
+    // The pause or inactive-subscription reason when the server is not taking this machine's telemetry, else UNSPECIFIED.
     IngestRejectionReason state = 2;
 }
 

@@ -456,8 +456,7 @@ type TelemetryAck struct {
 	AcknowledgedEventIds []string               `protobuf:"bytes,2,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
 	Success              bool                   `protobuf:"varint,3,opt,name=success,proto3" json:"success,omitempty"`
 	ErrorMessage         string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	// Set when the server acknowledged the batch without storing it, so the agent can tell a
-	// discarded batch from a stored one instead of reading every success as accepted.
+	// Why the server did not store the batch when the cause is a pause or an inactive subscription, else UNSPECIFIED.
 	Reason        IngestRejectionReason `protobuf:"varint,5,opt,name=reason,proto3,enum=agent.IngestRejectionReason" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

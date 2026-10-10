@@ -444,8 +444,7 @@ func (x *AgentPingRequest) GetMachineId() int64 {
 type AgentPingResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	// Why the server is not taking this machine's telemetry, if it is not. The heartbeat itself
-	// still succeeds, so this is how the agent learns it is paused without polling the ack.
+	// The pause or inactive-subscription reason when the server is not taking this machine's telemetry, else UNSPECIFIED.
 	State         IngestRejectionReason `protobuf:"varint,2,opt,name=state,proto3,enum=agent.IngestRejectionReason" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

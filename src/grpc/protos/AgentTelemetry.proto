@@ -51,8 +51,7 @@ message TelemetryAck {
   repeated string acknowledged_event_ids = 2;
   bool success = 3;
   string error_message = 4;
-  // Set when the server acknowledged the batch without storing it, so the agent can tell a
-  // discarded batch from a stored one instead of reading every success as accepted.
+  // Why the server did not store the batch when the cause is a pause or an inactive subscription, else UNSPECIFIED.
   IngestRejectionReason reason = 5;
 }
 
