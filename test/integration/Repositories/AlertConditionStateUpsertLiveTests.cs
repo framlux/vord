@@ -25,6 +25,8 @@ namespace Framlux.FleetManagement.Test.Integration.Repositories;
 /// </summary>
 public sealed class AlertConditionStateUpsertLiveTests
 {
+    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(2);
+
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
 
@@ -52,10 +54,10 @@ public sealed class AlertConditionStateUpsertLiveTests
         Machine machine = await SeedMachineAsync(db, tenant.Id);
 
         DateTimeOffset first = DateTimeOffset.UnixEpoch.AddHours(1);
-        DateTimeOffset later = DateTimeOffset.UnixEpoch.AddHours(2);
+        DateTimeOffset later = first.AddMinutes(1);
 
-        DateTimeOffset r1 = await repo.UpsertObservationAsync(rule.Id, machine.Id, first, CancellationToken.None);
-        DateTimeOffset r2 = await repo.UpsertObservationAsync(rule.Id, machine.Id, later, CancellationToken.None);
+        DateTimeOffset r1 = await repo.UpsertObservationAsync(rule.Id, machine.Id, first, ObservationGap, CancellationToken.None);
+        DateTimeOffset r2 = await repo.UpsertObservationAsync(rule.Id, machine.Id, later, ObservationGap, CancellationToken.None);
 
         // FirstTriggeredAt is stable across observations; the upsert anchors duration windows to it.
         await Assert.That(r1).IsEqualTo(first);
@@ -66,6 +68,35 @@ public sealed class AlertConditionStateUpsertLiveTests
         await Assert.That(stored).IsNotNull();
         await Assert.That(stored!.FirstTriggeredAt).IsEqualTo(first);
         await Assert.That(stored.LastObservedAt).IsEqualTo(later);
+    }
+
+    [Test]
+    public async Task Upsert_ObservationAfterTheGap_RestartsFirstTriggeredAtInTheSameStatement()
+    {
+        // Intent: the gap rule is part of the single ON CONFLICT statement, so a row whose last
+        // observation is older than the gap is restarted atomically and the caller is handed the new
+        // anchor, not the old one. A row observed within the gap still keeps its original anchor.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = new(db, NullLogger<DatabaseRepository>.Instance);
+
+        Tenant tenant = await SeedTenantAsync(db);
+        AlertRule rule = await SeedAlertRuleAsync(db, tenant.Id);
+        Machine machine = await SeedMachineAsync(db, tenant.Id);
+
+        DateTimeOffset first = DateTimeOffset.UnixEpoch.AddHours(1);
+        DateTimeOffset withinGap = first.AddMinutes(2);
+        DateTimeOffset afterGap = withinGap + ObservationGap + TimeSpan.FromSeconds(1);
+
+        await repo.UpsertObservationAsync(rule.Id, machine.Id, first, ObservationGap, CancellationToken.None);
+        DateTimeOffset kept = await repo.UpsertObservationAsync(rule.Id, machine.Id, withinGap, ObservationGap, CancellationToken.None);
+        DateTimeOffset restarted = await repo.UpsertObservationAsync(rule.Id, machine.Id, afterGap, ObservationGap, CancellationToken.None);
+
+        await Assert.That(kept).IsEqualTo(first);
+        await Assert.That(restarted).IsEqualTo(afterGap);
+
+        AlertConditionState? stored = await repo.GetAsync(rule.Id, machine.Id, CancellationToken.None);
+        await Assert.That(stored!.FirstTriggeredAt).IsEqualTo(afterGap);
+        await Assert.That(stored.LastObservedAt).IsEqualTo(afterGap);
     }
 
     private static async Task RunMigrationsAsync(string connectionString)

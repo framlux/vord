@@ -21,6 +21,20 @@ public static class AlertConstants
     public const short HealthStatusOffline = 3;
 
     /// <summary>
+    /// How long a condition row may go without being observed before the next observation is treated
+    /// as the start of a new stretch rather than a continuation of the old one.
+    /// </summary>
+    /// <remarks>
+    /// The evaluation job runs every minute, so a host that is being evaluated is observed at least
+    /// that often; two minutes is two passes, enough to ride out one missed or delayed run without
+    /// restarting a window that is genuinely still running. Beyond that the host was not being
+    /// evaluated at all (it was paused, unassigned from the rule, or the job was down), and the old
+    /// first-triggered time says nothing about the interval in between. Carrying it forward would let
+    /// the first pass after the gap read as a condition that had held throughout and page at once.
+    /// </remarks>
+    public static TimeSpan ConditionObservationGap => TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// Redis key prefix for the failed-SSH-login chain lease. One fenced lease per machine, held for
     /// as long as an evaluation chain is running for it.
     /// </summary>

@@ -125,6 +125,38 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
+    public async Task<int> ResolveOpenEventsForMachinesAfterAsync(int tenantId, QuotaCutoffKind kind, long cutoffId, DateTimeOffset resolvedAt, CancellationToken cancellationToken = default)
+    {
+        IQueryable<AlertEvent> open = _db.AlertEvents
+            .Where(e => (e.TenantId == tenantId) && (e.Status != AlertEventStatus.Resolved));
+
+        switch (kind)
+        {
+            case QuotaCutoffKind.None:
+                return 0;
+            case QuotaCutoffKind.All:
+                break;
+            case QuotaCutoffKind.After:
+                open = open.Where(e => e.MachineId > cutoffId);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown quota cutoff kind");
+        }
+
+        int resolved = await open
+            .Set(e => e.Status, AlertEventStatus.Resolved)
+            .Set(e => e.ResolvedAt, resolvedAt)
+            .UpdateAsync(cancellationToken);
+
+        if (resolved > 0)
+        {
+            _logger.LogDebug("Resolved {Count} open events for paused machines of tenant {TenantId}", resolved, tenantId);
+        }
+
+        return resolved;
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken)
     {
         return await _db.AlertEvents

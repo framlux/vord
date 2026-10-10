@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -15,6 +16,12 @@ namespace Framlux.FleetManagement.Test.Repositories;
 
 public sealed class AlertConditionStateRepositoryTests
 {
+    /// <summary>
+    /// The gap the evaluation job passes: two one-minute passes. The repository takes it as an argument,
+    /// so the tests state it rather than reading the job's constant.
+    /// </summary>
+    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(2);
+
     private static IAlertConditionStateRepository CreateRepo(TestDatabaseFactory dbFactory)
     {
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
@@ -62,7 +69,7 @@ public sealed class AlertConditionStateRepositoryTests
 
         DateTimeOffset now = new(2026, 2, 1, 9, 0, 0, TimeSpan.Zero);
 
-        DateTimeOffset firstTriggered = await repo.UpsertObservationAsync(alertRuleId: 1, machineId: 99, now, CancellationToken.None);
+        DateTimeOffset firstTriggered = await repo.UpsertObservationAsync(alertRuleId: 1, machineId: 99, now, ObservationGap, CancellationToken.None);
 
         await Assert.That(firstTriggered).IsEqualTo(now);
 
@@ -79,21 +86,22 @@ public sealed class AlertConditionStateRepositoryTests
     {
         // Intent: the duration-window check in AlertEvaluationJob measures elapsed time from
         // FirstTriggeredAt. The upsert path MUST NOT overwrite that on subsequent observations,
-        // or the duration window would reset every cycle and alerts would never fire.
+        // or the duration window would reset every cycle and alerts would never fire. The prior
+        // observation is one pass earlier, so the condition has held continuously.
         using TestDatabaseFactory dbFactory = new();
         DateTimeOffset firstAt = new(2026, 3, 1, 8, 0, 0, TimeSpan.Zero);
+        DateTimeOffset lateNow = new(2026, 3, 1, 8, 10, 0, TimeSpan.Zero);
         await dbFactory.Context.InsertAsync(new AlertConditionState
         {
             AlertRuleId = 7,
             MachineId = 42,
             FirstTriggeredAt = firstAt,
-            LastObservedAt = firstAt,
+            LastObservedAt = lateNow.AddMinutes(-1),
         });
 
         IAlertConditionStateRepository repo = CreateRepo(dbFactory);
 
-        DateTimeOffset lateNow = new(2026, 3, 1, 8, 10, 0, TimeSpan.Zero);
-        DateTimeOffset returned = await repo.UpsertObservationAsync(alertRuleId: 7, machineId: 42, lateNow, CancellationToken.None);
+        DateTimeOffset returned = await repo.UpsertObservationAsync(alertRuleId: 7, machineId: 42, lateNow, ObservationGap, CancellationToken.None);
 
         await Assert.That(returned).IsEqualTo(firstAt);
 
@@ -117,9 +125,9 @@ public sealed class AlertConditionStateRepositoryTests
         DateTimeOffset t2 = new(2026, 4, 1, 0, 5, 0, TimeSpan.Zero);
         DateTimeOffset t3 = new(2026, 4, 1, 0, 10, 0, TimeSpan.Zero);
 
-        await repo.UpsertObservationAsync(1, 1, t1, CancellationToken.None);
-        await repo.UpsertObservationAsync(1, 2, t2, CancellationToken.None);
-        await repo.UpsertObservationAsync(2, 1, t3, CancellationToken.None);
+        await repo.UpsertObservationAsync(1, 1, t1, ObservationGap, CancellationToken.None);
+        await repo.UpsertObservationAsync(1, 2, t2, ObservationGap, CancellationToken.None);
+        await repo.UpsertObservationAsync(2, 1, t3, ObservationGap, CancellationToken.None);
 
         List<AlertConditionState> all = await dbFactory.Context.AlertConditionStates.ToListAsync();
         await Assert.That(all.Count).IsEqualTo(3);
@@ -131,6 +139,58 @@ public sealed class AlertConditionStateRepositoryTests
         await Assert.That(row11.FirstTriggeredAt).IsEqualTo(t1);
         await Assert.That(row12.FirstTriggeredAt).IsEqualTo(t2);
         await Assert.That(row21.FirstTriggeredAt).IsEqualTo(t3);
+    }
+
+    [Test]
+    public async Task UpsertObservationAsync_StoredObservationOlderThanTheGap_RestartsTheWindowAtTheNewObservation()
+    {
+        // Intent: a host that was paused or silent stops being observed, and its condition row is left
+        // behind. When it is observed again the window must start fresh: carrying the old
+        // FirstTriggeredAt forward would make the first pass after the gap look like a condition that
+        // had held for the whole stretch, and page immediately off data nobody was watching.
+        using TestDatabaseFactory dbFactory = new();
+        DateTimeOffset firstAt = new(2026, 3, 1, 8, 0, 0, TimeSpan.Zero);
+        DateTimeOffset lastAt = new(2026, 3, 1, 8, 5, 0, TimeSpan.Zero);
+        await dbFactory.Context.InsertAsync(new AlertConditionState
+        {
+            AlertRuleId = 7, MachineId = 42, FirstTriggeredAt = firstAt, LastObservedAt = lastAt,
+        });
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        DateTimeOffset now = lastAt + ObservationGap + TimeSpan.FromSeconds(1);
+        DateTimeOffset returned = await repo.UpsertObservationAsync(alertRuleId: 7, machineId: 42, now, ObservationGap, CancellationToken.None);
+
+        await Assert.That(returned).IsEqualTo(now);
+        AlertConditionState? row = await repo.GetAsync(alertRuleId: 7, machineId: 42, CancellationToken.None);
+        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(now);
+        await Assert.That(row.LastObservedAt).IsEqualTo(now);
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(60)]
+    [Arguments(120)]
+    public async Task UpsertObservationAsync_StoredObservationWithinTheGap_KeepsTheOriginalFirstTriggered(int secondsSinceLastObservation)
+    {
+        // Intent: a pass or two lost to scheduling jitter is not a gap. The boundary is exclusive: an
+        // observation exactly one gap old still counts as continuous, so only a missed stretch longer
+        // than two passes restarts the window.
+        using TestDatabaseFactory dbFactory = new();
+        DateTimeOffset firstAt = new(2026, 3, 1, 8, 0, 0, TimeSpan.Zero);
+        DateTimeOffset lastAt = new(2026, 3, 1, 8, 5, 0, TimeSpan.Zero);
+        await dbFactory.Context.InsertAsync(new AlertConditionState
+        {
+            AlertRuleId = 7, MachineId = 42, FirstTriggeredAt = firstAt, LastObservedAt = lastAt,
+        });
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        DateTimeOffset now = lastAt.AddSeconds(secondsSinceLastObservation);
+        DateTimeOffset returned = await repo.UpsertObservationAsync(alertRuleId: 7, machineId: 42, now, ObservationGap, CancellationToken.None);
+
+        await Assert.That(returned).IsEqualTo(firstAt);
+        AlertConditionState? row = await repo.GetAsync(alertRuleId: 7, machineId: 42, CancellationToken.None);
+        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(firstAt);
+        await Assert.That(row.LastObservedAt).IsEqualTo(now);
     }
 
     [Test]
@@ -152,8 +212,8 @@ public sealed class AlertConditionStateRepositoryTests
         DateTimeOffset t1 = DateTimeOffset.UtcNow;
         DateTimeOffset t2 = t1.AddMilliseconds(50);
 
-        Task<DateTimeOffset> a = repo.UpsertObservationAsync(ruleId, machineId, t1, CancellationToken.None);
-        Task<DateTimeOffset> b = repo.UpsertObservationAsync(ruleId, machineId, t2, CancellationToken.None);
+        Task<DateTimeOffset> a = repo.UpsertObservationAsync(ruleId, machineId, t1, ObservationGap, CancellationToken.None);
+        Task<DateTimeOffset> b = repo.UpsertObservationAsync(ruleId, machineId, t2, ObservationGap, CancellationToken.None);
         DateTimeOffset[] results = await Task.WhenAll(a, b);
 
         AlertConditionState? row = await repo.GetAsync(ruleId, machineId, CancellationToken.None);
@@ -262,6 +322,77 @@ public sealed class AlertConditionStateRepositoryTests
         List<AlertConditionState> remaining = await dbFactory.Context.AlertConditionStates.ToListAsync();
         await Assert.That(remaining.Count).IsEqualTo(1);
         await Assert.That(remaining[0].AlertRuleId).IsEqualTo(200);
+    }
+
+    [Test]
+    public async Task DeleteForMachinesAfterAsync_After_DeletesOnlyThePausedMachinesOfThatTenant()
+    {
+        // Intent: the cutoff is exclusive (the machine whose id is the cutoff stays active) and scoped
+        // to the tenant. The state rows carry no tenant of their own, so the scope comes from the
+        // machine, and another tenant's higher-numbered machine must never be touched.
+        using TestDatabaseFactory dbFactory = new();
+        long active = await InsertMachineAsync(dbFactory, tenantId: 1);
+        long pausedA = await InsertMachineAsync(dbFactory, tenantId: 1);
+        long pausedB = await InsertMachineAsync(dbFactory, tenantId: 1);
+        long otherTenant = await InsertMachineAsync(dbFactory, tenantId: 2);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: active);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: pausedA);
+        await InsertStateAsync(dbFactory, ruleId: 2, machineId: pausedA);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: pausedB);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: otherTenant);
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        int deleted = await repo.DeleteForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.After, cutoffId: active, CancellationToken.None);
+
+        await Assert.That(deleted).IsEqualTo(3);
+        List<AlertConditionState> remaining = await dbFactory.Context.AlertConditionStates.ToListAsync();
+        await Assert.That(remaining.Select(s => s.MachineId).Order().ToList()).IsEquivalentTo(new List<long> { active, otherTenant }.Order().ToList());
+    }
+
+    [Test]
+    public async Task DeleteForMachinesAfterAsync_All_DeletesEveryMachineOfThatTenantOnly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long first = await InsertMachineAsync(dbFactory, tenantId: 1);
+        long second = await InsertMachineAsync(dbFactory, tenantId: 1);
+        long otherTenant = await InsertMachineAsync(dbFactory, tenantId: 2);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: first);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: second);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: otherTenant);
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        int deleted = await repo.DeleteForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.All, cutoffId: 0, CancellationToken.None);
+
+        await Assert.That(deleted).IsEqualTo(2);
+        List<AlertConditionState> remaining = await dbFactory.Context.AlertConditionStates.ToListAsync();
+        await Assert.That(remaining.Count).IsEqualTo(1);
+        await Assert.That(remaining[0].MachineId).IsEqualTo(otherTenant);
+    }
+
+    [Test]
+    public async Task DeleteForMachinesAfterAsync_None_DeletesNothing()
+    {
+        // Intent: a tenant within its limit has no paused machines. None must not be read as a cutoff of
+        // zero, which would delete every row the tenant has.
+        using TestDatabaseFactory dbFactory = new();
+        long machine = await InsertMachineAsync(dbFactory, tenantId: 1);
+        await InsertStateAsync(dbFactory, ruleId: 1, machineId: machine);
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        int deleted = await repo.DeleteForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.None, cutoffId: 0, CancellationToken.None);
+
+        await Assert.That(deleted).IsEqualTo(0);
+        await Assert.That(await dbFactory.Context.AlertConditionStates.CountAsync()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DeleteForMachinesAfterAsync_UnknownKind_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertConditionStateRepository repo = CreateRepo(dbFactory);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => repo.DeleteForMachinesAfterAsync(tenantId: 1, (QuotaCutoffKind)99, cutoffId: 0, CancellationToken.None));
     }
 
     [Test]
@@ -385,6 +516,22 @@ public sealed class AlertConditionStateRepositoryTests
 
         AlertConditionState? after = await repo.GetAsync(ruleId, machineId, CancellationToken.None);
         await Assert.That(after).IsNull();
+    }
+
+    private static async Task<long> InsertMachineAsync(TestDatabaseFactory dbFactory, int tenantId)
+    {
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+    }
+
+    private static async Task InsertStateAsync(TestDatabaseFactory dbFactory, int ruleId, long machineId)
+    {
+        DateTimeOffset now = new(2026, 7, 1, 12, 0, 0, TimeSpan.Zero);
+        await dbFactory.Context.InsertAsync(new AlertConditionState
+        {
+            AlertRuleId = ruleId, MachineId = machineId, FirstTriggeredAt = now, LastObservedAt = now,
+        });
     }
 
     /// <summary>

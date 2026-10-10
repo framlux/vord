@@ -29,8 +29,10 @@ public sealed class AlertEvaluationJob
     private readonly IAlertEventRepository _alertEventRepository;
     private readonly IAlertConditionStateRepository _alertConditionStateRepository;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IQuotaPauseService _quotaPause;
     private readonly IAlertDeliveryService _deliveryService;
     private readonly AlertPipelineMetrics _alertPipelineMetrics;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AlertEvaluationJob> _logger;
 
@@ -42,8 +44,10 @@ public sealed class AlertEvaluationJob
     /// <param name="alertEventRepository">Creates and resolves alert events.</param>
     /// <param name="alertConditionStateRepository">Tracks how long a condition has held.</param>
     /// <param name="subscriptionService">Answers whether a tenant is entitled to threshold alerts.</param>
+    /// <param name="quotaPause">Says which of a tenant's hosts are paused for exceeding its machine limit.</param>
     /// <param name="deliveryService">Enqueues delivery for newly triggered events.</param>
     /// <param name="alertPipelineMetrics">Instruments counting alert events as they fire.</param>
+    /// <param name="quotaPauseMetrics">Counts the passes on which a tenant's pause decision could not be made.</param>
     /// <param name="timeProvider">
     /// Clock used for the condition-duration window, the event's triggered timestamp and the
     /// re-drive window. Injected rather than read from the wall clock so a rule's duration — which
@@ -56,8 +60,10 @@ public sealed class AlertEvaluationJob
         IAlertEventRepository alertEventRepository,
         IAlertConditionStateRepository alertConditionStateRepository,
         ISubscriptionService subscriptionService,
+        IQuotaPauseService quotaPause,
         IAlertDeliveryService deliveryService,
         AlertPipelineMetrics alertPipelineMetrics,
+        QuotaPauseMetrics quotaPauseMetrics,
         TimeProvider timeProvider,
         ILogger<AlertEvaluationJob> logger)
     {
@@ -66,8 +72,10 @@ public sealed class AlertEvaluationJob
         ArgumentNullException.ThrowIfNull(alertEventRepository);
         ArgumentNullException.ThrowIfNull(alertConditionStateRepository);
         ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(quotaPause);
         ArgumentNullException.ThrowIfNull(deliveryService);
         ArgumentNullException.ThrowIfNull(alertPipelineMetrics);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -76,8 +84,10 @@ public sealed class AlertEvaluationJob
         _alertEventRepository = alertEventRepository;
         _alertConditionStateRepository = alertConditionStateRepository;
         _subscriptionService = subscriptionService;
+        _quotaPause = quotaPause;
         _deliveryService = deliveryService;
         _alertPipelineMetrics = alertPipelineMetrics;
+        _quotaPauseMetrics = quotaPauseMetrics;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -122,6 +132,18 @@ public sealed class AlertEvaluationJob
                 // the recurring schedule, so transient failures self-heal.
                 try
                 {
+                    // Pausing is not an incident. A paused host's open events are resolved silently and
+                    // its condition rows dropped every pass, before the tier check, so neither survives
+                    // a stint on a plan that skips evaluation and pages the moment the host resumes. A
+                    // failed check throws into this tenant's catch, skipping it for the pass: evaluating
+                    // paused hosts on their frozen summaries would page.
+                    QuotaCutoff cutoff = await GetCutoffOrSkipAsync(tenantId, ct);
+                    if (cutoff.Kind != QuotaCutoffKind.None)
+                    {
+                        await _alertEventRepository.ResolveOpenEventsForMachinesAfterAsync(tenantId, cutoff.Kind, cutoff.CutoffId, _timeProvider.GetUtcNow(), ct);
+                        await _alertConditionStateRepository.DeleteForMachinesAfterAsync(tenantId, cutoff.Kind, cutoff.CutoffId, ct);
+                    }
+
                     // Threshold-based alerts are a paid feature. A pre-processor cannot reach a
                     // background job, so the gate is asked of the shared policy rather than
                     // restated here.
@@ -162,7 +184,7 @@ public sealed class AlertEvaluationJob
 
                         HashSet<long> assignedSet = new(assignedMachineIds);
                         List<MachineStateSummary> scopedStates = machineStates
-                            .Where(s => assignedSet.Contains(s.MachineId))
+                            .Where(s => assignedSet.Contains(s.MachineId) && (cutoff.IsPaused(s.MachineId) == false))
                             .ToList();
 
                         // Load the set of machines that already have an active event for this rule
@@ -197,6 +219,26 @@ public sealed class AlertEvaluationJob
             now.AddMinutes(-RedriveMaxAgeMinutes),
             now.AddMinutes(-RedriveMinAgeMinutes),
             ct);
+    }
+
+    /// <summary>
+    /// Gets the tenant's cutoff. A decision that cannot be made is counted against the alert
+    /// evaluation surface and rethrown so the caller's per-tenant catch skips the tenant for this
+    /// pass: unlike the ingest paths, which treat an unknown host as active, evaluating a paused host
+    /// on its frozen summary would page, so "unknown" must not fall through to "evaluate".
+    /// </summary>
+    private async Task<QuotaCutoff> GetCutoffOrSkipAsync(int tenantId, CancellationToken ct)
+    {
+        try
+        {
+            return await _quotaPause.GetCutoffAsync(tenantId, ct);
+        }
+        catch (QuotaCheckUnavailableException)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(QuotaCheckSurface.AlertEvaluation);
+
+            throw;
+        }
     }
 
     /// <summary>
@@ -260,7 +302,7 @@ public sealed class AlertEvaluationJob
         if (rule.DurationMinutes > 0)
         {
             DateTimeOffset firstTriggered = await _alertConditionStateRepository.UpsertObservationAsync(
-                rule.Id, state.MachineId, now, ct);
+                rule.Id, state.MachineId, now, AlertConstants.ConditionObservationGap, ct);
 
             TimeSpan elapsed = now - firstTriggered;
             if (elapsed.TotalMinutes < rule.DurationMinutes)
