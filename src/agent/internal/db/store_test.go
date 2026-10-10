@@ -1610,3 +1610,62 @@ func TestClearTelemetryQueue_EmptyQueue(t *testing.T) {
 		t.Errorf("expected 0 pending, got %d (err %v)", n, err)
 	}
 }
+
+// Intent: marking ids back to pending only counts the rows that were actually updated. A send that was in flight
+// when the queue was cleared fails against rows that no longer exist, and must not inflate the pending count.
+func TestMarkTelemetryPending_CountsOnlyRowsThatExist(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"m-1", "m-2", "m-3"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	inFlight, err := store.DequeueTelemetry(3)
+	if err != nil || len(inFlight) != 3 {
+		t.Fatalf("DequeueTelemetry: %d item(s), err %v", len(inFlight), err)
+	}
+	ids := []string{inFlight[0].ID, inFlight[1].ID, inFlight[2].ID}
+
+	if err := store.ClearTelemetryQueue(); err != nil {
+		t.Fatalf("ClearTelemetryQueue: %v", err)
+	}
+	// Load the count while the table is empty so the failure below has to go through the cached figure.
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending after the clear, got %d (err %v)", n, err)
+	}
+
+	if err := store.MarkTelemetryPending(ids); err != nil {
+		t.Fatalf("MarkTelemetryPending: %v", err)
+	}
+
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected 0 pending after marking rows that no longer exist, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: when only some of the ids still exist, only those are counted.
+func TestMarkTelemetryPending_PartialOverlapCountsSurvivors(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"p-1", "p-2"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	inFlight, err := store.DequeueTelemetry(2)
+	if err != nil || len(inFlight) != 2 {
+		t.Fatalf("DequeueTelemetry: %d item(s), err %v", len(inFlight), err)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending with both in flight, got %d (err %v)", n, err)
+	}
+
+	if err := store.MarkTelemetryPending([]string{inFlight[0].ID, "never-existed"}); err != nil {
+		t.Fatalf("MarkTelemetryPending: %v", err)
+	}
+
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
+		t.Errorf("expected 1 pending (the one row that exists), got %d (err %v)", n, err)
+	}
+}

@@ -579,14 +579,20 @@ func (s *Store) MarkTelemetryPending(ids []string) error {
 		"UPDATE telemetry_queue SET status = ?, updated_at = ? WHERE id IN (%s)",
 		strings.Join(placeholders, ","),
 	)
-	_, err := s.db.Exec(query, args...)
+	result, err := s.db.Exec(query, args...)
 	if err != nil {
 		return err
 	}
 
-	s.pendingCount.Add(int64(len(ids)))
+	// Count the rows that were actually updated. Some of the ids may be gone, e.g. when the queue was cleared
+	// while their send was in flight, and crediting those would inflate the cached pending count.
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	s.pendingCount.Add(updated)
 
-	return err
+	return nil
 }
 
 // CountPendingTelemetry returns the number of pending telemetry items.

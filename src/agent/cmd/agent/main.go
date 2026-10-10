@@ -136,29 +136,10 @@ func main() {
 	// assigned below. Every goroutine that can trigger a transition is started after that assignment.
 	var sshCollector *collector.SSHSessionsCollector
 	var telemetrySender *sender.Sender
-	pauseCoordinator := pause.New(time.Now, runtimeState.PingInterval, pause.Hooks{
-		OnPause: func(_ pause.Reason) {
-			// Nothing queued before the pause should be sent after it.
-			if err := store.ClearTelemetryQueue(); err != nil {
-				slog.Error("failed to clear telemetry queue on pause", "error", err)
-			}
-
-			// Closing waits for any send still in flight on a stream, and a stuck send must not hold up the
-			// heartbeat or the other send tier, which both run this hook through the coordinator.
-			go telemetrySender.CloseStreams()
-		},
-		OnResume: func() {
-			// Skip the SSH events logged during the pause instead of collecting and alerting on them.
-			if err := sshCollector.ResetToNow(ctx, store); err != nil {
-				slog.Error("failed to reset ssh collection point on resume", "error", err)
-			}
-
-			// The first CPU sample after the pause becomes the baseline rather than an average over it.
-			if err := store.SaveCollectorState("cpu_usage", nil); err != nil {
-				slog.Error("failed to reset cpu baseline on resume", "error", err)
-			}
-		},
-	})
+	pauseCoordinator := pause.New(time.Now, runtimeState.PingInterval, newPauseHooks(ctx, store,
+		func() { telemetrySender.CloseStreams() },
+		func(c context.Context, s *db.Store) error { return sshCollector.ResetToNow(c, s) },
+	))
 
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
@@ -243,6 +224,35 @@ func main() {
 		slog.Info("vord agent stopped gracefully")
 	case <-time.After(shutdownTimeout):
 		slog.Warn("shutdown timed out, exiting", "timeout", shutdownTimeout)
+	}
+}
+
+// newPauseHooks builds what the pause coordinator does on each transition. The sender and the SSH collector are
+// passed as functions because they are constructed after the coordinator (both take it), so the caller binds them
+// late.
+func newPauseHooks(ctx context.Context, store *db.Store, closeStreams func(), resetSSH func(ctx context.Context, store *db.Store) error) pause.Hooks {
+	return pause.Hooks{
+		OnPause: func(_ pause.Reason) {
+			// Nothing queued before the pause should be sent after it.
+			if err := store.ClearTelemetryQueue(); err != nil {
+				slog.Error("failed to clear telemetry queue on pause", "error", err)
+			}
+
+			// Closing waits for any send still in flight on a stream, and a stuck send must not hold up the
+			// heartbeat or the other send tier, which both run this hook through the coordinator.
+			go closeStreams()
+		},
+		OnResume: func() {
+			// Skip the SSH events logged during the pause instead of collecting and alerting on them.
+			if err := resetSSH(ctx, store); err != nil {
+				slog.Error("failed to reset ssh collection point on resume", "error", err)
+			}
+
+			// The first CPU sample after the pause becomes the baseline rather than an average over it.
+			if err := store.SaveCollectorState("cpu_usage", nil); err != nil {
+				slog.Error("failed to reset cpu baseline on resume", "error", err)
+			}
+		},
 	}
 }
 

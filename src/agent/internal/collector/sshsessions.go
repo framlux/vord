@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,6 +33,8 @@ type SSHSessionsCollector struct {
 	hasJournalctl bool
 	rs            *state.RuntimeState
 	authLogPaths  []string
+	// execCmd runs the journalctl read. Nil means runCmd; tests substitute a fake journal.
+	execCmd func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // NewSSHSessionsCollector creates a new SSHSessionsCollector.
@@ -65,6 +68,9 @@ type sshJournalState struct {
 	Cursor string `json:"cursor"`
 }
 
+// errJournalRead marks a failure to run journalctl, as opposed to a failure in the agent's own state.
+var errJournalRead = errors.New("reading journal")
+
 // authLogState is where collection stopped in the auth log: the byte offset already consumed, and the inode of
 // the file it was consumed from so a rotation is not mistaken for a file that merely grew.
 type authLogState struct {
@@ -93,10 +99,9 @@ func (c *SSHSessionsCollector) Collect(ctx context.Context, store *db.Store) err
 // ResetToNow moves the collection point to the present, so everything sshd logged before this call is skipped.
 // It is what a resume does: without it the agent would send every SSH event from the pause and fire stale
 // "new connection" and failed-login alerts. It picks the source the same way Collect does.
-func (c *SSHSessionsCollector) ResetToNow(_ context.Context, store *db.Store) error {
+func (c *SSHSessionsCollector) ResetToNow(ctx context.Context, store *db.Store) error {
 	if c.hasJournalctl {
-		// With no cursor the next run starts from the recent window instead of the pre-pause cursor.
-		return store.SaveCollectorState(c.Name(), nil)
+		return c.resetJournal(ctx, store)
 	}
 
 	logPath := c.findAuthLog()
@@ -128,11 +133,49 @@ func (c *SSHSessionsCollector) findAuthLog() string {
 	return ""
 }
 
+// resetJournal advances the journal cursor past everything already logged by reading it the way Collect does and
+// throwing the entries away. Dropping the cursor instead would make the next run re-read "the last five minutes",
+// which is measured from when it runs: pause-era events after a long pause, pre-pause ones after a short one,
+// all of them stamped as fresh by parseSSHLine.
+func (c *SSHSessionsCollector) resetJournal(ctx context.Context, store *db.Store) error {
+	newCursor, err := c.readJournal(ctx, store, false)
+	if err != nil {
+		if errors.Is(err, errJournalRead) {
+			// The journal cannot be read now, so the old cursor would replay the whole pause. Dropping it
+			// replays at most the recent window.
+			if saveErr := store.SaveCollectorState(c.Name(), nil); saveErr != nil {
+				return errors.Join(err, fmt.Errorf("dropping stale journal cursor: %w", saveErr))
+			}
+		}
+
+		return err
+	}
+
+	return c.saveJournalCursor(store, newCursor)
+}
+
 func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db.Store) error {
+	newCursor, err := c.readJournal(ctx, store, true)
+	if errors.Is(err, errJournalRead) {
+		slog.Debug("journalctl failed, will retry next cycle", "error", err)
+
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return c.saveJournalCursor(store, newCursor)
+}
+
+// readJournal runs the journal read behind both Collect and a reset: sshd entries after the saved cursor (or the
+// last five minutes when there is none) with the cursor to continue from, which is "" when the journal had
+// nothing to report. emit says whether the entries are stored as sessions or discarded.
+func (c *SSHSessionsCollector) readJournal(ctx context.Context, store *db.Store, emit bool) (string, error) {
 	// Load cursor from previous run.
 	state, err := store.GetCollectorState(c.Name())
 	if err != nil {
-		return fmt.Errorf("getting collector state: %w", err)
+		return "", fmt.Errorf("getting collector state: %w", err)
 	}
 
 	args := []string{"-u", "sshd", "--output=cat", "--no-pager"}
@@ -150,10 +193,9 @@ func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db
 	}
 	args = append(args, "--show-cursor")
 
-	output, err := runCmd(ctx, "journalctl", args...)
+	output, err := c.command(ctx, "journalctl", args...)
 	if err != nil {
-		slog.Debug("journalctl failed, will retry next cycle", "error", err)
-		return nil
+		return "", fmt.Errorf("%w: %w", errJournalRead, err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -171,6 +213,10 @@ func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db
 			continue
 		}
 
+		if emit == false {
+			continue
+		}
+
 		sessions := parseSSHLine(line)
 		for _, sess := range sessions {
 			if err := storeSSHSession(store, &sess); err != nil {
@@ -179,17 +225,32 @@ func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db
 		}
 	}
 
-	// Save cursor for next run.
-	if newCursor != "" {
-		jState := sshJournalState{Cursor: newCursor}
-		stateJSON, _ := json.Marshal(jState)
-		stateStr := string(stateJSON)
-		if err := store.SaveCollectorState(c.Name(), &stateStr); err != nil {
-			return fmt.Errorf("saving collector state: %w", err)
-		}
+	return newCursor, nil
+}
+
+// saveJournalCursor records where the journal read stopped. An empty cursor means there was nothing new, so the
+// saved one is still the right place to continue from.
+func (c *SSHSessionsCollector) saveJournalCursor(store *db.Store, cursor string) error {
+	if cursor == "" {
+		return nil
+	}
+
+	stateJSON, _ := json.Marshal(sshJournalState{Cursor: cursor})
+	stateStr := string(stateJSON)
+	if err := store.SaveCollectorState(c.Name(), &stateStr); err != nil {
+		return fmt.Errorf("saving collector state: %w", err)
 	}
 
 	return nil
+}
+
+// command runs an external command through the injected runner, or runCmd when there is none.
+func (c *SSHSessionsCollector) command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if c.execCmd != nil {
+		return c.execCmd(ctx, name, args...)
+	}
+
+	return runCmd(ctx, name, args...)
 }
 
 func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db.Store) error {

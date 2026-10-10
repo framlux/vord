@@ -7,6 +7,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -574,28 +575,232 @@ func TestResetToNow_AuthLog_NoLogFile(t *testing.T) {
 	}
 }
 
-// Intent: in journal mode the cursor is dropped, which makes the next run start from the recent window instead
-// of the pre-pause cursor.
-func TestResetToNow_Journal_ClearsCursor(t *testing.T) {
-	store := newTestStore(t)
-	c := &SSHSessionsCollector{hasJournalctl: true, rs: state.New()}
-	cursor := `{"cursor":"s=abc;i=1"}`
-	if err := store.SaveCollectorState(c.Name(), &cursor); err != nil {
+// fakeJournal stands in for journalctl: it records the arguments of each call and answers with canned output.
+type fakeJournal struct {
+	output string
+	err    error
+	calls  [][]string
+}
+
+func (f *fakeJournal) run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name != "journalctl" {
+		return nil, fmt.Errorf("unexpected command %q", name)
+	}
+	f.calls = append(f.calls, args)
+
+	return []byte(f.output), f.err
+}
+
+func (f *fakeJournal) lastArgs(t *testing.T) []string {
+	t.Helper()
+	if len(f.calls) == 0 {
+		t.Fatal("journalctl was never run")
+	}
+
+	return f.calls[len(f.calls)-1]
+}
+
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+
+	return false
+}
+
+func journalCollector(f *fakeJournal) *SSHSessionsCollector {
+	return &SSHSessionsCollector{hasJournalctl: true, rs: state.New(), execCmd: f.run}
+}
+
+func savedJournalCursor(t *testing.T, store *db.Store, c *SSHSessionsCollector) string {
+	t.Helper()
+	saved, err := store.GetCollectorState(c.Name())
+	if err != nil {
+		t.Fatalf("GetCollectorState: %v", err)
+	}
+	if saved == nil || saved.StateJSON == nil {
+		return ""
+	}
+	var js sshJournalState
+	if err := json.Unmarshal([]byte(*saved.StateJSON), &js); err != nil {
+		t.Fatalf("unmarshal %q: %v", *saved.StateJSON, err)
+	}
+
+	return js.Cursor
+}
+
+func saveJournalCursor(t *testing.T, store *db.Store, c *SSHSessionsCollector, cursor string) {
+	t.Helper()
+	stateStr := `{"cursor":"` + cursor + `"}`
+	if err := store.SaveCollectorState(c.Name(), &stateStr); err != nil {
 		t.Fatalf("SaveCollectorState: %v", err)
 	}
+}
+
+const journalAccepted = "Accepted publickey for root from 10.0.1.50 port 54321 ssh2\n"
+
+// Intent: in journal mode a resume advances the cursor past everything the pause logged, instead of dropping it
+// (which would re-read the last five minutes relative to the next run, all of it pause-era or pre-pause events
+// that would arrive stamped as fresh). The pause-era entries are read and discarded, never queued.
+func TestResetToNow_Journal_AdvancesCursorPastThePauseWithoutQueueingIt(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{output: journalAccepted + "-- cursor: s=after-pause\n"}
+	c := journalCollector(fake)
+	saveJournalCursor(t, store, c, "s=before-pause")
 
 	if err := c.ResetToNow(context.Background(), store); err != nil {
 		t.Fatalf("ResetToNow: %v", err)
 	}
 
-	saved, err := store.GetCollectorState(c.Name())
-	if err != nil {
-		t.Fatalf("GetCollectorState: %v", err)
+	args := fake.lastArgs(t)
+	if hasArg(args, "--after-cursor=s=before-pause") == false || hasArg(args, "--show-cursor") == false {
+		t.Errorf("expected the read to continue from the saved cursor and ask for the new one, got %v", args)
 	}
-	if saved == nil {
-		t.Fatal("expected a collector_state row")
+	if hasArg(args, "--since=-5m") {
+		t.Errorf("a saved cursor must not fall back to the five minute window, got %v", args)
 	}
-	if saved.StateJSON != nil {
-		t.Errorf("expected nil state in journal mode, got %q", *saved.StateJSON)
+	if got := savedJournalCursor(t, store, c); got != "s=after-pause" {
+		t.Errorf("expected the cursor to advance to s=after-pause, got %q", got)
+	}
+	if items := drainTelemetry(t, store); len(items) != 0 {
+		t.Errorf("expected the pause-era entries to be discarded, got %d queued item(s)", len(items))
+	}
+}
+
+// Intent: after the reset, collection carries on from the new cursor: nothing from the pause comes back, and an
+// entry logged after the resume is still collected.
+func TestResetToNow_Journal_NextCollectContinuesFromTheNewCursor(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{output: journalAccepted + "-- cursor: s=after-pause\n"}
+	c := journalCollector(fake)
+	saveJournalCursor(t, store, c, "s=before-pause")
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	fake.output = "Accepted publickey for alice from 10.0.1.51 port 54322 ssh2\n-- cursor: s=later\n"
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	if args := fake.lastArgs(t); hasArg(args, "--after-cursor=s=after-pause") == false {
+		t.Errorf("expected Collect to continue from the advanced cursor, got %v", args)
+	}
+	items := drainTelemetry(t, store)
+	if len(items) != 1 {
+		t.Fatalf("expected only the entry logged after the resume, got %d item(s)", len(items))
+	}
+	var payload sshSessionPayload
+	if err := json.Unmarshal([]byte(items[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.User != "alice" {
+		t.Errorf("expected alice, got %q", payload.User)
+	}
+	if got := savedJournalCursor(t, store, c); got != "s=later" {
+		t.Errorf("expected Collect to save s=later, got %q", got)
+	}
+}
+
+// Intent: with no saved cursor the read uses the same recent window as a first run and still lands on a cursor.
+func TestResetToNow_Journal_NoSavedCursorStartsFromTheRecentWindow(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{output: journalAccepted + "-- cursor: s=now\n"}
+	c := journalCollector(fake)
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	if args := fake.lastArgs(t); hasArg(args, "--since=-5m") == false {
+		t.Errorf("expected the first-run window, got %v", args)
+	}
+	if got := savedJournalCursor(t, store, c); got != "s=now" {
+		t.Errorf("expected the cursor s=now, got %q", got)
+	}
+	if items := drainTelemetry(t, store); len(items) != 0 {
+		t.Errorf("expected nothing queued, got %d item(s)", len(items))
+	}
+}
+
+// Intent: when sshd has logged nothing since the saved cursor there is nothing to skip, so the cursor stays; it
+// must not be dropped, since that would make the next run re-read events from before the pause.
+func TestResetToNow_Journal_NothingNewKeepsTheCursor(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{output: ""}
+	c := journalCollector(fake)
+	saveJournalCursor(t, store, c, "s=before-pause")
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	if got := savedJournalCursor(t, store, c); got != "s=before-pause" {
+		t.Errorf("expected the cursor to be kept, got %q", got)
+	}
+}
+
+// Intent: with no sshd entry at all there is nothing to record, and that is not an error.
+func TestResetToNow_Journal_NoEntriesAtAllLeavesNoState(t *testing.T) {
+	store := newTestStore(t)
+	c := journalCollector(&fakeJournal{output: ""})
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	if got := savedJournalCursor(t, store, c); got != "" {
+		t.Errorf("expected no cursor, got %q", got)
+	}
+}
+
+// Intent: if the journal cannot be read at resume the stale cursor is dropped (the smaller replay: the recent
+// window, not the whole pause) and the failure is reported.
+func TestResetToNow_Journal_ReadFailureDropsTheStaleCursorAndReportsIt(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{err: fmt.Errorf("journalctl: exit status 1")}
+	c := journalCollector(fake)
+	saveJournalCursor(t, store, c, "s=before-pause")
+
+	err := c.ResetToNow(context.Background(), store)
+
+	if err == nil {
+		t.Error("expected the journal read failure to be reported")
+	}
+	if got := savedJournalCursor(t, store, c); got != "" {
+		t.Errorf("expected the stale cursor to be dropped, got %q", got)
+	}
+}
+
+// Intent: the shared journal read still collects normally outside a reset: entries are queued and the cursor saved.
+func TestCollect_Journal_QueuesEntriesAndSavesCursor(t *testing.T) {
+	store := newTestStore(t)
+	fake := &fakeJournal{output: journalAccepted + "-- cursor: s=one\n"}
+	c := journalCollector(fake)
+
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	if args := fake.lastArgs(t); hasArg(args, "--since=-5m") == false {
+		t.Errorf("expected the first-run window, got %v", args)
+	}
+	if items := drainTelemetry(t, store); len(items) != 1 {
+		t.Errorf("expected 1 queued item, got %d", len(items))
+	}
+	if got := savedJournalCursor(t, store, c); got != "s=one" {
+		t.Errorf("expected cursor s=one, got %q", got)
+	}
+}
+
+// Intent: a journalctl failure during normal collection is retried next cycle, not surfaced as an error.
+func TestCollect_Journal_ReadFailureIsRetriedNextCycle(t *testing.T) {
+	store := newTestStore(t)
+	c := journalCollector(&fakeJournal{err: fmt.Errorf("journalctl: exit status 1")})
+
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Errorf("expected a quiet retry, got %v", err)
 	}
 }

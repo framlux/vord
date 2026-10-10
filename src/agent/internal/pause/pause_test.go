@@ -7,6 +7,7 @@ package pause
 import (
 	"bytes"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,11 +47,29 @@ type hookRecorder struct {
 	reasons []Reason
 	events  []string
 	mu      sync.Mutex
+
+	// inFlight counts hooks executing right now, and overlaps counts the times one started while another was
+	// still running. Each hook yields while it is "in flight" so an overlap has a chance to show itself.
+	inFlight atomic.Int32
+	overlaps atomic.Int32
+}
+
+// enter marks a hook as executing; the returned func marks it finished.
+func (h *hookRecorder) enter() func() {
+	if h.inFlight.Add(1) > 1 {
+		h.overlaps.Add(1)
+	}
+	for i := 0; i < 3; i++ {
+		runtime.Gosched()
+	}
+
+	return func() { h.inFlight.Add(-1) }
 }
 
 func (h *hookRecorder) hooks() Hooks {
 	return Hooks{
 		OnPause: func(reason Reason) {
+			defer h.enter()()
 			h.mu.Lock()
 			h.reasons = append(h.reasons, reason)
 			h.events = append(h.events, "pause")
@@ -58,6 +77,7 @@ func (h *hookRecorder) hooks() Hooks {
 			h.pauses.Add(1)
 		},
 		OnResume: func() {
+			defer h.enter()()
 			h.mu.Lock()
 			h.events = append(h.events, "resume")
 			h.mu.Unlock()
@@ -386,7 +406,12 @@ func TestCoordinator_ConcurrentObserveAndPaused_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Transitions are serialised, so whatever the interleaving the hooks strictly alternate, starting with a pause.
+	// Transitions are serialised, so no hook ever runs while another is still executing...
+	if rec.overlaps.Load() != 0 {
+		t.Errorf("%d hook(s) started while another was still running", rec.overlaps.Load())
+	}
+
+	// ...and whatever the interleaving the hooks strictly alternate, starting with a pause.
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	for i, event := range rec.events {
