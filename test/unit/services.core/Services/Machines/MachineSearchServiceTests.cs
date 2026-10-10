@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -14,7 +15,7 @@ using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
-using System.Diagnostics.Metrics;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -40,7 +41,7 @@ public class MachineSearchServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), null, CancellationToken.None);
@@ -54,7 +55,7 @@ public class MachineSearchServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -75,7 +76,7 @@ public class MachineSearchServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -95,7 +96,7 @@ public class MachineSearchServiceTests
         deleted.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -113,7 +114,7 @@ public class MachineSearchServiceTests
         tenant2Machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(tenant2Machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -133,7 +134,7 @@ public class MachineSearchServiceTests
         dbServer.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(dbServer);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "web";
@@ -153,7 +154,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "production";
@@ -178,7 +179,7 @@ public class MachineSearchServiceTests
         windows.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(windows);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Os = "Ubuntu";
@@ -206,7 +207,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.CpuMin = 80;
@@ -233,7 +234,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.CpuMax = 50;
@@ -262,7 +263,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.MemoryMin = 50;
@@ -294,7 +295,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(manyUpdateState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PendingUpdatesMin = 10;
@@ -323,7 +324,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(failingState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.FailedServicesMin = 1;
@@ -349,7 +350,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "offline";
@@ -373,7 +374,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "healthy,warning";
@@ -395,7 +396,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Page = -1;
@@ -415,7 +416,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 200;
@@ -434,7 +435,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Page = 100;
@@ -458,7 +459,7 @@ public class MachineSearchServiceTests
         zulu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(zulu);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "name";
@@ -481,7 +482,7 @@ public class MachineSearchServiceTests
         zulu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(zulu);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "name";
@@ -519,7 +520,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(noMatch2State);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "web";
@@ -543,7 +544,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Os = "NotAnOS";
@@ -568,7 +569,7 @@ public class MachineSearchServiceTests
         laptop.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(laptop);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Type = "Laptop";
@@ -595,7 +596,7 @@ public class MachineSearchServiceTests
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 2;
@@ -624,7 +625,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "cpu";
@@ -656,7 +657,7 @@ public class MachineSearchServiceTests
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "offline";
@@ -682,7 +683,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -714,7 +715,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(withSecState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SecurityUpdatesMin = 5;
@@ -744,7 +745,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "memory";
@@ -780,7 +781,7 @@ public class MachineSearchServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         // SQLite dialect forces the full-scan path for JSONB filters, which exercises
         // the in-memory ApplyPostEnrichmentFilters path for this filter.
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasDiskHealthIssue = false;
@@ -816,7 +817,7 @@ public class MachineSearchServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         // SQLite dialect forces the full-scan path for JSONB filters, exercising
         // the in-memory ApplyPostEnrichmentFilters path for this filter.
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasHardwareIssue = false;
@@ -847,7 +848,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(staleState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenAfter = DateTimeOffset.UtcNow.AddHours(-1);
@@ -876,7 +877,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(staleState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenBefore = DateTimeOffset.UtcNow.AddHours(-2);
@@ -898,7 +899,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(noPingState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenAfter = DateTimeOffset.UtcNow.AddHours(-1);
@@ -935,7 +936,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(offlineState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -966,7 +967,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(offlineState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -1003,7 +1004,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(healthyNoState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "healthy";
@@ -1026,7 +1027,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 0;
@@ -1046,7 +1047,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = -5;
@@ -1063,7 +1064,7 @@ public class MachineSearchServiceTests
         // Verify that page and pageSize clamping occurs even when tenantId is null.
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Page = -3;
@@ -1094,7 +1095,7 @@ public class MachineSearchServiceTests
         // No MachineStateSummary inserted — LEFT JOIN yields null for StateHealthStatus.
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1136,7 +1137,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1158,7 +1159,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1181,7 +1182,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1204,7 +1205,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1227,7 +1228,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1250,7 +1251,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1274,7 +1275,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "webserver";
@@ -1305,7 +1306,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(otherState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "PowerEdge";
@@ -1327,7 +1328,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "nonexistent-hostname-xyz";
@@ -1351,7 +1352,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1371,7 +1372,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1391,7 +1392,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1411,7 +1412,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1439,7 +1440,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(failedState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasDiskHealthIssue = true;
@@ -1470,7 +1471,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(badState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasHardwareIssue = true;
@@ -1501,7 +1502,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.DiskMin = 50;
@@ -1530,7 +1531,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.DiskMax = 50;
@@ -1556,7 +1557,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "invalid,bogus";
@@ -1579,7 +1580,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Type = "NotAMachineType";
@@ -1609,7 +1610,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "disk";
@@ -1639,7 +1640,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "disk";
@@ -1664,7 +1665,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1694,7 +1695,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1719,7 +1720,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1742,7 +1743,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1768,7 +1769,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -1788,7 +1789,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 50;
@@ -1809,7 +1810,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 100;
@@ -1828,7 +1829,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 101;
@@ -1850,7 +1851,7 @@ public class MachineSearchServiceTests
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 1;
@@ -1882,7 +1883,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(healthyState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "critical";
@@ -1913,7 +1914,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(healthyState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "warning";
@@ -1935,7 +1936,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "   ";
@@ -1956,7 +1957,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Os = "  ";
@@ -1979,7 +1980,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "   ";
@@ -2007,7 +2008,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "cpu";
@@ -2037,7 +2038,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "memory";
@@ -2072,7 +2073,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -2098,7 +2099,7 @@ public class MachineSearchServiceTests
             machineId: offline.Id, healthStatus: 3));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -2157,7 +2158,7 @@ public class MachineSearchServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -2194,7 +2195,7 @@ public class MachineSearchServiceTests
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = filter;
@@ -2230,7 +2231,8 @@ public class MachineSearchServiceTests
 
         return new MachineSearchService(
             new TestServiceScopeFactory(dbFactory.Context, services),
-            metrics ?? TestMetricsFactory.CreateQuotaPauseMetrics());
+            metrics ?? TestMetricsFactory.CreateQuotaPauseMetrics(),
+            NullLogger<MachineSearchService>.Instance);
     }
 
     [Test]
@@ -2336,5 +2338,53 @@ public class MachineSearchServiceTests
         await Assert.That(byHealth.Ids).IsEquivalentTo(new List<long> { ids[0] });
         await Assert.That(byPaused.Ids).IsEquivalentTo(new List<long> { ids[1], ids[2] });
         await Assert.That(byPaused.TotalCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Constructor_NullScopeFactory_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineSearchService(null!, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("scopeFactory");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineSearchService(scopeFactory, null!, NullLogger<MachineSearchService>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineSearchService(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 }

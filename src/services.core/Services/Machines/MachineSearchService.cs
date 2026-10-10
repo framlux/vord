@@ -24,17 +24,20 @@ public sealed class MachineSearchService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<MachineSearchService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchService"/> class.
     /// </summary>
-    public MachineSearchService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics)
+    public MachineSearchService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics, ILogger<MachineSearchService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
     }
 
     /// <summary>
@@ -147,7 +150,7 @@ public sealed class MachineSearchService
     {
         IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
 
-        return await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, tenantId, ct);
+        return await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, _logger, tenantId, ct);
     }
 
     private static FleetSearchParameters BuildSearchParameters(MachineSearchCriteria criteria, QuotaCutoff cutoff, int page, int pageSize)

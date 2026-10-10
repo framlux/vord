@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Billing;
@@ -13,7 +14,7 @@ using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
-using System.Diagnostics.Metrics;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -29,7 +30,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, null, null, null, "name", "asc", CancellationToken.None);
@@ -43,7 +44,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -62,7 +63,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -83,7 +84,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -100,7 +101,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -118,7 +119,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -136,7 +137,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -152,7 +153,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             -5, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -166,7 +167,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 999, 1, null, null, "name", "asc", CancellationToken.None);
@@ -184,7 +185,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, "web-server", null, "name", "asc", CancellationToken.None);
@@ -200,7 +201,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, "offline", "name", "asc", CancellationToken.None);
@@ -216,7 +217,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, "healthy", "name", "asc", CancellationToken.None);
@@ -233,7 +234,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -249,7 +250,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -272,7 +273,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "cpu", "desc", CancellationToken.None);
@@ -288,7 +289,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(1, null, CancellationToken.None);
 
@@ -300,7 +301,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(999, 1, CancellationToken.None);
 
@@ -315,7 +316,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -331,7 +332,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -348,7 +349,7 @@ public class MachineStateServiceTests
             machineId: machine.Id, healthStatus: 0, lastSeenAt: DateTimeOffset.UtcNow));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -376,7 +377,7 @@ public class MachineStateServiceTests
             receivedAt: receivedAt));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -405,7 +406,7 @@ public class MachineStateServiceTests
             payload: """{"memory_total":17179869184,"memory_used":8589934592,"memory_usage_percent":50}"""));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -429,7 +430,7 @@ public class MachineStateServiceTests
             payload: """{"cpu_usage_percent":61,"user_time":34,"system_time":11,"nice_time":1,"idle_time":39,"iowait_time":14,"irq_time":0,"softirq_time":2,"steal_time":9}"""));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -450,7 +451,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -468,7 +469,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -493,7 +494,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -519,7 +520,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -544,7 +545,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -570,7 +571,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -586,7 +587,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -624,7 +625,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(memTelemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -650,7 +651,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(sshTelemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -671,7 +672,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -702,7 +703,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -724,7 +725,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -749,7 +750,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -771,7 +772,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -793,7 +794,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -813,7 +814,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 0, 1, null, null, "name", "asc", CancellationToken.None);
@@ -831,7 +832,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics());
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "desc", CancellationToken.None);
@@ -883,7 +884,8 @@ public class MachineStateServiceTests
 
         return new MachineStateService(
             new TestServiceScopeFactory(dbFactory.Context, services),
-            metrics ?? TestMetricsFactory.CreateQuotaPauseMetrics());
+            metrics ?? TestMetricsFactory.CreateQuotaPauseMetrics(),
+            NullLogger<MachineStateService>.Instance);
     }
 
     [Test]
@@ -956,6 +958,37 @@ public class MachineStateServiceTests
     }
 
     [Test]
+    public async Task GetFleetOverviewAsync_SecurityUpdates_LeaveOutPausedMachines()
+    {
+        // Every seeded machine reports two security updates; only the two active ones are summed.
+        using TestDatabaseFactory dbFactory = new();
+        List<long> ids = await SeedFleet(dbFactory, 0, 1, 0, 3);
+        MachineStateService service = ServiceWith(dbFactory, TestQuotaPause.With(QuotaCutoff.After(ids[1]), 2));
+
+        PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(1, 25, 1, null, null, "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.Summary.SecurityUpdates).IsEqualTo(4);
+
+        // The rows still show what each machine reported; only the fleet total skips the paused ones.
+        await Assert.That(result.Machines.Sum(m => m.SecurityUpdates)).IsEqualTo(8);
+    }
+
+    [Test]
+    public async Task GetFleetOverviewAsync_SortByStatus_ListsPausedMachinesAfterTheActiveOnes()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        List<long> ids = await SeedFleet(dbFactory, 2, 3, 0, 1);
+        MachineStateService service = ServiceWith(dbFactory, TestQuotaPause.With(QuotaCutoff.After(ids[1]), 2));
+
+        PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(1, 25, 1, null, null, "status", "asc", CancellationToken.None);
+
+        // The paused machines froze at healthy and warning, which would otherwise sort ahead of the
+        // critical and offline machines that are really in that state.
+        await Assert.That(string.Join(",", result.Machines.Select(m => m.IsPaused))).IsEqualTo("False,False,True,True");
+        await Assert.That(string.Join(",", result.Machines.Take(2).Select(m => m.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
+    }
+
+    [Test]
     public async Task GetFleetOverviewAsync_EveryMachinePaused_HasNoOnlineOrHealthCounts()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -1021,5 +1054,53 @@ public class MachineStateServiceTests
 
         await Assert.That(detail!.IsPaused).IsFalse();
         await Assert.That(detail.ActiveRank).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Constructor_NullScopeFactory_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineStateService(null!, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("scopeFactory");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineStateService(scopeFactory, null!, NullLogger<MachineStateService>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineStateService(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 }

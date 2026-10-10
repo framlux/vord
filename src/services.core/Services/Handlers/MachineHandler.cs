@@ -211,7 +211,7 @@ public sealed class MachineHandler
         machine.Location = location;
 
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         MachineDto dto = BuildMachineDto(machine, summary, cutoff.IsPaused(machine.Id));
 
@@ -279,7 +279,7 @@ public sealed class MachineHandler
         }
 
         // Asked once per request so every row, and every filter below, sees the same cutoff.
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         // When filtering by online/offline/paused status, we must resolve status for all matching machines
         // before pagination so that totalCount and page results are correct.

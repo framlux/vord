@@ -260,7 +260,8 @@ public interface IMachineStateRepository
     /// Returns health count aggregation (grouped by HealthStatus), total security updates and the
     /// paused machine count for all machines in a tenant, using a Machines LEFT JOIN
     /// MachineStateSummaries query. A paused machine is counted only in the paused count: its health
-    /// status is whatever it last reported before it was paused, so it never joins a health bucket.
+    /// status is whatever it last reported before it was paused, so it never joins a health bucket,
+    /// and the security updates it last reported are left out of the total.
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="kind">Which of the tenant's machines are paused.</param>

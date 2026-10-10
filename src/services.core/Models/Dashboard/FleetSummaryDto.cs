@@ -30,6 +30,6 @@ public sealed class FleetSummaryDto
     /// <summary>Machines in Critical state.</summary>
     public int CriticalCount { get; set; }
 
-    /// <summary>Total pending security updates across fleet.</summary>
+    /// <summary>Total pending security updates across the fleet, leaving out paused machines.</summary>
     public int SecurityUpdates { get; set; }
 }

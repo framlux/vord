@@ -88,6 +88,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     private readonly ITenantSubscriptionOverrideRepository _overrideRepository;
     private readonly IQuotaPauseService _quotaPause;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<SubscriptionEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
     private readonly TimeProvider _timeProvider;
@@ -104,6 +105,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         ITenantSubscriptionOverrideRepository overrideRepository,
         IQuotaPauseService quotaPause,
         QuotaPauseMetrics quotaPauseMetrics,
+        ILogger<SubscriptionEndpoint> logger,
         ITenantContext tenantContext,
         IBillingApiClient billingApiClient,
         TimeProvider timeProvider)
@@ -116,6 +118,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         _overrideRepository = overrideRepository;
         _quotaPause = quotaPause;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
         _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
         _timeProvider = timeProvider;
@@ -154,7 +157,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int activeMembers = await _tenantRepository.CountActiveMembersAsync(tenantId, ct);
         int pendingInvitations = await _invitationRepository.CountPendingInvitationsAsync(tenantId, _timeProvider.GetUtcNow(), ct);
 
-        int pausedMachineCount = await QuotaCutoffDisplay.GetPausedCountOrZeroAsync(_quotaPause, _quotaPauseMetrics, tenantId, ct);
+        int pausedMachineCount = await QuotaCutoffDisplay.GetPausedCountOrZeroAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId, ct);
 
         // Only the tiers Stripe bills have a billable quantity; the others have no floor to apply and
         // the count is refused for them rather than guessed.

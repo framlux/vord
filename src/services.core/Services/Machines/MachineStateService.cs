@@ -22,17 +22,20 @@ public sealed class MachineStateService : IMachineStateService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<MachineStateService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateService"/> class.
     /// </summary>
-    public MachineStateService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics)
+    public MachineStateService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics, ILogger<MachineStateService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -73,7 +76,7 @@ public sealed class MachineStateService : IMachineStateService
 
         // Asked once so the summary counts, the filter and every row agree on which hosts are paused.
         IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         // Step 1: SQL-level summary aggregation using pre-computed HealthStatus. Paused hosts come
         // back only as a count: their stored health is frozen at the last report, so it must not
@@ -179,7 +182,7 @@ public sealed class MachineStateService : IMachineStateService
         }
 
         IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         // The position the machine limit is counted from, so a paused host can say how far past the
         // limit it sits. Counted here rather than carried on the list rows, which would have to rank

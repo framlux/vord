@@ -46,7 +46,7 @@ public class MachineDetailHandlerTests
         stateService ??= Substitute.For<IMachineStateService>();
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineDetailHandler(repo, repo, pingService, stateService, quotaPause ?? TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
+        return new MachineDetailHandler(repo, repo, pingService, stateService, quotaPause ?? TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineDetailHandler>.Instance);
     }
 
     private static async Task SeedSummary(TestDatabaseFactory dbFactory, long machineId, short healthStatus)
@@ -453,5 +453,53 @@ public class MachineDetailHandlerTests
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
         await Assert.That(result.Data!.IsPaused).IsTrue();
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPause_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), null!, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineDetailHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPause");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), TestQuotaPause.Nothing(), null!, NullLogger<MachineDetailHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 }

@@ -1324,6 +1324,27 @@ public class MachineStateRepositoryTests
     }
 
     [Test]
+    public async Task GetFleetHealthAggregationAsync_AfterCutoff_LeavesPausedMachinesOutOfTheSecurityUpdateTotal()
+    {
+        // Updates a paused machine last reported are not something the tenant can act on, so the
+        // fleet total counts only the machines that are being watched.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        long first = await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 0, securityUpdates: 2);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 1, securityUpdates: 3);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 2, securityUpdates: 40);
+
+        (_, int total, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.After, first, CancellationToken.None);
+        (_, int noneTotal, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.None, 0, CancellationToken.None);
+        (_, int allTotal, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.All, 0, CancellationToken.None);
+
+        await Assert.That(total).IsEqualTo(2);
+        await Assert.That(noneTotal).IsEqualTo(45);
+        await Assert.That(allTotal).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task GetFleetHealthAggregationAsync_AllPaused_LeavesNoHealthBucketAtAll()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -1457,6 +1478,44 @@ public class MachineStateRepositoryTests
 
         await Assert.That(rows.Select(r => r.Id).Order().ToList()).IsEquivalentTo(new List<long> { ids[0], ids[1] });
         await Assert.That(totalCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_SortByStatus_PutsPausedMachinesAfterEveryHealthStatus()
+    {
+        // The paused machines froze at healthy, warning and healthy. Sorted by their stored health they
+        // would be interleaved with, or ahead of, machines that are actually critical and offline.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [2, 3, 0, 1, 0]);
+
+        (List<FleetMachineRow> ascending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", Skip = 0, Take = 10 });
+        (List<FleetMachineRow> descending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", SortDescending = true, Skip = 0, Take = 10 });
+
+        await Assert.That(ascending.Count).IsEqualTo(5);
+        await Assert.That(string.Join(",", ascending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
+        await Assert.That(ascending.Skip(2).All(r => r.IsPaused)).IsTrue();
+
+        // Reversed, the paused bucket leads and the health order inside the active machines flips.
+        await Assert.That(descending.Take(3).All(r => r.IsPaused)).IsTrue();
+        await Assert.That(string.Join(",", descending.Skip(3).Select(r => r.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_SortByStatusWithNothingPaused_StillOrdersByStoredHealth()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [3, 1, 0, 2]);
+
+        (List<FleetMachineRow> rows, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { SortBy = "status", Skip = 0, Take = 10 });
+
+        await Assert.That(string.Join(",", rows.Select(r => r.HealthStatus))).IsEqualTo("0,1,2,3");
     }
 
     [Test]
@@ -1654,7 +1713,7 @@ public class MachineStateRepositoryTests
         return ids;
     }
 
-    private static async Task SeedFleetMachineAsync(TestDatabaseFactory dbFactory, int tenantId, short healthStatus, int securityUpdates)
+    private static async Task<long> SeedFleetMachineAsync(TestDatabaseFactory dbFactory, int tenantId, short healthStatus, int securityUpdates)
     {
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
         long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -1662,6 +1721,8 @@ public class MachineStateRepositoryTests
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId, healthStatus: healthStatus);
         summary.SecurityUpdates = securityUpdates;
         await dbFactory.Context.InsertAsync(summary);
+
+        return machineId;
     }
 
     // ========== Projection cursor tests ==========

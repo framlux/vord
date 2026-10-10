@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
@@ -14,7 +15,6 @@ using LinqToDB;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
-using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -401,6 +401,47 @@ public sealed class MachinePausedSurfacesTests
     }
 
     [Test]
+    public async Task DashboardSummary_OnlinePlusPausedNeverExceedsTotal_AndOnlineIsTheActiveRowsThatAreOnline()
+    {
+        // The tenant is over its limit. Both headline counts have to describe the same hosts the
+        // fleet rows do, or the cards and the table under them stop adding up.
+        using FunctionalTestFactory factory = new();
+        Fixture fixture = await SeedFreeTenantWithFiveMachines(factory);
+
+        JsonElement summary = await ReadDataAsync(fixture.Client, "/api/v1/dashboard/summary");
+        JsonElement rows = (await ReadDataAsync(fixture.Client, "/api/v1/dashboard/fleet")).GetProperty("machines");
+
+        int total = summary.GetProperty("totalMachines").GetInt32();
+        int online = summary.GetProperty("onlineMachines").GetInt32();
+        int paused = summary.GetProperty("pausedMachines").GetInt32();
+        int activeOnlineRows = rows.EnumerateArray()
+            .Count(m => m.GetProperty("isOnline").GetBoolean() && (m.GetProperty("isPaused").GetBoolean() == false));
+        int pausedRows = rows.EnumerateArray().Count(m => m.GetProperty("isPaused").GetBoolean());
+
+        await Assert.That(paused).IsGreaterThan(0);
+        await Assert.That(online + paused).IsLessThanOrEqualTo(total);
+        await Assert.That(online).IsEqualTo(activeOnlineRows);
+        await Assert.That(paused).IsEqualTo(pausedRows);
+    }
+
+    [Test]
+    public async Task FleetOverview_SortByStatus_ListsPausedHostsAfterTheActiveOnes()
+    {
+        // The paused hosts froze at warning and offline, so ordering by stored health would put the
+        // offline one last among all five and the warning one among the active hosts.
+        using FunctionalTestFactory factory = new();
+        Fixture fixture = await SeedFreeTenantWithFiveMachines(factory);
+
+        JsonElement ascending = (await ReadDataAsync(fixture.Client, "/api/v1/dashboard/fleet?sortBy=status&sortDir=asc")).GetProperty("machines");
+        JsonElement descending = (await ReadDataAsync(fixture.Client, "/api/v1/dashboard/fleet?sortBy=status&sortDir=desc")).GetProperty("machines");
+
+        await Assert.That(string.Join(",", ascending.EnumerateArray().Select(m => m.GetProperty("isPaused").GetBoolean())))
+            .IsEqualTo("False,False,False,True,True");
+        await Assert.That(string.Join(",", descending.EnumerateArray().Select(m => m.GetProperty("isPaused").GetBoolean())))
+            .IsEqualTo("True,True,False,False,False");
+    }
+
+    [Test]
     public async Task EverySurface_PauseDecisionUnavailable_ShowsHostsByTheirHealthAndCountsTheFailure()
     {
         // A broken pause check fails open: no page may error or hide a host, and the counter is the
@@ -420,6 +461,10 @@ public sealed class MachinePausedSurfacesTests
         JsonElement fleet = await ReadDataAsync(fixture.Client, "/api/v1/dashboard/fleet");
         JsonElement list = await ReadDataAsync(fixture.Client, "/api/v1/machines");
         JsonElement detail = await ReadDataAsync(fixture.Client, $"/api/v1/machines/{fixture.Ids[4]}/detail");
+        JsonElement dashboard = await ReadDataAsync(fixture.Client, "/api/v1/dashboard/summary");
+
+        await Assert.That(dashboard.GetProperty("pausedMachines").GetInt32()).IsEqualTo(0);
+        await Assert.That(dashboard.GetProperty("onlineMachines").GetInt32()).IsEqualTo(4);
 
         JsonElement summary = fleet.GetProperty("summary");
         await Assert.That(summary.GetProperty("pausedCount").GetInt32()).IsEqualTo(0);
@@ -432,9 +477,10 @@ public sealed class MachinePausedSurfacesTests
         // The rank does not depend on the pause decision, so it is still reported.
         await Assert.That(detail.GetProperty("activeRank").GetInt32()).IsEqualTo(5);
 
-        // One failed check per request that asked: the fleet overview, the list and the detail.
+        // One failed check per request that asked: the fleet overview, the list, the detail and the
+        // dashboard summary, which decides its online and paused counts from a single check.
         IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot().Where(m => m.Value > 0).ToList();
-        await Assert.That(measurements.Count).IsEqualTo(3);
+        await Assert.That(measurements.Count).IsEqualTo(4);
         await Assert.That(measurements.All(m => (string?)m.Tags["surface"] == "display")).IsTrue();
     }
 }

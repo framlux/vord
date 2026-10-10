@@ -133,6 +133,47 @@ public sealed class FleetPausedQueryLiveTests
     }
 
     [Test]
+    public async Task Search_SortByStatus_PutsPausedRowsAfterEveryHealthStatus()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = new(db, NullLogger<DatabaseRepository>.Instance);
+        int tenantId = await SeedTenantAsync(db);
+        List<long> ids = await SeedFleetAsync(db, tenantId, 2, 3, 0, 1, 0);
+
+        (List<FleetMachineRow> ascending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", Skip = 0, Take = 10 }, CancellationToken.None);
+        (List<FleetMachineRow> descending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", SortDescending = true, Skip = 0, Take = 10 }, CancellationToken.None);
+
+        await Assert.That(string.Join(",", ascending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
+        await Assert.That(ascending.Skip(2).All(r => r.IsPaused)).IsTrue();
+        await Assert.That(descending.Take(3).All(r => r.IsPaused)).IsTrue();
+        await Assert.That(string.Join(",", descending.Skip(3).Select(r => r.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
+    }
+
+    [Test]
+    public async Task Aggregation_AfterCutoff_LeavesPausedMachinesOutOfTheSecurityUpdateTotal()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = new(db, NullLogger<DatabaseRepository>.Instance);
+        int tenantId = await SeedTenantAsync(db);
+        List<long> ids = await SeedFleetAsync(db, tenantId, 0, 1, 2);
+        int[] updates = [2, 3, 40];
+        for (int i = 0; i < ids.Count; i++)
+        {
+            long machineId = ids[i];
+            int count = updates[i];
+            await db.MachineStateSummaries.Where(s => s.MachineId == machineId).Set(s => s.SecurityUpdates, count).UpdateAsync();
+        }
+
+        (_, int total, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.After, ids[0], CancellationToken.None);
+        (_, int allTotal, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.All, 0, CancellationToken.None);
+
+        await Assert.That(total).IsEqualTo(2);
+        await Assert.That(allTotal).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task RegisteredRank_IsTheOneBasedPositionAmongTheTenantsLiveMachines()
     {
         await using DatabaseContext db = CreateContext();

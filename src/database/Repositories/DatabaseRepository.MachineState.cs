@@ -517,7 +517,11 @@ public partial class DatabaseRepository : IMachineStateRepository
 
         int pausedCount = await baseQuery.CountAsync(r => r.IsPaused, cancellationToken);
 
-        int totalSecurityUpdates = await baseQuery.SumAsync(r => r.SecurityUpdates ?? 0, cancellationToken);
+        // A paused machine is not being watched, so the updates it last reported are not a figure the
+        // tenant can act on and are kept out of the fleet total, as its health is kept out of the buckets.
+        int totalSecurityUpdates = await baseQuery
+            .Where(r => r.IsPaused == false)
+            .SumAsync(r => r.SecurityUpdates ?? 0, cancellationToken);
 
         return (healthCounts, totalSecurityUpdates, pausedCount);
     }
@@ -699,8 +703,8 @@ public partial class DatabaseRepository : IMachineStateRepository
         IQueryable<FleetMachineRow> sortedQuery = parameters.SortBy?.ToLowerInvariant() switch
         {
             "status" => desc
-                ? query.OrderByDescending(r => r.HealthStatus)
-                : query.OrderBy(r => r.HealthStatus),
+                ? query.OrderByDescending(r => r.IsPaused ? PausedStatusSortRank : r.HealthStatus)
+                : query.OrderBy(r => r.IsPaused ? PausedStatusSortRank : r.HealthStatus),
             "cpu" => desc
                 ? query.OrderByDescending(r => r.CpuUsagePercent ?? 0)
                 : query.OrderBy(r => r.CpuUsagePercent ?? 0),
@@ -794,6 +798,10 @@ public partial class DatabaseRepository : IMachineStateRepository
 
         return counts.Count > 0 ? counts[0] : null;
     }
+
+    // A paused machine sorts as a bucket of its own, one past the last health status (offline is 3),
+    // rather than among the machines whose health it only froze at.
+    private const short PausedStatusSortRank = 4;
 
     private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId, bool allPaused, long? pausedAfterId)
     {

@@ -21,6 +21,7 @@ public sealed class DashboardHandler
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly IQuotaPauseService _quotaPause;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<DashboardHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardHandler"/> class.
@@ -29,17 +30,20 @@ public sealed class DashboardHandler
         IMachineRepository machineRepo,
         IMachineStateRepository machineStateRepo,
         IQuotaPauseService quotaPause,
-        QuotaPauseMetrics quotaPauseMetrics)
+        QuotaPauseMetrics quotaPauseMetrics,
+        ILogger<DashboardHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(quotaPause);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
         _quotaPause = quotaPause;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
     }
 
     /// <summary>
@@ -65,8 +69,11 @@ public sealed class DashboardHandler
 
         // A paused host keeps its heartbeat and its frozen health, so by liveness alone it would
         // still count as online. It is counted as paused instead, and in neither online nor offline.
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
-        int pausedCount = await QuotaCutoffDisplay.GetPausedCountOrZeroAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        // One cutoff decides both counts over the machines loaded above. Asking for the paused count
+        // separately would read the live limit while the cutoff may be up to a cache lifetime old, so
+        // the two could disagree and online plus paused could exceed the total.
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
+        int pausedCount = machines.Count(m => cutoff.IsPaused(m.Id));
         int onlineCount = summaries.Count(s => (cutoff.IsPaused(s.MachineId) == false) && MachineLiveness.IsOnline(s));
 
         DashboardSummaryDto dto = new()

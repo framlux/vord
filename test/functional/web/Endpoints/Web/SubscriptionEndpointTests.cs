@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
@@ -16,7 +17,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using NSubstitute;
-using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 

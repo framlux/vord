@@ -25,6 +25,7 @@ public sealed class MachineDetailHandler
     private readonly IMachineStateService _stateService;
     private readonly IQuotaPauseService _quotaPause;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<MachineDetailHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDetailHandler"/> class.
@@ -35,7 +36,8 @@ public sealed class MachineDetailHandler
         IMachinePingService pingService,
         IMachineStateService stateService,
         IQuotaPauseService quotaPause,
-        QuotaPauseMetrics quotaPauseMetrics)
+        QuotaPauseMetrics quotaPauseMetrics,
+        ILogger<MachineDetailHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
@@ -43,6 +45,7 @@ public sealed class MachineDetailHandler
         ArgumentNullException.ThrowIfNull(stateService);
         ArgumentNullException.ThrowIfNull(quotaPause);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
@@ -50,6 +53,7 @@ public sealed class MachineDetailHandler
         _stateService = stateService;
         _quotaPause = quotaPause;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
     }
 
     /// <summary>
@@ -74,7 +78,7 @@ public sealed class MachineDetailHandler
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machine.Id, ct);
         bool isOnline = MachineLiveness.IsOnline(summary);
         DateTimeOffset? lastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt);
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         MachineDto dto = new()
         {
@@ -140,7 +144,7 @@ public sealed class MachineDetailHandler
             : MachineHealthStatus.Offline;
         bool isOnline = MachineLiveness.IsOnline(summary);
         DateTimeOffset? lastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt);
-        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
         MachineStatusDto dto = new()
         {

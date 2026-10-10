@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
@@ -17,7 +18,6 @@ using LinqToDB;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
-using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -184,5 +184,39 @@ public sealed class MachineHandlerPausedTests
 
         await Assert.That(active.Data!.Data!.IsPaused).IsFalse();
         await Assert.That(paused.Data!.Data!.IsPaused).IsTrue();
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPause_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+        QuotaCutoffInvalidator invalidator = new(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), invalidator, null!, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPause");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+        QuotaCutoffInvalidator invalidator = new(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), invalidator, TestQuotaPause.Nothing(), null!, NullLogger<MachineHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
     }
 }
