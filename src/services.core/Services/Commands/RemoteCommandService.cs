@@ -143,19 +143,20 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.BadRequest("Target machine not found or does not belong to tenant");
         }
 
-        // A paused host never polls for commands, so accepting one would leave it queued until it
-        // expired. Refusing now tells the user why. The check follows the ownership lookup so a pause
-        // is only ever revealed for a machine the caller's own tenant owns.
-        if (await IsPausedAsync(command.TenantId, machine.Id, cancellationToken))
-        {
-            return ServiceResult<RemoteCommand>.Conflict(HostPausedMessage);
-        }
-
         // Verify the signing key is authorized for this specific machine.
         bool isAuthorized = await _signingKeyRepository.IsKeyAuthorizedForMachineAsync(command.SigningKeyId, command.MachineId, cancellationToken);
         if (isAuthorized == false)
         {
             return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
+        }
+
+        // A paused host never polls for commands, so accepting one would leave it queued until it
+        // expired. Refusing now tells the user why. The check follows both the ownership lookup and
+        // the key authorization, so a pause is only revealed to a caller who could have sent the
+        // command, and a request that would be refused anyway costs no lookup.
+        if (await IsPausedAsync(command.TenantId, machine.Id, cancellationToken))
+        {
+            return ServiceResult<RemoteCommand>.Conflict(HostPausedMessage);
         }
 
         // Reject commands when the agent has not reported the remote commands capability.

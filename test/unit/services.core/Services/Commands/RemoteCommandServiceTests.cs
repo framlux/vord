@@ -679,6 +679,25 @@ public sealed class RemoteCommandServiceTests
     }
 
     [Test]
+    public async Task SubmitCommand_UnauthorizedKeyOnAPausedHost_ReturnsForbiddenWithoutAskingThePauseService()
+    {
+        // Intent: authorization comes before state. A same-tenant caller whose key is not authorized for
+        // the machine is told so, not that the host is paused, and the request costs no pause lookup.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _signingKeyRepository.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(BuildSignedCommand(privateKey), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(403);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Signing key is not authorized for this machine");
+        await _quotaPause.DidNotReceiveWithAnyArgs().IsPausedAsync(default, default, default);
+    }
+
+    [Test]
     public async Task SubmitCommand_UnknownMachine_IsRejectedBeforeThePauseCheck()
     {
         // Intent: whether a host is paused is only revealed for a machine the caller's tenant owns.
