@@ -314,7 +314,7 @@ public sealed class FleetAdminServiceTests
     }
 
     [Test]
-    public async Task MapToFleetTenant_OverrideAndCounts_AreCarriedOntoTheTenant()
+    public async Task MapToFleetTenant_LimitsAndCounts_AreCarriedOntoTheTenant()
     {
         Tenant tenant = MakeTenant();
         TenantSubscription subscription = new()
