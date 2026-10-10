@@ -981,11 +981,16 @@ public class MachineStateServiceTests
         MachineStateService service = ServiceWith(dbFactory, TestQuotaPause.With(QuotaCutoff.After(ids[1]), 2));
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(1, 25, 1, null, null, "status", "asc", CancellationToken.None);
+        PaginatedFleetOverviewDto reversed = await service.GetFleetOverviewAsync(1, 25, 1, null, null, "status", "desc", CancellationToken.None);
 
         // The paused machines froze at healthy and warning, which would otherwise sort ahead of the
         // critical and offline machines that are really in that state.
         await Assert.That(string.Join(",", result.Machines.Select(m => m.IsPaused))).IsEqualTo("False,False,True,True");
         await Assert.That(string.Join(",", result.Machines.Take(2).Select(m => m.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
+
+        // Reversed, the active machines' health order flips and the paused ones still come last.
+        await Assert.That(string.Join(",", reversed.Machines.Select(m => m.IsPaused))).IsEqualTo("False,False,True,True");
+        await Assert.That(string.Join(",", reversed.Machines.Take(2).Select(m => m.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
     }
 
     [Test]

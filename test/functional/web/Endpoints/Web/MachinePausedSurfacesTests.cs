@@ -428,7 +428,8 @@ public sealed class MachinePausedSurfacesTests
     public async Task FleetOverview_SortByStatus_ListsPausedHostsAfterTheActiveOnes()
     {
         // The paused hosts froze at warning and offline, so ordering by stored health would put the
-        // offline one last among all five and the warning one among the active hosts.
+        // offline one last among all five and the warning one among the active hosts. Reversing the
+        // direction flips the health order of the active hosts but must keep the paused ones last.
         using FunctionalTestFactory factory = new();
         Fixture fixture = await SeedFreeTenantWithFiveMachines(factory);
 
@@ -438,7 +439,7 @@ public sealed class MachinePausedSurfacesTests
         await Assert.That(string.Join(",", ascending.EnumerateArray().Select(m => m.GetProperty("isPaused").GetBoolean())))
             .IsEqualTo("False,False,False,True,True");
         await Assert.That(string.Join(",", descending.EnumerateArray().Select(m => m.GetProperty("isPaused").GetBoolean())))
-            .IsEqualTo("True,True,False,False,False");
+            .IsEqualTo("False,False,False,True,True");
     }
 
     [Test]

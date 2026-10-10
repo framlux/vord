@@ -698,13 +698,15 @@ public partial class DatabaseRepository : IMachineStateRepository
 
         int totalCount = await query.CountAsync(cancellationToken);
 
-        // Sort
+        // Sort. A status sort puts paused machines last in both directions: their stored health is
+        // frozen at whatever they last reported, so it says nothing about where they belong among
+        // the machines that are actually healthy, warning, critical or offline.
         bool desc = parameters.SortDescending;
         IQueryable<FleetMachineRow> sortedQuery = parameters.SortBy?.ToLowerInvariant() switch
         {
             "status" => desc
-                ? query.OrderByDescending(r => r.IsPaused ? PausedStatusSortRank : r.HealthStatus)
-                : query.OrderBy(r => r.IsPaused ? PausedStatusSortRank : r.HealthStatus),
+                ? query.OrderBy(r => r.IsPaused ? 1 : 0).ThenByDescending(r => r.HealthStatus)
+                : query.OrderBy(r => r.IsPaused ? 1 : 0).ThenBy(r => r.HealthStatus),
             "cpu" => desc
                 ? query.OrderByDescending(r => r.CpuUsagePercent ?? 0)
                 : query.OrderBy(r => r.CpuUsagePercent ?? 0),
@@ -798,10 +800,6 @@ public partial class DatabaseRepository : IMachineStateRepository
 
         return counts.Count > 0 ? counts[0] : null;
     }
-
-    // A paused machine sorts as a bucket of its own, one past the last health status (offline is 3),
-    // rather than among the machines whose health it only froze at.
-    private const short PausedStatusSortRank = 4;
 
     private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId, bool allPaused, long? pausedAfterId)
     {

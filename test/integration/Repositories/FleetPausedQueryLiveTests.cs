@@ -147,8 +147,8 @@ public sealed class FleetPausedQueryLiveTests
 
         await Assert.That(string.Join(",", ascending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
         await Assert.That(ascending.Skip(2).All(r => r.IsPaused)).IsTrue();
-        await Assert.That(descending.Take(3).All(r => r.IsPaused)).IsTrue();
-        await Assert.That(string.Join(",", descending.Skip(3).Select(r => r.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
+        await Assert.That(string.Join(",", descending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
+        await Assert.That(descending.Skip(2).All(r => r.IsPaused)).IsTrue();
     }
 
     [Test]
