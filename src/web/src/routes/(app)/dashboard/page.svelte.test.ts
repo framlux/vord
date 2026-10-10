@@ -120,6 +120,18 @@ describe('dashboard fleet summary', () => {
 		expect(donut.getAttribute('style')).toContain('rgb(99, 102, 241) 70%');
 	});
 
+	it('reads a summary without a paused count as no paused hosts when the web image ships ahead of the API', () => {
+		const { pausedCount: _omitted, ...withoutPausedCount } = makeSummary();
+		render(DashboardPage, { props: { data: makeData([], withoutPausedCount as FleetSummaryDto) } });
+
+		const donut = screen.getByRole('img', { name: /Fleet health/ });
+
+		expect(donut.getAttribute('style')).not.toContain('NaN');
+		expect(donut.getAttribute('aria-label')).toContain('0 paused');
+		expect(screen.getByText('Paused (0%)').previousElementSibling).toHaveTextContent('0');
+		expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+	});
+
 	it('offers Paused as a status filter', () => {
 		render(DashboardPage, { props: { data: makeData([]) } });
 

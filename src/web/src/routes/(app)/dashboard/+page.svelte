@@ -98,7 +98,10 @@
 	const warningPct = $derived((fleet.summary.warningCount / donutTotal) * 100);
 	const criticalPct = $derived((fleet.summary.criticalCount / donutTotal) * 100);
 	const offlinePct = $derived((fleet.summary.offlineCount / donutTotal) * 100);
-	const pausedPct = $derived((fleet.summary.pausedCount / donutTotal) * 100);
+	// An API that predates the paused count omits it, and the web image can ship first, so a missing
+	// count reads as none paused instead of turning the donut and its tile into NaN.
+	const pausedCount = $derived(fleet.summary.pausedCount ?? 0);
+	const pausedPct = $derived((pausedCount / donutTotal) * 100);
 	// Paused is the last segment and offline fills whatever the others leave, as it did before paused
 	// existed, so a count that does not sum to the total shows as grey and not as paused.
 	const donutGradient = $derived(
@@ -106,7 +109,7 @@
 	);
 
 	const donutAriaLabel = $derived(
-		`Fleet health: ${healthyCount} healthy, ${fleet.summary.warningCount} warning, ${fleet.summary.criticalCount} critical, ${fleet.summary.offlineCount} offline, ${fleet.summary.pausedCount} paused`
+		`Fleet health: ${healthyCount} healthy, ${fleet.summary.warningCount} warning, ${fleet.summary.criticalCount} critical, ${fleet.summary.offlineCount} offline, ${pausedCount} paused`
 	);
 
 	function handleRowKeydown(event: KeyboardEvent, machineId: number) {
@@ -229,7 +232,7 @@
 					<div class="flex items-center gap-2.5">
 						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-indigo-500"></span>
 						<div>
-							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.pausedCount)}</p>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(pausedCount)}</p>
 							<p class="text-xs text-surface-400">Paused ({Math.round(pausedPct)}%)</p>
 						</div>
 					</div>
