@@ -312,6 +312,16 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
+    public async Task<int> GetRegisteredRankAsync(int tenantId, long machineId, CancellationToken cancellationToken)
+    {
+        int rank = await _db.Machines
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false) && (m.Id <= machineId))
+            .CountAsync(cancellationToken);
+
+        return rank;
+    }
+
+    /// <inheritdoc/>
     public async Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         Machine? machine = await _db.Machines

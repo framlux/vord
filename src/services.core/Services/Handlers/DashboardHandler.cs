@@ -4,9 +4,11 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Observability;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -17,17 +19,27 @@ public sealed class DashboardHandler
 {
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
+    private readonly IQuotaPauseService _quotaPause;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardHandler"/> class.
     /// </summary>
-    public DashboardHandler(IMachineRepository machineRepo, IMachineStateRepository machineStateRepo)
+    public DashboardHandler(
+        IMachineRepository machineRepo,
+        IMachineStateRepository machineStateRepo,
+        IQuotaPauseService quotaPause,
+        QuotaPauseMetrics quotaPauseMetrics)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
+        ArgumentNullException.ThrowIfNull(quotaPause);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
 
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
+        _quotaPause = quotaPause;
+        _quotaPauseMetrics = quotaPauseMetrics;
     }
 
     /// <summary>
@@ -50,12 +62,18 @@ public sealed class DashboardHandler
         // as offline, which is what every other read path does with that absence.
         List<long> machineIds = machines.Select(m => m.Id).ToList();
         List<MachineStateSummary> summaries = await _machineStateRepo.GetSummaryListByMachineIdsAsync(machineIds, ct);
-        int onlineCount = summaries.Count(s => MachineLiveness.IsOnline(s));
+
+        // A paused host keeps its heartbeat and its frozen health, so by liveness alone it would
+        // still count as online. It is counted as paused instead, and in neither online nor offline.
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        int pausedCount = await QuotaCutoffDisplay.GetPausedCountOrZeroAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+        int onlineCount = summaries.Count(s => (cutoff.IsPaused(s.MachineId) == false) && MachineLiveness.IsOnline(s));
 
         DashboardSummaryDto dto = new()
         {
             TotalMachines = machines.Count,
             OnlineMachines = onlineCount,
+            PausedMachines = pausedCount,
             PendingApprovals = 0,
         };
 

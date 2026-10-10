@@ -50,7 +50,7 @@ public class MachineHandlerTests
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 
-    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null, QuotaCutoffInvalidator? quotaInvalidator = null)
+    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null, QuotaCutoffInvalidator? quotaInvalidator = null, IQuotaPauseService? quotaPause = null)
     {
         DatabaseRepository repo = CreateRepo(dbFactory);
 
@@ -59,6 +59,8 @@ public class MachineHandlerTests
             machineBillingSync ?? Substitute.For<IMachineBillingSync>(),
             apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(),
             quotaInvalidator ?? new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
+            quotaPause ?? TestQuotaPause.Nothing(),
+            TestMetricsFactory.CreateQuotaPauseMetrics(),
             NullLogger<MachineHandler>.Instance);
     }
 

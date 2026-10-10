@@ -45,6 +45,13 @@ public sealed class FleetMachineDto
     /// <summary>Whether the machine is considered online.</summary>
     public bool IsOnline { get; set; }
 
+    /// <summary>
+    /// Whether the machine is paused for exceeding the tenant's machine limit. <see cref="HealthStatus"/>
+    /// is then whatever the machine last reported before it was paused, so a paused machine is shown
+    /// as paused in place of it.
+    /// </summary>
+    public bool IsPaused { get; set; }
+
     /// <summary>Last ping timestamp.</summary>
     public DateTimeOffset? LastPing { get; set; }
 

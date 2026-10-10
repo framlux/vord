@@ -37,7 +37,7 @@ public class MachineHandlerUpdateTests
     {
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance), TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineHandler>.Instance);
     }
 
     private static async Task<long> SeedMachine(

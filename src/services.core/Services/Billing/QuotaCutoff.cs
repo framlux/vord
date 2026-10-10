@@ -25,6 +25,15 @@ public readonly record struct QuotaCutoff(QuotaCutoffKind Kind, long CutoffId)
         return new QuotaCutoff(QuotaCutoffKind.After, cutoffId);
     }
 
+    /// <summary>Whether every machine is paused, in the form the fleet queries filter on.</summary>
+    public bool AllPaused => Kind == QuotaCutoffKind.All;
+
+    /// <summary>
+    /// The last active machine id when machines after it are paused, in the form the fleet queries
+    /// filter on; null for the other kinds, where no single id describes the set.
+    /// </summary>
+    public long? PausedAfterId => Kind == QuotaCutoffKind.After ? CutoffId : null;
+
     /// <summary>Whether the machine is paused under this cutoff.</summary>
     public bool IsPaused(long machineId)
     {

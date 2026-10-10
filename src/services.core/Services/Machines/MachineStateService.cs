@@ -5,10 +5,12 @@
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
@@ -19,15 +21,18 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 public sealed class MachineStateService : IMachineStateService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateService"/> class.
     /// </summary>
-    public MachineStateService(IServiceScopeFactory scopeFactory)
+    public MachineStateService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
 
         _scopeFactory = scopeFactory;
+        _quotaPauseMetrics = quotaPauseMetrics;
     }
 
     /// <inheritdoc/>
@@ -66,20 +71,26 @@ public sealed class MachineStateService : IMachineStateService
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-        // Step 1: SQL-level summary aggregation using pre-computed HealthStatus.
-        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
-            await machineStateRepo.GetFleetHealthAggregationAsync(tenantId.Value, ct);
+        // Asked once so the summary counts, the filter and every row agree on which hosts are paused.
+        IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
 
-        int totalMachines = healthCounts.Sum(h => h.Count);
-        int healthyCount = healthCounts.Where(h => h.HealthStatus == 0).Sum(h => h.Count);
+        // Step 1: SQL-level summary aggregation using pre-computed HealthStatus. Paused hosts come
+        // back only as a count: their stored health is frozen at the last report, so it must not
+        // reach a health bucket.
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates, int pausedCount) =
+            await machineStateRepo.GetFleetHealthAggregationAsync(tenantId.Value, cutoff.Kind, cutoff.CutoffId, ct);
+
+        int activeMachines = healthCounts.Sum(h => h.Count);
         int warningCount = healthCounts.Where(h => h.HealthStatus == 1).Sum(h => h.Count);
         int criticalCount = healthCounts.Where(h => h.HealthStatus == 2).Sum(h => h.Count);
         int offlineCount = healthCounts.Where(h => h.HealthStatus == 3).Sum(h => h.Count);
 
         FleetSummaryDto summary = new()
         {
-            TotalMachines = totalMachines,
-            OnlineMachines = totalMachines - offlineCount,
+            TotalMachines = activeMachines + pausedCount,
+            OnlineMachines = activeMachines - offlineCount,
+            PausedCount = pausedCount,
             OfflineCount = offlineCount,
             WarningCount = warningCount,
             CriticalCount = criticalCount,
@@ -87,8 +98,9 @@ public sealed class MachineStateService : IMachineStateService
         };
 
         // Step 2: SQL-level filtering, sorting, and pagination via the fleet search pipeline.
-        // The dashboard's named status filter maps onto the search path's HealthStatusValues;
-        // an unrecognized value applies no filter, matching the previous behavior.
+        // The dashboard's named status filter maps onto the search path's HealthStatusValues, except
+        // "paused", which is not a health and filters on the cutoff instead; an unrecognized value
+        // applies no filter, matching the previous behavior.
         bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
         List<short>? statusValues = statusFilter?.ToLowerInvariant() switch
         {
@@ -98,10 +110,14 @@ public sealed class MachineStateService : IMachineStateService
             "offline" => [3],
             _ => null,
         };
+        bool pausedOnly = string.Equals(statusFilter, "paused", StringComparison.OrdinalIgnoreCase);
         FleetSearchParameters parameters = new()
         {
             Search = search,
             HealthStatusValues = statusValues,
+            PausedAfterId = cutoff.PausedAfterId,
+            AllPaused = cutoff.AllPaused,
+            Paused = pausedOnly ? true : null,
             SortBy = sortBy,
             SortDescending = desc,
             Skip = (page - 1) * pageSize,
@@ -122,6 +138,7 @@ public sealed class MachineStateService : IMachineStateService
             CpuUsagePercent = row.CpuUsagePercent,
             MemoryUsagePercent = row.MemoryUsagePercent,
             IsOnline = MachineLiveness.IsOnline(row.HealthStatus),
+            IsPaused = row.IsPaused,
             LastPing = MachineLiveness.LastSeen(row.LastSeenAt, row.LastHeartbeatAt),
             PendingUpdates = row.PendingUpdates ?? 0,
             SecurityUpdates = row.SecurityUpdates ?? 0,
@@ -160,6 +177,14 @@ public sealed class MachineStateService : IMachineStateService
         {
             return null;
         }
+
+        IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+
+        // The position the machine limit is counted from, so a paused host can say how far past the
+        // limit it sits. Counted here rather than carried on the list rows, which would have to rank
+        // every machine they show.
+        int activeRank = await machineRepo.GetRegisteredRankAsync(tenantId.Value, machineId, ct);
 
         MachineStateSummary? state = await machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
 
@@ -204,6 +229,8 @@ public sealed class MachineStateService : IMachineStateService
             Name = machine.Name,
             Hostname = state?.Hostname ?? systemInfo?.Hostname,
             IsOnline = isOnline,
+            IsPaused = cutoff.IsPaused(machine.Id),
+            ActiveRank = activeRank,
             LastPing = lastPing,
             HealthStatus = health,
             SystemInfo = systemInfo,

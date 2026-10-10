@@ -44,4 +44,15 @@ public sealed class QuotaCutoffTests
         await Assert.That(QuotaCutoff.All.Kind).IsEqualTo(QuotaCutoffKind.All);
         await Assert.That(QuotaCutoff.After(7)).IsEqualTo(new QuotaCutoff(QuotaCutoffKind.After, 7));
     }
+
+    [Test]
+    public async Task FleetQueryForms_DescribeEachKindWithoutAnAmbiguousId()
+    {
+        await Assert.That(QuotaCutoff.None.AllPaused).IsFalse();
+        await Assert.That(QuotaCutoff.None.PausedAfterId).IsNull();
+        await Assert.That(QuotaCutoff.All.AllPaused).IsTrue();
+        await Assert.That(QuotaCutoff.All.PausedAfterId).IsNull();
+        await Assert.That(QuotaCutoff.After(10).AllPaused).IsFalse();
+        await Assert.That(QuotaCutoff.After(10).PausedAfterId).IsEqualTo(10L);
+    }
 }

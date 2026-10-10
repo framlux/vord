@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -86,6 +87,7 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
         private readonly Dictionary<Type, object> _additionalServices;
         private DatabaseRepository? _cachedRepo;
         private IUserSecurityStampService? _cachedStampService;
+        private IQuotaPauseService? _cachedQuotaPause;
 
         public TestServiceProvider(DatabaseContext context, Dictionary<Type, object> additionalServices)
         {
@@ -125,6 +127,15 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
                 _cachedStampService ??= CreateDefaultStampService();
 
                 return _cachedStampService;
+            }
+
+            // Read surfaces resolve the pause service from their scope. Unless a test supplies its own,
+            // nothing is paused, so tests that are not about pausing see every machine as active.
+            if (serviceType == typeof(IQuotaPauseService))
+            {
+                _cachedQuotaPause ??= TestQuotaPause.Nothing();
+
+                return _cachedQuotaPause;
             }
 
             return null;

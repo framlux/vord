@@ -20,10 +20,10 @@ public sealed class MachineIdSelectionEndpoint : EndpointWithoutRequest<ApiRespo
     /// never implemented here — a refusal list would not know about it.
     /// </summary>
     internal static readonly IReadOnlySet<string> SupportedParameters =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "search", "healthStatus", "os", "type" };
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "search", "healthStatus", "paused", "os", "type" };
 
     internal const string UnsupportedParameterMessage =
-        "This endpoint accepts only the search, healthStatus, os and type filters.";
+        "This endpoint accepts only the search, healthStatus, paused, os and type filters.";
 
     private readonly MachineSearchService _searchService;
     private readonly ITenantContext _tenantContext;
@@ -66,6 +66,7 @@ public sealed class MachineIdSelectionEndpoint : EndpointWithoutRequest<ApiRespo
         {
             Search = Query<string?>("search", isRequired: false),
             HealthStatus = Query<string?>("healthStatus", isRequired: false),
+            Paused = Query<bool?>("paused", isRequired: false),
             Os = Query<string?>("os", isRequired: false),
             Type = Query<string?>("type", isRequired: false),
         };

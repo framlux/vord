@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
@@ -27,6 +28,8 @@ public sealed class MachineHandler
     private readonly IMachineBillingSync _machineBillingSync;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
     private readonly QuotaCutoffInvalidator _quotaInvalidator;
+    private readonly IQuotaPauseService _quotaPause;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly ILogger<MachineHandler> _logger;
 
     /// <summary>
@@ -41,6 +44,8 @@ public sealed class MachineHandler
         IMachineBillingSync machineBillingSync,
         IApiKeyCacheInvalidator apiKeyCacheInvalidator,
         QuotaCutoffInvalidator quotaInvalidator,
+        IQuotaPauseService quotaPause,
+        QuotaPauseMetrics quotaPauseMetrics,
         ILogger<MachineHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
@@ -51,6 +56,8 @@ public sealed class MachineHandler
         ArgumentNullException.ThrowIfNull(machineBillingSync);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         ArgumentNullException.ThrowIfNull(quotaInvalidator);
+        ArgumentNullException.ThrowIfNull(quotaPause);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
@@ -61,6 +68,8 @@ public sealed class MachineHandler
         _machineBillingSync = machineBillingSync;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
         _quotaInvalidator = quotaInvalidator;
+        _quotaPause = quotaPause;
+        _quotaPauseMetrics = quotaPauseMetrics;
         _logger = logger;
     }
 
@@ -202,12 +211,9 @@ public sealed class MachineHandler
         machine.Location = location;
 
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
 
-        MachineDto dto = BuildMachineDto(
-            machine,
-            MachineLiveness.IsOnline(summary),
-            MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
-            summary?.Hostname);
+        MachineDto dto = BuildMachineDto(machine, summary, cutoff.IsPaused(machine.Id));
 
         return ServiceResult<ApiResponse<MachineDto>>.Ok(
             ApiResponse<MachineDto>.Ok(dto, "Machine updated successfully"));
@@ -222,7 +228,7 @@ public sealed class MachineHandler
     /// <param name="search">Optional search term for hostname/name.</param>
     /// <param name="osFilter">Optional OS filter.</param>
     /// <param name="typeFilter">Optional machine type filter.</param>
-    /// <param name="statusFilter">Optional online/offline status filter.</param>
+    /// <param name="statusFilter">Optional online/offline/paused status filter. A paused machine matches only paused.</param>
     /// <param name="sortBy">The field to sort by.</param>
     /// <param name="sortDir">The sort direction (asc/desc).</param>
     /// <param name="ct">A cancellation token.</param>
@@ -272,11 +278,15 @@ public sealed class MachineHandler
             parsedType = typeEnum;
         }
 
-        // When filtering by online/offline status, we must resolve status for all matching machines
+        // Asked once per request so every row, and every filter below, sees the same cutoff.
+        QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, tenantId.Value, ct);
+
+        // When filtering by online/offline/paused status, we must resolve status for all matching machines
         // before pagination so that totalCount and page results are correct.
         bool hasStatusFilter = string.IsNullOrWhiteSpace(statusFilter) == false &&
             (statusFilter.Equals("online", StringComparison.OrdinalIgnoreCase) ||
-             statusFilter.Equals("offline", StringComparison.OrdinalIgnoreCase));
+             statusFilter.Equals("offline", StringComparison.OrdinalIgnoreCase) ||
+             statusFilter.Equals("paused", StringComparison.OrdinalIgnoreCase));
 
         if (hasStatusFilter)
         {
@@ -305,10 +315,21 @@ public sealed class MachineHandler
             List<long> allIds = allMachines.Select(m => m.Id).ToList();
             Dictionary<long, MachineStateSummary> summaryMap = await LoadSummaryMapAsync(allIds, ct);
 
-            bool wantOnline = statusFilter!.Equals("online", StringComparison.OrdinalIgnoreCase);
-            List<Machine> filtered = allMachines
-                .Where(m => MachineLiveness.IsOnline(summaryMap.GetValueOrDefault(m.Id)) == wantOnline)
-                .ToList();
+            // A paused host keeps its heartbeat and its frozen health, so liveness alone would put it
+            // under Online or Offline. It matches only the Paused filter and neither of the others.
+            List<Machine> filtered;
+            if (statusFilter!.Equals("paused", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered = allMachines.Where(m => cutoff.IsPaused(m.Id)).ToList();
+            }
+            else
+            {
+                bool wantOnline = statusFilter.Equals("online", StringComparison.OrdinalIgnoreCase);
+                filtered = allMachines
+                    .Where(m => (cutoff.IsPaused(m.Id) == false) &&
+                                (MachineLiveness.IsOnline(summaryMap.GetValueOrDefault(m.Id)) == wantOnline))
+                    .ToList();
+            }
 
             int totalCount = filtered.Count;
 
@@ -322,7 +343,7 @@ public sealed class MachineHandler
                 .ToList();
 
             List<MachineDto> dtos = paged
-                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id)))
+                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id), cutoff.IsPaused(machine.Id)))
                 .ToList();
 
             PaginatedResponse<MachineDto> response = new()
@@ -348,7 +369,7 @@ public sealed class MachineHandler
             Dictionary<long, MachineStateSummary> summaryMap = await LoadSummaryMapAsync(machineIds, ct);
 
             List<MachineDto> dtos = machines
-                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id)))
+                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id), cutoff.IsPaused(machine.Id)))
                 .ToList();
 
             PaginatedResponse<MachineDto> response = new()
@@ -374,16 +395,17 @@ public sealed class MachineHandler
         return summaries.ToDictionary(s => s.MachineId);
     }
 
-    private static MachineDto BuildMachineDto(Machine machine, MachineStateSummary? summary)
+    private static MachineDto BuildMachineDto(Machine machine, MachineStateSummary? summary, bool isPaused)
     {
         return BuildMachineDto(
             machine,
             MachineLiveness.IsOnline(summary),
+            isPaused,
             MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
             summary?.Hostname);
     }
 
-    private static MachineDto BuildMachineDto(Machine machine, bool isOnline, DateTimeOffset? lastPing, string? telemetryHostname = null)
+    private static MachineDto BuildMachineDto(Machine machine, bool isOnline, bool isPaused, DateTimeOffset? lastPing, string? telemetryHostname = null)
     {
         return new MachineDto
         {
@@ -397,6 +419,7 @@ public sealed class MachineHandler
             SerialNumber = machine.SerialNumber,
             AssetTag = machine.AssetTagNumber,
             IsOnline = isOnline,
+            IsPaused = isPaused,
             LastPing = lastPing,
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,

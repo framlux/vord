@@ -120,6 +120,20 @@ public interface IMachineRepository
     Task<(int RegisteredCount, long? CutoffId)> GetRegisteredMachineCutoffAsync(int tenantId, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets a machine's 1-based position among the tenant's registered (non-deleted) machines in id
+    /// order, which is the position the machine limit is counted from.
+    /// </summary>
+    /// <param name="tenantId">The tenant that owns the machine.</param>
+    /// <param name="machineId">The machine to rank.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>
+    /// The number of registered machines of the tenant whose id is at most <paramref name="machineId"/>.
+    /// A machine that is not registered to the tenant still yields a count, so the caller must already
+    /// have established that the machine exists.
+    /// </returns>
+    Task<int> GetRegisteredRankAsync(int tenantId, long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets an active (non-deleted) machine by its ID and tenant.
     /// </summary>
     Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);

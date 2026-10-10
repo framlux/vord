@@ -9,11 +9,17 @@ namespace Framlux.FleetManagement.Services.Core.Models.Dashboard;
 /// </summary>
 public sealed class FleetSummaryDto
 {
-    /// <summary>Total approved machines.</summary>
+    /// <summary>Total approved machines, paused ones included.</summary>
     public int TotalMachines { get; set; }
 
-    /// <summary>Machines that have pinged recently.</summary>
+    /// <summary>Machines that have pinged recently. Paused machines are never counted.</summary>
     public int OnlineMachines { get; set; }
+
+    /// <summary>
+    /// Machines paused for exceeding the tenant's machine limit. They are counted here and in no
+    /// health or online bucket, whatever health they last reported.
+    /// </summary>
+    public int PausedCount { get; set; }
 
     /// <summary>Offline machine count.</summary>
     public int OfflineCount { get; set; }

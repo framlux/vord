@@ -497,12 +497,16 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken)
+    public async Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates, int PausedCount)> GetFleetHealthAggregationAsync(int tenantId, Enums.QuotaCutoffKind kind, long cutoffId, CancellationToken cancellationToken)
     {
-        IQueryable<FleetMachineRow> baseQuery = BuildFleetBaseQuery(tenantId);
+        (bool allPaused, long? pausedAfterId) = ToPausedCutoff(kind, cutoffId);
+        IQueryable<FleetMachineRow> baseQuery = BuildFleetBaseQuery(tenantId, allPaused, pausedAfterId);
 
+        // A paused machine's health column is frozen at its last report, so it is kept out of the
+        // health buckets and counted on its own.
         List<HealthStatusCount> grouped = await (
             from r in baseQuery
+            where r.IsPaused == false
             group r by r.HealthStatus into g
             select new HealthStatusCount { HealthStatus = g.Key, Count = g.Count() }
         ).ToListAsync(cancellationToken);
@@ -511,16 +515,18 @@ public partial class DatabaseRepository : IMachineStateRepository
             .Select(x => (x.HealthStatus, x.Count))
             .ToList();
 
+        int pausedCount = await baseQuery.CountAsync(r => r.IsPaused, cancellationToken);
+
         int totalSecurityUpdates = await baseQuery.SumAsync(r => r.SecurityUpdates ?? 0, cancellationToken);
 
-        return (healthCounts, totalSecurityUpdates);
+        return (healthCounts, totalSecurityUpdates, pausedCount);
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyDictionary<short, int>> GetFleetMachineCountsByHealthAsync(CancellationToken cancellationToken)
     {
         List<HealthStatusCount> grouped = await (
-            from r in BuildFleetRows(_db.Machines)
+            from r in BuildFleetRows(_db.Machines, false, null)
             group r by r.HealthStatus into g
             select new HealthStatusCount { HealthStatus = g.Key, Count = g.Count() }
         ).ToListAsync(cancellationToken);
@@ -630,11 +636,18 @@ public partial class DatabaseRepository : IMachineStateRepository
             query = query.Where(r => (r.HasHardwareIssue != null) && (r.HasHardwareIssue == hasHwIssue));
         }
 
-        // Health status filter
+        // Health status filter. A paused machine keeps the health it last reported, so it must never
+        // match here: the machine would otherwise show up under a health it no longer has.
         if (parameters.HealthStatusValues is { Count: > 0 })
         {
             List<short> statusValues = parameters.HealthStatusValues;
-            query = query.Where(r => statusValues.Contains(r.HealthStatus));
+            query = query.Where(r => statusValues.Contains(r.HealthStatus) && (r.IsPaused == false));
+        }
+
+        if (parameters.Paused.HasValue)
+        {
+            bool wantPaused = parameters.Paused.Value;
+            query = query.Where(r => r.IsPaused == wantPaused);
         }
 
         // Last seen time range
@@ -656,7 +669,7 @@ public partial class DatabaseRepository : IMachineStateRepository
     /// <inheritdoc/>
     public async Task<(List<long> Ids, int TotalCount)> SearchFleetMachineIdsAsync(int tenantId, FleetSearchParameters parameters, int maxIds, CancellationToken cancellationToken)
     {
-        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId), parameters);
+        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId, parameters.AllPaused, parameters.PausedAfterId), parameters);
 
         // Counted before the cap is applied. Without this a caller cannot tell "the filter matches
         // exactly maxIds machines" from "it matches more than we are willing to hand back", and a
@@ -677,7 +690,7 @@ public partial class DatabaseRepository : IMachineStateRepository
     /// <inheritdoc/>
     public async Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken)
     {
-        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId), parameters);
+        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId, parameters.AllPaused, parameters.PausedAfterId), parameters);
 
         int totalCount = await query.CountAsync(cancellationToken);
 
@@ -782,9 +795,20 @@ public partial class DatabaseRepository : IMachineStateRepository
         return counts.Count > 0 ? counts[0] : null;
     }
 
-    private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId)
+    private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId, bool allPaused, long? pausedAfterId)
     {
-        return BuildFleetRows(_db.Machines.Where(m => m.TenantId == tenantId));
+        return BuildFleetRows(_db.Machines.Where(m => m.TenantId == tenantId), allPaused, pausedAfterId);
+    }
+
+    private static (bool AllPaused, long? PausedAfterId) ToPausedCutoff(Enums.QuotaCutoffKind kind, long cutoffId)
+    {
+        return kind switch
+        {
+            Enums.QuotaCutoffKind.None => (false, null),
+            Enums.QuotaCutoffKind.All => (true, null),
+            Enums.QuotaCutoffKind.After => (false, cutoffId),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown quota cutoff kind"),
+        };
     }
 
     /// <summary>
@@ -794,9 +818,16 @@ public partial class DatabaseRepository : IMachineStateRepository
     /// registered but never reported counts as.
     /// </summary>
     /// <param name="machines">The machine set to project, already scoped by the caller.</param>
+    /// <param name="allPaused">Every machine in the set is paused.</param>
+    /// <param name="pausedAfterId">Machines with a greater id are paused; null when none are.</param>
     /// <returns>The projected rows.</returns>
-    private IQueryable<FleetMachineRow> BuildFleetRows(IQueryable<Machine> machines)
+    private IQueryable<FleetMachineRow> BuildFleetRows(IQueryable<Machine> machines, bool allPaused, long? pausedAfterId)
     {
+        // Folded into one id threshold so the paused test is a single comparison that translates the
+        // same way in a projection, a filter and a count: every id lies above the lowest value and
+        // none lies above the highest.
+        long pausedAbove = allPaused ? long.MinValue : (pausedAfterId ?? long.MaxValue);
+
         return from m in machines
                join s in _db.MachineStateSummaries on m.Id equals s.MachineId into stateJoin
                from s in stateJoin.DefaultIfEmpty()
@@ -816,6 +847,7 @@ public partial class DatabaseRepository : IMachineStateRepository
                    SecurityUpdates = s != null ? s.SecurityUpdates : (int?)null,
                    FailedServices = s != null ? s.FailedServices : (int?)null,
                    TotalServices = s != null ? s.TotalServices : (int?)null,
+                   IsPaused = m.Id > pausedAbove,
                    HealthStatus = s != null ? s.HealthStatus : (short)3,
                    LastSeenAt = s != null ? s.LastSeenAt : (DateTimeOffset?)null,
                    LastHeartbeatAt = s != null ? s.LastHeartbeatAt : (DateTimeOffset?)null,

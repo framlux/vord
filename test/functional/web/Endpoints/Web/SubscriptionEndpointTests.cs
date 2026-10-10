@@ -8,10 +8,15 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using LinqToDB;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using NSubstitute;
+using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -321,6 +326,144 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(data.GetProperty("alertRuleCount").GetInt32()).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task GetSubscription_FreeTenantOverItsLimit_ReportsPausedHostsAndNoBillableCount()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Free, 3, 1);
+        await SeedMachines(db, tenantId, 5);
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("pausedMachineCount").GetInt32()).IsEqualTo(2);
+        await Assert.That(data.GetProperty("billableMachineCount").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(data.GetProperty("machineLimitIsCustom").GetBoolean()).IsFalse();
+    }
+
+    [Test]
+    public async Task GetSubscription_ProTenantWithAMachineLimitOverride_ReportsTheCustomLimitAndTheCappedBill()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
+        await SeedMachines(db, tenantId, 4);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 2,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(2);
+        await Assert.That(data.GetProperty("pausedMachineCount").GetInt32()).IsEqualTo(2);
+        await Assert.That(data.GetProperty("billableMachineCount").GetInt32()).IsEqualTo(2);
+        await Assert.That(data.GetProperty("machineLimitIsCustom").GetBoolean()).IsTrue();
+    }
+
+    [Test]
+    public async Task GetSubscription_ProTenantWithoutAnOverride_LimitIsNotCustomAndBillableIsTheActiveCount()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
+        await SeedMachines(db, tenantId, 4);
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("pausedMachineCount").GetInt32()).IsEqualTo(0);
+        await Assert.That(data.GetProperty("billableMachineCount").GetInt32()).IsEqualTo(4);
+        await Assert.That(data.GetProperty("machineLimitIsCustom").GetBoolean()).IsFalse();
+    }
+
+    [Test]
+    public async Task GetSubscription_OverrideWithoutAMachineLimit_LimitIsNotCustom()
+    {
+        // An override that only changes some other limit leaves the machine limit at the tier's own.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = null,
+            WebhookLimit = 50,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("machineLimitIsCustom").GetBoolean()).IsFalse();
+    }
+
+    [Test]
+    public async Task GetSubscription_EnterpriseTenant_LimitIsCustomAndThereIsNoBillableCount()
+    {
+        // Enterprise limits belong to the agreement and Stripe never bills the tier.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Enterprise, null, 365);
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("machineLimitIsCustom").GetBoolean()).IsTrue();
+        await Assert.That(data.GetProperty("billableMachineCount").ValueKind).IsEqualTo(JsonValueKind.Null);
+    }
+
+    [Test]
+    public async Task GetSubscription_PauseDecisionUnavailable_ReportsNoPausedHostsAndCountsTheFailure()
+    {
+        // An outage of the pause check must not take the billing page down. Hosts read as active and
+        // the failure is counted against the display surface, which is the only trace it leaves.
+        using FunctionalTestFactory factory = new()
+        {
+            AdditionalTestServices = services =>
+            {
+                services.RemoveAll<IQuotaPauseService>();
+                services.AddScoped(_ => TestQuotaPause.Unavailable());
+            },
+        };
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Free, 3, 1);
+        await SeedMachines(db, tenantId, 5);
+
+        IMeterFactory meterFactory = factory.Services.GetRequiredService<IMeterFactory>();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("pausedMachineCount").GetInt32()).IsEqualTo(0);
+        await Assert.That(data.GetProperty("machineCount").GetInt32()).IsEqualTo(5);
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures
+            .GetMeasurementSnapshot()
+            .Where(m => m.Value > 0)
+            .ToList();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("display");
+    }
+
     // ========== Helpers ==========
 
     private static HttpClient BuildViewerClient(FunctionalTestFactory factory, int tenantId)
@@ -381,5 +524,13 @@ public sealed class SubscriptionEndpointTests
         await db.InsertAsync(subscription);
 
         return tenantId;
+    }
+
+    private static async Task SeedMachines(DatabaseContext db, int tenantId, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        }
     }
 }

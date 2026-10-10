@@ -100,6 +100,60 @@ public sealed class MachineCutoffQueryTests
         await Assert.That(count).IsEqualTo(0);
         await Assert.That(cutoff).IsNull();
     }
+
+    [Test]
+    public async Task GetRegisteredRank_IsTheOneBasedPositionInIdOrder()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        List<long> ids = [];
+        for (int i = 0; i < 4; i++)
+        {
+            ids.Add(await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1)));
+        }
+
+        await Assert.That(await repo.GetRegisteredRankAsync(1, ids[0], CancellationToken.None)).IsEqualTo(1);
+        await Assert.That(await repo.GetRegisteredRankAsync(1, ids[1], CancellationToken.None)).IsEqualTo(2);
+        await Assert.That(await repo.GetRegisteredRankAsync(1, ids[3], CancellationToken.None)).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task GetRegisteredRank_CountsNeitherDeletedMachinesNorAnotherTenantsMachines()
+    {
+        // The rank is compared with the machine limit, which counts registered machines only, so
+        // anything that does not occupy one of the tenant's slots must not push a machine down.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        Machine deleted = TestDataBuilder.BuildMachine(tenantId: 1);
+        deleted.IsDeleted = true;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 2));
+        long first = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 2));
+        long second = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+
+        await Assert.That(await repo.GetRegisteredRankAsync(1, first, CancellationToken.None)).IsEqualTo(1);
+        await Assert.That(await repo.GetRegisteredRankAsync(1, second, CancellationToken.None)).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GetRegisteredRank_AgreesWithTheCutoff_TheMachineAtTheCutoffRanksAtTheLimit()
+    {
+        // The two queries describe one ordering: the machine the cutoff names is the last one inside
+        // the limit, and the next machine is the first one outside it.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        List<long> ids = [];
+        for (int i = 0; i < 5; i++)
+        {
+            ids.Add(await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1)));
+        }
+
+        (_, long? cutoff) = await repo.GetRegisteredMachineCutoffAsync(1, 3, CancellationToken.None);
+
+        await Assert.That(await repo.GetRegisteredRankAsync(1, cutoff!.Value, CancellationToken.None)).IsEqualTo(3);
+        await Assert.That(await repo.GetRegisteredRankAsync(1, ids[3], CancellationToken.None)).IsEqualTo(4);
+    }
 }
 
 /// <summary>

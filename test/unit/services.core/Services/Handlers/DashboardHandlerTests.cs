@@ -4,12 +4,16 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -23,7 +27,7 @@ public class DashboardHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseRepository repo = CreateRepo(dbFactory);
-        DashboardHandler handler = new(repo, repo);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -56,7 +60,7 @@ public class DashboardHandlerTests
             machineId: m2.Id, tenantId: 1, healthStatus: 3));
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        DashboardHandler handler = new(repo, repo);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -83,7 +87,7 @@ public class DashboardHandlerTests
             machineId: critical.Id, tenantId: 1, healthStatus: 2));
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        DashboardHandler handler = new(repo, repo);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -101,7 +105,7 @@ public class DashboardHandlerTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        DashboardHandler handler = new(repo, repo);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -121,11 +125,82 @@ public class DashboardHandlerTests
         m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        DashboardHandler handler = new(repo, repo);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics());
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
         await Assert.That(result.Data!.PendingApprovals).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetSummaryAsync_PausedMachines_AreCountedAsPausedAndNeverAsOnline()
+    {
+        // A paused host keeps heartbeating and keeps the health it froze at, so by liveness alone
+        // it would still count as online. The total still includes it.
+        using TestDatabaseFactory dbFactory = new();
+        List<long> ids = [];
+        foreach (short health in new short[] { 0, 2, 1, 0 })
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+            machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+            await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+                machineId: machine.Id, tenantId: 1, healthStatus: health));
+            ids.Add(machine.Id);
+        }
+
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.With(QuotaCutoff.After(ids[1]), 2), TestMetricsFactory.CreateQuotaPauseMetrics());
+
+        ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
+
+        await Assert.That(result.Data!.TotalMachines).IsEqualTo(4);
+        await Assert.That(result.Data!.PausedMachines).IsEqualTo(2);
+        await Assert.That(result.Data!.OnlineMachines).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GetSummaryAsync_EveryMachinePaused_CountsNoneOnline()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, tenantId: 1, healthStatus: 0));
+
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.With(QuotaCutoff.All, 1), TestMetricsFactory.CreateQuotaPauseMetrics());
+
+        ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
+
+        await Assert.That(result.Data!.OnlineMachines).IsEqualTo(0);
+        await Assert.That(result.Data!.PausedMachines).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetSummaryAsync_PauseDecisionUnavailable_ShowsNothingPausedAndCountsEachFailedCheck()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, tenantId: 1, healthStatus: 0));
+
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        DashboardHandler handler = new(repo, repo, TestQuotaPause.Unavailable(), new QuotaPauseMetrics(meterFactory));
+
+        ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
+
+        // The dashboard must still render: with no answer every host counts as it did before pausing.
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.OnlineMachines).IsEqualTo(1);
+        await Assert.That(result.Data!.PausedMachines).IsEqualTo(0);
+
+        // The cutoff and the paused count are two separate checks, and each one that fails is counted.
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(2);
+        await Assert.That(measurements.All(m => (string?)m.Tags["surface"] == "display")).IsTrue();
     }
 
     // ========== Helper methods ==========

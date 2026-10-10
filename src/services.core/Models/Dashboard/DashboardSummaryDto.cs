@@ -15,9 +15,14 @@ public sealed class DashboardSummaryDto
     public int TotalMachines { get; set; }
 
     /// <summary>
-    /// Number of machines currently online.
+    /// Number of machines currently online. Paused machines are never counted.
     /// </summary>
     public int OnlineMachines { get; set; }
+
+    /// <summary>
+    /// Number of machines paused for exceeding the tenant's machine limit.
+    /// </summary>
+    public int PausedMachines { get; set; }
 
     /// <summary>
     /// Number of machines pending approval.
