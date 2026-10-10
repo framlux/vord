@@ -266,6 +266,26 @@ public sealed class FleetMetricsTests
     }
 
     [Test]
+    public async Task PausedGauge_TierRowDiffersFromTheConfigDefault_UsesTheTierRow()
+    {
+        // The live tier row outranks the config default, and both differ here (10 against 1000), so
+        // a fold that ignored the row, or looked it up under the wrong tier, would report 0.
+        (FleetMetrics metrics, IMeterFactory factory) = Build(
+            EmptyFleet(),
+            machines: MachinesWithRegisteredCounts((1, 15)),
+            subscriptions: SubscriptionsFor(TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro)),
+            tierRows: TierRows(
+                TierRow(SubscriptionTier.Free, machineLimit: 2),
+                TierRow(SubscriptionTier.Pro, machineLimit: 10)));
+        using MetricCollector<long> collector = new(factory, VordMeter.Name, PausedInstrument);
+
+        collector.RecordObservableInstruments();
+
+        await Assert.That(collector.GetMeasurementSnapshot().Single().Value).IsEqualTo(5L);
+        await Assert.That(metrics).IsNotNull();
+    }
+
+    [Test]
     public async Task PausedGauge_NoTenants_ReportsZero()
     {
         // The ingest rule subtracts this series, so it has to exist even when nothing is paused.
