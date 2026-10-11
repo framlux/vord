@@ -1679,6 +1679,59 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Tenant.WebhookCount).IsEqualTo(1);
     }
 
+    // ========== Paused Hosts On The Wire Tests ==========
+
+    [Test]
+    public async Task ListTenants_FreeTenantWithFiveMachines_ReportsTwoPaused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Free);
+        for (int i = 0; i < 5; i++)
+        {
+            await SeedMachine(db, tenantId, $"free-{i}");
+        }
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        ListTenantsResponse response = await client.ListTenantsAsync(
+            new ListTenantsRequest { Page = 1, PageSize = 50 }, Headers());
+
+        FleetTenant tenant = response.Tenants.Single(t => t.ExternalId == extId);
+        await Assert.That(tenant.MachineCount).IsEqualTo(5);
+        await Assert.That(tenant.Subscription.MachineLimit).IsEqualTo(3);
+        await Assert.That(tenant.PausedMachineCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_FreeTenantWithFiveMachines_MarksTheTwoNewestPaused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Free);
+        for (int i = 0; i < 5; i++)
+        {
+            await SeedMachine(db, tenantId, $"free-{i}");
+        }
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        GetTenantDetailResponse response = await client.GetTenantDetailAsync(
+            new GetTenantDetailRequest { TenantExternalId = extId }, Headers());
+
+        List<long> ids = response.Machines.Select(m => m.Id).Order().ToList();
+        List<long> paused = response.Machines.Where(m => m.IsPaused).Select(m => m.Id).Order().ToList();
+        await Assert.That(ids.Count).IsEqualTo(5);
+        await Assert.That(paused).IsEquivalentTo(ids.TakeLast(2).ToList());
+        await Assert.That(response.Tenant.PausedMachineCount).IsEqualTo(2);
+    }
+
     // ========== ConfigureTenantOidc Tests ==========
 
     [Test]

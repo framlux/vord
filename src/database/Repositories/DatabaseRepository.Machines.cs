@@ -495,6 +495,18 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
+    public async Task<Dictionary<int, int>> GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken cancellationToken)
+    {
+        List<TenantMachineCount> grouped = await _db.Machines
+            .Where(m => m.IsDeleted == false)
+            .GroupBy(m => m.TenantId)
+            .Select(g => new TenantMachineCount { TenantId = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        return grouped.ToDictionary(x => x.TenantId, x => x.Count);
+    }
+
+    /// <inheritdoc/>
     public async Task<List<long>> GetActiveMachineIdsForTenantAsync(int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
     {
         if (machineIds.Count == 0)

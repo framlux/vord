@@ -249,12 +249,15 @@ message FleetTenant {
   // Populated by GetTenantDetail only; ListTenants leaves them 0 to stay one query per page.
   int32 alert_rule_count = 10;
   int32 webhook_count = 11;
+  // Registered machines beyond the tenant's machine limit, which pause. Filled by ListTenants and GetTenantDetail.
+  int32 paused_machine_count = 12;
 }
 
 message FleetTenantSubscription {
   BillingTier tier = 1;
   string status = 2;
-  // Effective limits: the tenant's override where one is set, otherwise the tier's value.
+  // Effective limits: the tenant's override where one is set, otherwise the tier's value, otherwise
+  // the tier's configured default.
   int32 machine_limit = 3;
   int32 retention_days = 4;
   google.protobuf.Timestamp current_period_end = 5;
@@ -273,6 +276,8 @@ message FleetMachine {
   string tenant_name = 4;
   bool is_deleted = 5;
   google.protobuf.Timestamp registered_on = 6;
+  // Beyond its tenant's machine limit, so its telemetry is discarded and it raises no alerts. Never true for a deleted machine.
+  bool is_paused = 7;
 }
 
 message FleetAuditEntry {

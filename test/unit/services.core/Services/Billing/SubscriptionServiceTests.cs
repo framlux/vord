@@ -12,6 +12,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -1222,5 +1223,186 @@ public class SubscriptionServiceTests
             // Pro tier MemberLimit comes from the tier limit repo mock (5)
             await Assert.That(limits.MemberLimit).IsEqualTo(5);
         }
+    }
+
+    private static TierDefaultOptions EffectiveLimitDefaults()
+    {
+        return new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 2, WebhookLimit = 1, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = 100 },
+            Enterprise = new() { MachineLimit = 10000, RetentionDays = 730, AlertRuleLimit = 50, WebhookLimit = 30, MemberLimit = 500 },
+        };
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_NoSubscription_UsesFreeDefaultsAndIgnoresAnyOverride()
+    {
+        // Pausing treats a tenant with no subscription row as Free; the admin must agree.
+        TierDefaultOptions defaults = EffectiveLimitDefaults();
+        TenantSubscriptionOverride over = new()
+        {
+            TenantId = 1,
+            MachineLimit = 500,
+            RetentionDays = 400,
+            AlertRuleLimit = 99,
+            WebhookLimit = 98,
+            MemberLimit = 97,
+        };
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(null, null, over, defaults);
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(3);
+        await Assert.That(limits.RetentionDays).IsEqualTo(defaults.Free.RetentionDays);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(defaults.Free.AlertRuleLimit);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(defaults.Free.WebhookLimit);
+        await Assert.That(limits.MemberLimit).IsEqualTo(defaults.Free.MemberLimit);
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_MissingTierRow_FallsBackToTheTiersConfigDefault()
+    {
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(sub, null, null, EffectiveLimitDefaults());
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(1000);
+        await Assert.That(limits.RetentionDays).IsEqualTo(60);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(10);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(5);
+        await Assert.That(limits.MemberLimit).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_OverrideThenTierRowThenDefault_ForEveryLimit()
+    {
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        TierFeatureLimit row = new()
+        {
+            Tier = SubscriptionTier.Team,
+            MachineLimit = 200,
+            RetentionDays = 30,
+            MemberLimit = 50,
+            AlertRuleLimit = 20,
+            WebhookLimit = 5,
+            MinimumBillableMachines = 0,
+        };
+        TenantSubscriptionOverride over = new() { TenantId = 1, MachineLimit = 40, WebhookLimit = 9 };
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(sub, row, over, EffectiveLimitDefaults());
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(40);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(9);
+        await Assert.That(limits.RetentionDays).IsEqualTo(30);
+        await Assert.That(limits.MemberLimit).IsEqualTo(50);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_OverrideSetForEveryLimit_ReportsTheOverrideNotTheTierRow()
+    {
+        // An Enterprise agreement's numbers live only in the override; the tier row beneath is a placeholder.
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Enterprise);
+        TierFeatureLimit row = new()
+        {
+            Tier = SubscriptionTier.Enterprise,
+            MachineLimit = 10000,
+            RetentionDays = 365,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 0,
+        };
+        TenantSubscriptionOverride over = new()
+        {
+            TenantId = 1,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            MemberLimit = 75,
+        };
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(sub, row, over, EffectiveLimitDefaults());
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(500);
+        await Assert.That(limits.RetentionDays).IsEqualTo(180);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(20);
+        await Assert.That(limits.MemberLimit).IsEqualTo(75);
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_OverrideOfZero_IsKeptRatherThanFallingThrough()
+    {
+        // Zero means "none allowed" (and, for machines, "pause every host"); it is a value, not an absence.
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        TenantSubscriptionOverride over = new() { TenantId = 1, MachineLimit = 0, WebhookLimit = 0 };
+
+        EffectiveLimits limits = SubscriptionService.ResolveEffectiveLimits(sub, null, over, EffectiveLimitDefaults());
+
+        await Assert.That(limits.MachineLimit).IsEqualTo(0);
+        await Assert.That(limits.WebhookLimit).IsEqualTo(0);
+        await Assert.That(limits.AlertRuleLimit).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task ResolveEffectiveLimits_NullDefaults_Throws()
+    {
+        await Assert.That(() => SubscriptionService.ResolveEffectiveLimits(null, null, null, null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task GetEffectiveLimitsForTenant_AgreesWithTheStaticFold()
+    {
+        // The async path must stay a thin loader over the same fold, or the admin and pausing drift.
+        TierDefaultOptions defaults = EffectiveLimitDefaults();
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        TenantSubscriptionOverride over = new() { TenantId = 1, MachineLimit = 7 };
+
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantSubscription?>(sub));
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TierFeatureLimit?>(null));
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        overrideRepo.GetOverrideForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantSubscriptionOverride?>(over));
+
+        SubscriptionService service = new(
+            subscriptionRepo, Substitute.For<IMachineRepository>(), Substitute.For<IAlertRuleRepository>(),
+            Substitute.For<IIntegrationRepository>(), tierLimitRepo, overrideRepo, Substitute.For<ITenantRepository>(),
+            Substitute.For<IInvitationRepository>(), Options.Create(defaults), TimeProvider.System, new NullLogger<SubscriptionService>());
+
+        EffectiveLimits loaded = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+        EffectiveLimits folded = SubscriptionService.ResolveEffectiveLimits(sub, null, over, defaults);
+
+        await Assert.That(loaded.MachineLimit).IsEqualTo(7);
+        await Assert.That(loaded.MachineLimit).IsEqualTo(folded.MachineLimit);
+        await Assert.That(loaded.RetentionDays).IsEqualTo(folded.RetentionDays);
+        await Assert.That(loaded.AlertRuleLimit).IsEqualTo(folded.AlertRuleLimit);
+        await Assert.That(loaded.WebhookLimit).IsEqualTo(folded.WebhookLimit);
+        await Assert.That(loaded.MemberLimit).IsEqualTo(folded.MemberLimit);
+    }
+
+    [Test]
+    public async Task GetEffectiveLimitsForTenant_MissingTierRow_StillLogsTheFallbackWarning()
+    {
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantSubscription?>(sub));
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TierFeatureLimit?>(null));
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        FakeLogger<SubscriptionService> logger = new();
+
+        SubscriptionService service = new(
+            subscriptionRepo, Substitute.For<IMachineRepository>(), Substitute.For<IAlertRuleRepository>(),
+            Substitute.For<IIntegrationRepository>(), tierLimitRepo, overrideRepo, Substitute.For<ITenantRepository>(),
+            Substitute.For<IInvitationRepository>(), Options.Create(EffectiveLimitDefaults()), TimeProvider.System, logger);
+
+        await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+        await Assert.That(logger.Collector.GetSnapshot().Count(r => r.Level == LogLevel.Warning)).IsEqualTo(1);
     }
 }

@@ -547,6 +547,46 @@ public class MachineCacheTests
         await Assert.That(counts[1]).IsEqualTo(1);
     }
 
+    // ========== GetRegisteredMachineCountsForAllTenantsAsync tests ==========
+
+    [Test]
+    public async Task GetRegisteredMachineCountsForAllTenantsAsync_CountsNonDeletedMachinesPerTenantAndOmitsTenantsWithNone()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // Tenant 1: two active, one deleted (deleted must be excluded). Tenant 2: two active.
+        // Tenant 3: only a deleted machine, so it must not appear at all.
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+        Machine deleted = TestDataBuilder.BuildMachine(tenantId: 1);
+        deleted.IsDeleted = true;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 2));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 2));
+        Machine onlyDeleted = TestDataBuilder.BuildMachine(tenantId: 3);
+        onlyDeleted.IsDeleted = true;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(onlyDeleted);
+
+        Dictionary<int, int> counts = await repo.GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken.None);
+
+        await Assert.That(counts.Count).IsEqualTo(2);
+        await Assert.That(counts[1]).IsEqualTo(2);
+        await Assert.That(counts[2]).IsEqualTo(2);
+        await Assert.That(counts.ContainsKey(3)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetRegisteredMachineCountsForAllTenantsAsync_NoMachines_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Dictionary<int, int> counts = await repo.GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken.None);
+
+        await Assert.That(counts.Count).IsEqualTo(0);
+    }
+
     // ========== UpdateMachineFieldsAsync cross-tenant hardening tests ==========
 
     [Test]

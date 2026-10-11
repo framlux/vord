@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
+
 namespace Framlux.FleetManagement.Services.Core.Options;
 
 /// <summary>
@@ -32,4 +34,21 @@ public sealed class TierDefaultOptions
     /// agreement; these apply only to settings agreements do not set, such as the export cooldown.
     /// </summary>
     public TierLimitDefaults Enterprise { get; set; } = new();
+
+    /// <summary>
+    /// The configured defaults for a tier. An unknown tier resolves to Free, the same way a missing
+    /// subscription does, so an unrecognised value can never widen a limit.
+    /// </summary>
+    /// <param name="tier">The tier whose defaults to return.</param>
+    /// <returns>The defaults for <paramref name="tier"/>, or the Free defaults when the tier is not recognised.</returns>
+    public TierLimitDefaults For(SubscriptionTier tier)
+    {
+        return tier switch
+        {
+            SubscriptionTier.Pro => Pro,
+            SubscriptionTier.Team => Team,
+            SubscriptionTier.Enterprise => Enterprise,
+            _ => Free,
+        };
+    }
 }
