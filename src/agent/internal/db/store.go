@@ -6,6 +6,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -94,11 +95,24 @@ func (s *Store) SetConfig(key, value string) error {
 
 // --- telemetry_queue ---
 
+// MaxPayloadBytes is the largest telemetry payload the queue accepts. The server refuses any gRPC message over
+// 1 MB, and an item that can never be accepted would be retried forever, so it is refused here instead. The
+// limit is measured on the JSON payload, which is never smaller than the proto encoding the sender puts on the
+// wire for the same record.
+const MaxPayloadBytes = 900 * 1024
+
+// ErrPayloadTooLarge is returned by EnqueueTelemetry for a payload over MaxPayloadBytes.
+var ErrPayloadTooLarge = errors.New("telemetry payload exceeds the maximum size")
+
 // EnqueueTelemetry inserts a new telemetry item into the queue.
 // If the queue has reached its configured maximum size, the oldest pending items
 // are evicted (FIFO) to make room. This prevents unbounded queue growth during
 // prolonged server outages while ensuring the newest telemetry is always retained.
 func (s *Store) EnqueueTelemetry(id string, itemType TelemetryType, payload string) error {
+	if len(payload) > MaxPayloadBytes {
+		return fmt.Errorf("%w: type %d is %d bytes, limit %d", ErrPayloadTooLarge, int(itemType), len(payload), MaxPayloadBytes)
+	}
+
 	count, err := s.loadPendingCount()
 	if err != nil {
 		return fmt.Errorf("checking queue depth: %w", err)
@@ -593,6 +607,33 @@ func (s *Store) MarkTelemetryPending(ids []string) error {
 	s.pendingCount.Add(updated)
 
 	return nil
+}
+
+// DiscardTelemetry deletes items the sender has dequeued but must never send, such as an item too large for the
+// server to accept. Only items in processing status are deleted, so a pending item is never removed out from
+// under the queue, and the cached pending count needs no adjustment. It returns the number of rows deleted;
+// ids that no longer exist are ignored.
+func (s *Store) DiscardTelemetry(ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, int(QueueStatusProcessing))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	query := fmt.Sprintf(
+		"DELETE FROM telemetry_queue WHERE status = ? AND id IN (%s)",
+		strings.Join(placeholders, ","),
+	)
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected()
 }
 
 // CountPendingTelemetry returns the number of pending telemetry items.

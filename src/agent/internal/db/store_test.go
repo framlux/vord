@@ -5,6 +5,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -1667,5 +1668,139 @@ func TestMarkTelemetryPending_PartialOverlapCountsSurvivors(t *testing.T) {
 
 	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
 		t.Errorf("expected 1 pending (the one row that exists), got %d (err %v)", n, err)
+	}
+}
+
+// --- payload size cap tests ---
+
+// Intent: a payload larger than the cap is refused before it reaches the queue, so an item the server could
+// never accept cannot be queued at all.
+func TestEnqueueTelemetry_RejectsPayloadOverLimit(t *testing.T) {
+	store := newTestStore(t)
+	payload := strings.Repeat("x", MaxPayloadBytes+1)
+
+	err := store.EnqueueTelemetry("too-big", TelemetryOsVersion, payload)
+
+	if errors.Is(err, ErrPayloadTooLarge) == false {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected nothing pending after a refused enqueue, got %d", count)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected the refused item not to be stored, got %d items", len(items))
+	}
+}
+
+// Intent: the cap is inclusive, so a payload of exactly the maximum size is accepted.
+func TestEnqueueTelemetry_AcceptsPayloadAtLimit(t *testing.T) {
+	store := newTestStore(t)
+	payload := strings.Repeat("x", MaxPayloadBytes)
+
+	if err := store.EnqueueTelemetry("at-limit", TelemetryOsVersion, payload); err != nil {
+		t.Fatalf("expected a payload at the limit to be accepted, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 pending, got %d", count)
+	}
+}
+
+// --- DiscardTelemetry tests ---
+
+// Intent: discarding removes dequeued items for good, so they are never sent and never come back on restart.
+func TestDiscardTelemetry_DeletesProcessingItems(t *testing.T) {
+	store := newTestStore(t)
+	for _, id := range []string{"keep", "drop"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+	if _, err := store.DequeueTelemetry(10); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+
+	deleted, err := store.DiscardTelemetry([]string{"drop"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 row deleted, got %d", deleted)
+	}
+
+	// A crash-recovery reset must bring back only the item that was not discarded.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue after reset: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "keep" {
+		t.Errorf("expected only %q to remain, got %+v", "keep", items)
+	}
+}
+
+// Intent: discarding is only for items the sender has taken off the queue, so a pending item with the same id is
+// left alone and the cached pending count stays correct.
+func TestDiscardTelemetry_LeavesPendingItemsAndCountUntouched(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnqueueTelemetry("pending", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	deleted, err := store.DiscardTelemetry([]string{"pending"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected no rows deleted for a pending item, got %d", deleted)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected pending count 1, got %d", count)
+	}
+}
+
+// Intent: an empty or nil id list is a no-op, not an error and not a malformed SQL statement.
+func TestDiscardTelemetry_EmptySlice(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, ids := range [][]string{nil, {}} {
+		deleted, err := store.DiscardTelemetry(ids)
+		if err != nil {
+			t.Errorf("DiscardTelemetry(%v): %v", ids, err)
+		}
+		if deleted != 0 {
+			t.Errorf("DiscardTelemetry(%v) deleted %d rows", ids, deleted)
+		}
+	}
+}
+
+// Intent: ids that no longer exist are ignored. For example, a pause may have cleared the queue while the
+// items were in flight.
+func TestDiscardTelemetry_UnknownIDs(t *testing.T) {
+	store := newTestStore(t)
+
+	deleted, err := store.DiscardTelemetry([]string{"never-existed"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected 0 rows deleted, got %d", deleted)
 	}
 }
