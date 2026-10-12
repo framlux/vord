@@ -45,10 +45,21 @@ public interface IKubernetesInventoryRepository
 
     /// <summary>
     /// Applies one local report in its own transaction under the tenant's Kubernetes lock: resolves the
-    /// machine into a cluster by established membership or CA fingerprint (a machine whose node reports
-    /// the CA of exactly one other cluster moves to it), links or updates its node, refreshes the
-    /// cluster's distro, re-keys the cluster when a CA rotation has finished, and advances the
-    /// projection cursor to the report's telemetry id in the same transaction whatever the outcome.
+    /// machine into a cluster by established membership, through a node or a reporter candidate row, or
+    /// by CA fingerprint (a machine whose node reports the CA of exactly one other cluster moves to
+    /// it), links or updates its node, refreshes the cluster's distro, re-keys the cluster when a CA
+    /// rotation has finished, and advances the projection cursor to the report's telemetry id in the
+    /// same transaction whatever the outcome.
+    /// <para>
+    /// A report whose node name is only the hostname applies to the node the cluster reporter already
+    /// lists for the machine's <c>/etc/machine-id</c>, when exactly one does. A node the cluster
+    /// reporter has seen is unlinked from its machine, never deleted, when the machine moves to a
+    /// different node. A machine that reports itself enrolled is kept as a reporter candidate of the
+    /// cluster its node belongs to, with the error its own reporter reported, and a machine that does
+    /// not has no candidate row. A host with no kubelet is never a node, but an enrolled one is still
+    /// made a candidate of the cluster it is already a candidate of, or of the one cluster that holds
+    /// its CA, and no cluster is ever created for it.
+    /// </para>
     /// The method opens that transaction itself, so it must not be called inside one: a transaction
     /// already open on the same connection would make the nested begin fail.
     /// </summary>
@@ -59,13 +70,29 @@ public interface IKubernetesInventoryRepository
     Task<LocalReportOutcome> ApplyLocalNodeReportAsync(LocalNodeReport report, DateTimeOffset now, CancellationToken ct);
 
     /// <summary>
-    /// Deletes nodes that no local report has described for seven days and then the clusters left
-    /// with no nodes, one tenant at a time, each in its own transaction under that tenant's lock. The
-    /// method opens those transactions itself, so it must not be called inside one.
+    /// Collects stale Kubernetes inventory one tenant at a time, each in its own transaction under
+    /// that tenant's lock. The method opens those transactions itself, so it must not be called
+    /// inside one.
+    /// <list type="bullet">
+    /// <item>A candidate whose machine has sent no local report for seven days is deleted.</item>
+    /// <item>
+    /// A node is deleted when it has had neither a local report nor a cluster reporter sighting for
+    /// seven days, so an outage of this server or a paused holder never deletes nodes that no agent
+    /// reports on.
+    /// </item>
+    /// <item>
+    /// A cluster with reporter state, no candidates and no snapshot newer than
+    /// <see cref="KubernetesReportingPolicy.StaleThreshold"/> goes back to its local state: nodes no
+    /// local report ever described are deleted, the other nodes lose their reporter columns, and the
+    /// cluster loses its reporter columns and Lease epoch. A cluster still receiving snapshots is
+    /// never reverted.
+    /// </item>
+    /// <item>A cluster with no nodes and no candidates is deleted.</item>
+    /// </list>
     /// </summary>
     /// <param name="now">The time staleness is measured from.</param>
     /// <param name="ct">A cancellation token.</param>
-    /// <returns>The total number of rows deleted.</returns>
+    /// <returns>The total number of candidate, node and cluster rows deleted.</returns>
     Task<int> CollectGarbageAsync(DateTimeOffset now, CancellationToken ct);
 
     /// <summary>

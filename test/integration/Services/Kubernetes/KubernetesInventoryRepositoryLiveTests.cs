@@ -163,12 +163,12 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
 
             first = ApplyOnNewConnectionAsync(
-                firstName, new LocalNodeReport(1, tenantId, firstMachine, at, "k3s", "node-1", true, false, FingerprintA, "v1.30.4+k3s1"));
+                firstName, new LocalNodeReport(1, tenantId, firstMachine, at, "k3s", "node-1", true, false, FingerprintA, "v1.30.4+k3s1", "certificate", false, null));
             bool firstBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(
                 _migratedConnectionString, firstName, first, failsafe.Token);
 
             second = ApplyOnNewConnectionAsync(
-                secondName, new LocalNodeReport(2, tenantId, secondMachine, at, "k3s", "node-2", true, false, FingerprintA, "v1.30.4+k3s1"));
+                secondName, new LocalNodeReport(2, tenantId, secondMachine, at, "k3s", "node-2", true, false, FingerprintA, "v1.30.4+k3s1", "certificate", false, null));
             bool secondBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(
                 _migratedConnectionString, secondName, second, failsafe.Token);
 
@@ -206,7 +206,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
             Task<LocalReportOutcome> other = ApplyOnNewConnectionAsync(
                 NewApplicationName("other"),
-                new LocalNodeReport(3, otherTenant, otherMachine, at, "k3s", "node-1", true, false, FingerprintA, null));
+                new LocalNodeReport(3, otherTenant, otherMachine, at, "k3s", "node-1", true, false, FingerprintA, null, "certificate", false, null));
             outcome = await other.WaitAsync(failsafe.Token);
         }
 
@@ -518,7 +518,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         LocalNodeReport Report(long telemetryId, long machineId, DateTimeOffset at, string nodeName, string fingerprint)
         {
-            return new LocalNodeReport(telemetryId, tenantId, machineId, at, "k3s", nodeName, true, false, fingerprint, "v1.30.4+k3s1");
+            return new LocalNodeReport(telemetryId, tenantId, machineId, at, "k3s", nodeName, true, false, fingerprint, "v1.30.4+k3s1", "certificate", false, null);
         }
 
         LocalReportOutcome created = await repo.ApplyLocalNodeReportAsync(Report(1, m1, t0, "node-1", FingerprintA), t0, CancellationToken.None);
@@ -545,6 +545,257 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await Assert.That(deleted).IsEqualTo(3);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Live_ReporterCandidates_FollowTheirMachinesAcrossClustersAndHostnameFallbacksReconcile()
+    {
+        // Intent: the candidate rules execute on the production database, where moving a candidate
+        // rewrites a primary key column and the machine-id match runs as SQL: an enrolled node becomes a
+        // candidate, an enrolled host with no kubelet becomes a candidate without a node, a node that
+        // moves clusters takes its candidate along, a candidate stops being one when the machine says
+        // it is not enrolled, and a hostname-fallback report merges into the reporter's row.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long worker = await SeedMachineAsync(db, tenantId);
+        long controller = await SeedMachineAsync(db, tenantId);
+        long hostnameMachine = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset t0 = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+
+        LocalNodeReport Report(
+            long telemetryId, long machineId, DateTimeOffset at, string nodeName, string fingerprint, bool hasKubelet = true,
+            string nodeNameSource = "certificate", bool enrolled = true, string? reporterError = null)
+        {
+            return new LocalNodeReport(
+                telemetryId, tenantId, machineId, at, "k3s", nodeName, hasKubelet, false, fingerprint, "v1.30.4+k3s1",
+                nodeNameSource, enrolled, reporterError);
+        }
+
+        LocalReportOutcome created = await repo.ApplyLocalNodeReportAsync(
+            Report(1, worker, t0, "worker-1", FingerprintA, reporterError: "credentials_rejected"), t0, CancellationToken.None);
+        long clusterA = (await db.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId)).Id;
+        LocalReportOutcome candidateOnly = await repo.ApplyLocalNodeReportAsync(
+            Report(2, controller, t0.AddMinutes(1), string.Empty, FingerprintA, hasKubelet: false), t0, CancellationToken.None);
+
+        await Assert.That(created).IsEqualTo(LocalReportOutcome.ClusterCreated);
+        await Assert.That(candidateOnly).IsEqualTo(LocalReportOutcome.CandidateOnly);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(1);
+        List<KubernetesReporterCandidate> candidates = await db.KubernetesReporterCandidates
+            .Where(c => c.TenantId == tenantId).OrderBy(c => c.MachineId).ToListAsync();
+        await Assert.That(candidates.Select(c => c.MachineId).ToList()).IsEquivalentTo(new List<long> { worker, controller });
+        await Assert.That(candidates.Single(c => c.MachineId == worker).ReporterError).IsEqualTo("credentials_rejected");
+
+        long clusterB = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = FingerprintB,
+            Distro = "k3s",
+            FirstSeenAt = t0,
+            LastSeenAt = t0,
+        });
+        await repo.ApplyLocalNodeReportAsync(
+            Report(3, worker, t0.AddMinutes(15), "worker-1", FingerprintB), t0, CancellationToken.None);
+
+        await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.MachineId == worker)).ClusterId).IsEqualTo(clusterB);
+        KubernetesReporterCandidate moved = await db.KubernetesReporterCandidates.SingleAsync(c => c.MachineId == worker);
+        await Assert.That(moved.ClusterId).IsEqualTo(clusterB);
+        await Assert.That(moved.ReporterError).IsNull();
+        await Assert.That((await db.KubernetesReporterCandidates.SingleAsync(c => c.MachineId == controller)).ClusterId).IsEqualTo(clusterA);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(4, worker, t0.AddMinutes(30), "worker-1", FingerprintB, enrolled: false), t0, CancellationToken.None);
+
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == worker)).IsEqualTo(0);
+
+        string systemId = (await db.Machines.SingleAsync(m => m.Id == hostnameMachine)).SystemId;
+        long reporterRow = await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterA,
+            NodeName = "cp-1.example.com",
+            NodeMachineId = systemId.ToUpperInvariant(),
+            LastReporterSeenAt = t0,
+            Roles = "[\"control-plane\"]",
+        });
+        LocalReportOutcome reconciled = await repo.ApplyLocalNodeReportAsync(
+            Report(5, hostnameMachine, t0.AddMinutes(40), "host-a", FingerprintA, nodeNameSource: "hostname", enrolled: false),
+            t0, CancellationToken.None);
+
+        await Assert.That(reconciled).IsEqualTo(LocalReportOutcome.Grouped);
+        KubernetesNode merged = await db.KubernetesNodes.SingleAsync(n => n.MachineId == hostnameMachine);
+        await Assert.That(merged.Id).IsEqualTo(reporterRow);
+        await Assert.That(merged.NodeName).IsEqualTo("cp-1.example.com");
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => (n.TenantId == tenantId) && (n.NodeName == "host-a"))).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Live_GarbageCollection_AppliesTheReportingRulesOnPostgres()
+    {
+        // Intent: the reporting rules of garbage collection run as set-based SQL on Postgres: an expired
+        // candidate is removed, a cluster with no candidate and a stale snapshot goes back to its local
+        // state with its Lease epoch cleared, an agentless node survives a stale snapshot while a
+        // candidate remains, and a cluster with neither nodes nor candidates is deleted.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long expiredMachine = await SeedMachineAsync(db, tenantId);
+        long liveMachine = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset now = new(2026, 10, 11, 14, 0, 0, TimeSpan.Zero);
+
+        async Task<long> SeedClusterWithReporterStateAsync(string fingerprint, long? activeReporterMachineId, DateTimeOffset snapshotAt)
+        {
+            return await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+            {
+                TenantId = tenantId,
+                CaFingerprint = fingerprint,
+                Distro = "k3s",
+                FirstSeenAt = now.AddDays(-1),
+                LastSeenAt = now.AddHours(-1),
+                KubeSystemUid = $"uid-{Guid.NewGuid():N}",
+                ClusterVersion = "v1.30.4+k3s1",
+                ReporterError = "api_unreachable",
+                RoleOutdated = true,
+                Truncated = true,
+                LeaseTransitions = 7,
+                ActiveReporterMachineId = activeReporterMachineId,
+                LastSnapshotReceivedAt = snapshotAt,
+                LastSnapshotTelemetryId = 99,
+                LeaseUid = "lease-uid",
+                LeaseCreatedAt = now.AddDays(-1),
+            });
+        }
+
+        async Task<long> SeedNodeAsync(long clusterId, string name, long? machineId, DateTimeOffset? localAt, DateTimeOffset seenAt)
+        {
+            return await db.InsertWithInt64IdentityAsync(new KubernetesNode
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                NodeName = name,
+                MachineId = machineId,
+                LastLocalReportAt = localAt,
+                NodeMachineId = "feedface",
+                Roles = "[\"control-plane\"]",
+                ReadyStatus = "True",
+                Conditions = "[]",
+                Unschedulable = true,
+                PodCount = 4,
+                PodCapacity = 110,
+                LastReporterSeenAt = seenAt,
+            });
+        }
+
+        long reverted = await SeedClusterWithReporterStateAsync(FingerprintA, expiredMachine, now.AddHours(-3));
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = reverted,
+            MachineId = expiredMachine,
+            LastReportAt = now.AddDays(-8),
+        });
+        long linkedNode = await SeedNodeAsync(reverted, "linked", expiredMachine, now.AddHours(-1), now.AddHours(-3));
+        long agentlessGone = await SeedNodeAsync(reverted, "agentless", null, null, now.AddHours(-3));
+
+        long kept = await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = kept,
+            MachineId = liveMachine,
+            LastReportAt = now.AddHours(-1),
+        });
+        long agentlessKept = await SeedNodeAsync(kept, "agentless", null, null, now.AddHours(-3));
+        long empty = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = now.AddDays(-1),
+            LastSeenAt = now.AddDays(-1),
+        });
+
+        int deleted = await repo.CollectGarbageAsync(now, CancellationToken.None);
+
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(3);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == expiredMachine)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == liveMachine)).IsEqualTo(1);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == agentlessGone)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesClusters.CountAsync(c => c.Id == empty)).IsEqualTo(0);
+
+        KubernetesNode node = await db.KubernetesNodes.SingleAsync(n => n.Id == linkedNode);
+        await Assert.That(node.Roles).IsNull();
+        await Assert.That(node.NodeMachineId).IsNull();
+        await Assert.That(node.Conditions).IsNull();
+        await Assert.That(node.Unschedulable).IsFalse();
+        await Assert.That(node.PodCount).IsNull();
+        await Assert.That(node.LastReporterSeenAt).IsNull();
+        await Assert.That(node.MachineId).IsEqualTo(expiredMachine);
+        await Assert.That(node.LastLocalReportAt).IsEqualTo(now.AddHours(-1));
+
+        KubernetesCluster revertedCluster = await db.KubernetesClusters.SingleAsync(c => c.Id == reverted);
+        await Assert.That(revertedCluster.KubeSystemUid).IsNull();
+        await Assert.That(revertedCluster.ActiveReporterMachineId).IsNull();
+        await Assert.That(revertedCluster.LeaseUid).IsNull();
+        await Assert.That(revertedCluster.LeaseCreatedAt).IsNull();
+        await Assert.That(revertedCluster.LeaseTransitions).IsEqualTo(0L);
+        await Assert.That(revertedCluster.RoleOutdated).IsFalse();
+
+        KubernetesCluster keptCluster = await db.KubernetesClusters.SingleAsync(c => c.Id == kept);
+        await Assert.That(keptCluster.KubeSystemUid).IsNotNull();
+        await Assert.That(keptCluster.LeaseTransitions).IsEqualTo(7L);
+        await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == agentlessKept)).Roles).IsNotNull();
+    }
+
+    [Test]
+    public async Task Live_SoftDelete_RemovesTheCandidateAndForgetsTheActiveReporterOnPostgres()
+    {
+        // Intent: a soft delete clears everything that names the machine from the Kubernetes tables, in
+        // the caller's transaction, against the real foreign keys: its candidate row, its node link, and
+        // the active reporter of the cluster it last reported for.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = seenAt,
+        });
+        long nodeId = await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "node-1",
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = seenAt,
+        });
+
+        using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+        {
+            string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
+            await transaction.CommitAsync(CancellationToken.None);
+            await Assert.That(deletedKeyHash).IsNotNull();
+        }
+
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+        await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
+        KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
+        await Assert.That(cluster.ActiveReporterMachineId).IsNull();
+        await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
     }
 
     private static string NewApplicationName(string role)

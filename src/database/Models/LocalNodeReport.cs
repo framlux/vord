@@ -15,6 +15,9 @@ namespace Framlux.FleetManagement.Database.Models;
 /// <param name="ControlPlane">True when the machine reported that it runs a control plane.</param>
 /// <param name="CaFingerprint">The lowercase hex SHA-256 of the cluster CA certificate, or null when unreadable.</param>
 /// <param name="KubeletVersion">The kubelet version the machine reported, if any.</param>
+/// <param name="NodeNameSource">Where <paramref name="NodeName"/> came from: <c>certificate</c>, or <c>hostname</c> when the machine fell back to its own hostname.</param>
+/// <param name="ReporterEnrolled">True when the machine has enrolled as a cluster reporter candidate.</param>
+/// <param name="ReporterError">The error the machine's own reporter last reported, or null when it reported none.</param>
 public sealed record LocalNodeReport(
     long TelemetryId,
     int TenantId,
@@ -25,4 +28,7 @@ public sealed record LocalNodeReport(
     bool HasKubelet,
     bool ControlPlane,
     string? CaFingerprint,
-    string? KubeletVersion);
+    string? KubeletVersion,
+    string NodeNameSource,
+    bool ReporterEnrolled,
+    string? ReporterError);

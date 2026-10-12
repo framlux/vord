@@ -27,4 +27,10 @@ public enum LocalReportOutcome
 
     /// <summary>The report is older than newer state for the same node and was not applied.</summary>
     Superseded,
+
+    /// <summary>
+    /// The machine runs no kubelet but is an enrolled reporter candidate of a cluster, so only its
+    /// candidate row was written.
+    /// </summary>
+    CandidateOnly,
 }

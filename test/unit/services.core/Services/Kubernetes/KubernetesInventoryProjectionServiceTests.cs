@@ -854,7 +854,60 @@ public class KubernetesInventoryProjectionServiceTests
             HasKubelet: true,
             ControlPlane: true,
             CaFingerprint: FingerprintA,
-            KubeletVersion: "v1.30.4+k3s1"));
+            KubeletVersion: "v1.30.4+k3s1",
+            NodeNameSource: "certificate",
+            ReporterEnrolled: false,
+            ReporterError: null));
+    }
+
+    [Test]
+    public async Task NormalisePayload_ReporterFields_AreCarriedIntoTheReport()
+    {
+        // Intent: the repository decides candidate rows and hostname-fallback reconciliation from the
+        // name source, the enrolment flag and the reporter error, so the projector has to hand all
+        // three over exactly as the payload carried them.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.NodeNameSource = "hostname";
+        payload.ReporterEnrolled = true;
+        payload.ReporterError = "tls_ca_changed";
+
+        LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
+
+        await Assert.That(report!.NodeNameSource).IsEqualTo("hostname");
+        await Assert.That(report.ReporterEnrolled).IsTrue();
+        await Assert.That(report.ReporterError).IsEqualTo("tls_ca_changed");
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("api_unreachable")]
+    [Arguments("CREDENTIALS_REJECTED")]
+    [Arguments("something else")]
+    public async Task NormalisePayload_UnrecognisedReporterError_BecomesNull(string? reporterError)
+    {
+        // Intent: only the two codes an agent sends survive, so a candidate row can never hold a value
+        // outside its column or one the web has no message for.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.ReporterEnrolled = true;
+        payload.ReporterError = reporterError;
+
+        LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
+
+        await Assert.That(report!.ReporterError).IsNull();
+    }
+
+    [Test]
+    public async Task NormalisePayload_MissingNameSource_IsEmptyNotNull()
+    {
+        // Intent: an agent that predates the field sends no name source, which must read as "not the
+        // hostname fallback" rather than throw or be mistaken for it.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.NodeNameSource = null!;
+
+        LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
+
+        await Assert.That(report!.NodeNameSource).IsEqualTo(string.Empty);
     }
 
     [Test]

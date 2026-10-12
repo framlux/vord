@@ -32,7 +32,13 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// </summary>
     private static readonly TimeSpan KubernetesRecentReportWindow = TimeSpan.FromHours(1);
 
-    /// <summary>How long a node may go without a local report before garbage collection removes it.</summary>
+    /// <summary>The node name source a report carries when the agent could only name the node after its hostname.</summary>
+    private const string HostnameNodeNameSource = "hostname";
+
+    /// <summary>
+    /// How long garbage collection waits before removing a node that neither its own machine nor the
+    /// cluster reporter has described, and a candidate whose machine has sent no local report.
+    /// </summary>
     private static readonly TimeSpan KubernetesNodeStalenessWindow = TimeSpan.FromDays(7);
 
     /// <inheritdoc/>
@@ -194,10 +200,12 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     public async Task<int> CollectGarbageAsync(DateTimeOffset now, CancellationToken ct)
     {
         DateTimeOffset staleBefore = now - KubernetesNodeStalenessWindow;
+        DateTimeOffset snapshotStaleBefore = now - KubernetesReportingPolicy.StaleThreshold;
 
         List<int> clusterTenants = await _db.KubernetesClusters.Select(c => c.TenantId).Distinct().ToListAsync(ct);
         List<int> nodeTenants = await _db.KubernetesNodes.Select(n => n.TenantId).Distinct().ToListAsync(ct);
-        List<int> tenantIds = clusterTenants.Union(nodeTenants).OrderBy(id => id).ToList();
+        List<int> candidateTenants = await _db.KubernetesReporterCandidates.Select(c => c.TenantId).Distinct().ToListAsync(ct);
+        List<int> tenantIds = clusterTenants.Union(nodeTenants).Union(candidateTenants).OrderBy(id => id).ToList();
 
         int deleted = 0;
         foreach (int tenantId in tenantIds)
@@ -205,18 +213,34 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             await using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
             await AcquireKubernetesTenantLockAsync(tenantId, ct);
 
-            int staleNodes = await _db.KubernetesNodes
-                .Where(n => (n.TenantId == tenantId) && ((n.LastLocalReportAt == null) || (n.LastLocalReportAt < staleBefore)))
+            // Candidates go first, so a cluster whose last candidate just expired is judged for the
+            // reporting-disabled revert in the same pass.
+            int staleCandidates = await _db.KubernetesReporterCandidates
+                .Where(c => (c.TenantId == tenantId) && (c.LastReportAt < staleBefore))
                 .DeleteAsync(ct);
 
-            // Nodes go first so a cluster whose last node was just removed is removed in the same pass.
+            // A node is only gone when nothing has described it for the whole window: neither a local
+            // report from its own machine nor a sighting by the cluster reporter. A stalled holder or
+            // an outage of this server therefore never removes nodes that no agent reports on.
+            int staleNodes = await _db.KubernetesNodes
+                .Where(n => (n.TenantId == tenantId)
+                    && ((n.LastLocalReportAt == null) || (n.LastLocalReportAt < staleBefore))
+                    && ((n.LastReporterSeenAt == null) || (n.LastReporterSeenAt < staleBefore)))
+                .DeleteAsync(ct);
+
+            int revertedNodes = await RevertClustersWithReportingDisabledAsync(tenantId, snapshotStaleBefore, ct);
+
+            // Nodes and candidates go first so a cluster whose last node was just removed is removed in
+            // the same pass.
             int emptyClusters = await _db.KubernetesClusters
-                .Where(c => (c.TenantId == tenantId) && (_db.KubernetesNodes.Any(n => n.ClusterId == c.Id) == false))
+                .Where(c => (c.TenantId == tenantId)
+                    && (_db.KubernetesNodes.Any(n => n.ClusterId == c.Id) == false)
+                    && (_db.KubernetesReporterCandidates.Any(k => k.ClusterId == c.Id) == false))
                 .DeleteAsync(ct);
 
             await transaction.CommitAsync(ct);
 
-            deleted += staleNodes + emptyClusters;
+            deleted += staleCandidates + staleNodes + revertedNodes + emptyClusters;
         }
 
         if (deleted > 0)
@@ -228,9 +252,84 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     }
 
     /// <summary>
+    /// Reverts every cluster of the tenant that has reporter state, no candidate left and no snapshot
+    /// newer than the staleness threshold to what local reports alone know: nodes that only the
+    /// reporter described are deleted, the other nodes lose their reporter columns, and the cluster
+    /// loses its reporter columns and its Lease epoch, because enabling reporting again creates a new
+    /// Lease. A cluster that is still receiving snapshots is never touched, however far its
+    /// candidates' local reports lag. Must run inside the tenant's transaction and lock.
+    /// </summary>
+    /// <returns>The number of node rows deleted.</returns>
+    private async Task<int> RevertClustersWithReportingDisabledAsync(int tenantId, DateTimeOffset snapshotStaleBefore, CancellationToken ct)
+    {
+        List<long> disabled = await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId)
+                && (_db.KubernetesReporterCandidates.Any(k => k.ClusterId == c.Id) == false)
+                && ((c.LastSnapshotReceivedAt == null) || (c.LastSnapshotReceivedAt < snapshotStaleBefore))
+                && ((c.KubeSystemUid != null)
+                    || (c.ClusterVersion != null)
+                    || (c.ReporterError != null)
+                    || c.RoleOutdated
+                    || c.Truncated
+                    || (c.LeaseTransitions != 0)
+                    || (c.ActiveReporterMachineId != null)
+                    || (c.LastSnapshotReceivedAt != null)
+                    || (c.LastSnapshotTelemetryId != null)
+                    || (c.LeaseUid != null)
+                    || (c.LeaseCreatedAt != null)))
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+
+        if (disabled.Count == 0)
+        {
+            return 0;
+        }
+
+        int agentlessNodes = await _db.KubernetesNodes
+            .Where(n => disabled.Contains(n.ClusterId) && (n.LastLocalReportAt == null))
+            .DeleteAsync(ct);
+
+        await _db.KubernetesNodes
+            .Where(n => disabled.Contains(n.ClusterId))
+            .Set(n => n.NodeMachineId, (string?)null)
+            .Set(n => n.Roles, (string?)null)
+            .Set(n => n.ReadyStatus, (string?)null)
+            .Set(n => n.ReadySince, (DateTimeOffset?)null)
+            .Set(n => n.Conditions, (string?)null)
+            .Set(n => n.Unschedulable, false)
+            .Set(n => n.UnschedulableSince, (DateTimeOffset?)null)
+            .Set(n => n.ContainerRuntimeVersion, (string?)null)
+            .Set(n => n.PodCount, (int?)null)
+            .Set(n => n.PodCapacity, (int?)null)
+            .Set(n => n.LastReporterSeenAt, (DateTimeOffset?)null)
+            .UpdateAsync(ct);
+
+        await _db.KubernetesClusters
+            .Where(c => disabled.Contains(c.Id))
+            .Set(c => c.KubeSystemUid, (string?)null)
+            .Set(c => c.ClusterVersion, (string?)null)
+            .Set(c => c.ReporterError, (string?)null)
+            .Set(c => c.RoleOutdated, false)
+            .Set(c => c.Truncated, false)
+            .Set(c => c.ActiveReporterMachineId, (long?)null)
+            .Set(c => c.LastSnapshotReceivedAt, (DateTimeOffset?)null)
+            .Set(c => c.LastSnapshotTelemetryId, (long?)null)
+            .Set(c => c.LeaseUid, (string?)null)
+            .Set(c => c.LeaseCreatedAt, (DateTimeOffset?)null)
+            .Set(c => c.LeaseTransitions, 0L)
+            .UpdateAsync(ct);
+
+        _logger.LogInformation(
+            "Kubernetes clusters {ClusterIds} have no reporter candidates and no recent snapshot, so their reporter state was cleared",
+            disabled);
+
+        return agentlessNodes;
+    }
+
+    /// <summary>
     /// Resolves one report into the inventory: finds or creates the machine's cluster, links or updates
-    /// its node, and re-keys the cluster when a CA rotation has finished. Must run inside the tenant's
-    /// transaction and lock.
+    /// its node, keeps the machine's reporter candidate row in step with what it reports, and re-keys
+    /// the cluster when a CA rotation has finished. Must run inside the tenant's transaction and lock.
     /// </summary>
     private async Task<LocalReportOutcome> ResolveLocalNodeReportAsync(LocalNodeReport report, CancellationToken ct)
     {
@@ -246,9 +345,18 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             return LocalReportOutcome.MachineDeleted;
         }
 
+        KubernetesReporterCandidate? candidate = await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+
+        if ((candidate != null) && IsNewerThan(candidate.LastReportAt, report.ServerReceivedAt))
+        {
+            return LocalReportOutcome.Superseded;
+        }
+
         if (report.HasKubelet == false)
         {
-            return LocalReportOutcome.NotANode;
+            return await ApplyReportOfHostWithoutKubeletAsync(report, candidate, ct);
         }
 
         KubernetesNode? existing = await _db.KubernetesNodes
@@ -262,12 +370,14 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
 
         KubernetesCluster cluster;
         LocalReportOutcome outcome = LocalReportOutcome.Grouped;
-        if (existing != null)
+        long? memberClusterId = (existing != null) ? existing.ClusterId : candidate?.ClusterId;
+        if (memberClusterId != null)
         {
-            // Established membership wins over whatever fingerprint the machine reports now, with one
-            // exception: a machine that reports the CA of exactly one other cluster has moved there.
-            long existingClusterId = existing.ClusterId;
-            cluster = await _db.KubernetesClusters.FirstAsync(c => (c.Id == existingClusterId) && (c.TenantId == tenantId), ct);
+            // Established membership, through a node or a reporter candidate row, wins over whatever
+            // fingerprint the machine reports now, with one exception: a machine that reports the CA of
+            // exactly one other cluster has moved there.
+            long establishedClusterId = memberClusterId.Value;
+            cluster = await _db.KubernetesClusters.FirstAsync(c => (c.Id == establishedClusterId) && (c.TenantId == tenantId), ct);
 
             KubernetesCluster? movedTo = await FindClusterTheMachineMovedToAsync(cluster, report.CaFingerprint, ct);
             if (movedTo != null)
@@ -291,11 +401,24 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         }
 
         long clusterId = cluster.Id;
-        string nodeName = report.NodeName;
-        KubernetesNode? target = await _db.KubernetesNodes
-            .Where(n => (n.ClusterId == clusterId) && (n.NodeName == nodeName))
-            .FirstOrDefaultAsync(ct);
 
+        // A name the agent could only take from the hostname is a guess. When the cluster reporter has
+        // already listed a node of this machine under its real name, the report belongs to that row.
+        KubernetesNode? target = null;
+        if (string.Equals(report.NodeNameSource, HostnameNodeNameSource, StringComparison.Ordinal))
+        {
+            target = await FindReporterRowForHostnameFallbackAsync(machine, clusterId, ct);
+        }
+
+        if (target == null)
+        {
+            string reportedName = report.NodeName;
+            target = await _db.KubernetesNodes
+                .Where(n => (n.ClusterId == clusterId) && (n.NodeName == reportedName))
+                .FirstOrDefaultAsync(ct);
+        }
+
+        string nodeName = (target != null) ? target.NodeName : report.NodeName;
         if ((target != null) && IsNewerThan(target.LastLocalReportAt, report.ServerReceivedAt))
         {
             return LocalReportOutcome.Superseded;
@@ -305,11 +428,22 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         // machine link satisfied however the node moves. A different row than the machine's own means
         // its node was renamed inside its cluster, for example from its hostname to its certificate
         // name, or that the machine moved to another cluster. Either way the old row is replaced rather
-        // than left behind as a second node.
+        // than left behind as a second node, except that a row the cluster reporter has listed is never
+        // deleted by a local report: the reporter still sees that node, so it only loses its machine.
         if ((existing != null) && ((target == null) || (existing.Id != target.Id)))
         {
             long existingId = existing.Id;
-            await _db.KubernetesNodes.Where(n => n.Id == existingId).DeleteAsync(ct);
+            if (existing.LastReporterSeenAt != null)
+            {
+                await _db.KubernetesNodes
+                    .Where(n => n.Id == existingId)
+                    .Set(n => n.MachineId, (long?)null)
+                    .UpdateAsync(ct);
+            }
+            else
+            {
+                await _db.KubernetesNodes.Where(n => n.Id == existingId).DeleteAsync(ct);
+            }
         }
 
         // A report that carries no fingerprint or version leaves what is stored. For a renamed node
@@ -380,9 +514,143 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
                 .UpdateAsync(ct);
         }
 
+        if (report.ReporterEnrolled)
+        {
+            await UpsertCandidateAsync(report, clusterId, candidate, ct);
+        }
+        else if (candidate != null)
+        {
+            await DeleteCandidateAsync(candidate, ct);
+        }
+
         await ReKeyClusterIfRotationFinishedAsync(cluster, report.ServerReceivedAt, ct);
 
         return outcome;
+    }
+
+    /// <summary>
+    /// Applies the report of a host that runs no kubelet. Such a host is never a node, but an enrolled
+    /// one can still be a reporter candidate, as a k0s controller is. It is placed in the cluster it is
+    /// already a candidate of, or else in the one cluster that holds its CA fingerprint, and never
+    /// founds a cluster. A host that reports it is not enrolled has no candidate row left.
+    /// </summary>
+    private async Task<LocalReportOutcome> ApplyReportOfHostWithoutKubeletAsync(
+        LocalNodeReport report, KubernetesReporterCandidate? candidate, CancellationToken ct)
+    {
+        if (report.ReporterEnrolled == false)
+        {
+            if (candidate != null)
+            {
+                await DeleteCandidateAsync(candidate, ct);
+            }
+
+            return LocalReportOutcome.NotANode;
+        }
+
+        long? clusterId = candidate?.ClusterId;
+        if ((clusterId == null) && (string.IsNullOrEmpty(report.CaFingerprint) == false))
+        {
+            int tenantId = report.TenantId;
+            string fingerprint = report.CaFingerprint;
+            List<long> holders = await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId) && (c.CaFingerprint == fingerprint))
+                .OrderBy(c => c.Id)
+                .Select(c => c.Id)
+                .Take(2)
+                .ToListAsync(ct);
+
+            if (holders.Count == 1)
+            {
+                clusterId = holders[0];
+            }
+        }
+
+        if (clusterId == null)
+        {
+            return LocalReportOutcome.NotANode;
+        }
+
+        await UpsertCandidateAsync(report, clusterId.Value, candidate, ct);
+
+        return LocalReportOutcome.CandidateOnly;
+    }
+
+    /// <summary>
+    /// Finds the node the cluster reporter lists for this machine, for a report whose node name is only
+    /// the hostname: the one node of the cluster that the reporter has seen and whose
+    /// <c>/etc/machine-id</c> equals the machine's system id, compared ordinally without regard to
+    /// case. Returns nothing when the system id is empty, when no node or several match, or when
+    /// another live machine of the tenant carries the same system id, because cloned machines share
+    /// one and would otherwise take the row from each other on every report.
+    /// </summary>
+    private async Task<KubernetesNode?> FindReporterRowForHostnameFallbackAsync(Machine machine, long clusterId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machine.SystemId))
+        {
+            return null;
+        }
+
+        int tenantId = machine.TenantId;
+        string systemId = machine.SystemId.ToLowerInvariant();
+        List<KubernetesNode> matches = await _db.KubernetesNodes
+            .Where(n => (n.ClusterId == clusterId)
+                && (n.LastReporterSeenAt != null)
+                && (n.NodeMachineId != null)
+                && (n.NodeMachineId.ToLower() == systemId))
+            .OrderBy(n => n.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        if (matches.Count != 1)
+        {
+            return null;
+        }
+
+        int machinesWithSystemId = await _db.Machines
+            .CountAsync(m => (m.TenantId == tenantId) && (m.IsDeleted == false) && (m.SystemId.ToLower() == systemId), ct);
+
+        return (machinesWithSystemId == 1) ? matches[0] : null;
+    }
+
+    /// <summary>
+    /// Records that the machine is a reporter candidate of a cluster, with the error its own reporter
+    /// last reported. A machine is a candidate of one cluster only, so an existing row that belongs to
+    /// another cluster moves to this one.
+    /// </summary>
+    private async Task UpsertCandidateAsync(
+        LocalNodeReport report, long clusterId, KubernetesReporterCandidate? existing, CancellationToken ct)
+    {
+        if (existing == null)
+        {
+            await _db.InsertAsync(new KubernetesReporterCandidate
+            {
+                TenantId = report.TenantId,
+                ClusterId = clusterId,
+                MachineId = report.MachineId,
+                ReporterError = report.ReporterError,
+                LastReportAt = report.ServerReceivedAt,
+            }, token: ct);
+
+            return;
+        }
+
+        int tenantId = report.TenantId;
+        long machineId = report.MachineId;
+        await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .Set(c => c.ClusterId, clusterId)
+            .Set(c => c.ReporterError, report.ReporterError)
+            .Set(c => c.LastReportAt, report.ServerReceivedAt)
+            .UpdateAsync(ct);
+    }
+
+    private async Task DeleteCandidateAsync(KubernetesReporterCandidate candidate, CancellationToken ct)
+    {
+        long clusterId = candidate.ClusterId;
+        long machineId = candidate.MachineId;
+        await _db.KubernetesReporterCandidates
+            .Where(c => (c.ClusterId == clusterId) && (c.MachineId == machineId))
+            .DeleteAsync(ct);
     }
 
     /// <summary>

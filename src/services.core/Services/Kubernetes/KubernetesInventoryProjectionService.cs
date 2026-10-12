@@ -55,7 +55,10 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
     /// </summary>
     internal static readonly TimeSpan ReadWindow = TimeSpan.FromDays(8);
 
-    /// <summary>How often stale nodes and empty clusters are collected.</summary>
+    /// <summary>
+    /// How often expired candidates and stale nodes are collected, clusters with reporting disabled are
+    /// reverted, and empty clusters are removed.
+    /// </summary>
     internal static readonly TimeSpan GcInterval = TimeSpan.FromHours(1);
 
     /// <summary>How long to wait before trying again for the lock another replica holds.</summary>
@@ -192,7 +195,10 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
             normalised.HasKubelet,
             normalised.ControlPlane,
             normalised.CaFingerprint.Length == 0 ? null : normalised.CaFingerprint,
-            normalised.KubeletVersion.Length == 0 ? null : normalised.KubeletVersion);
+            normalised.KubeletVersion.Length == 0 ? null : normalised.KubeletVersion,
+            normalised.NodeNameSource,
+            normalised.ReporterEnrolled,
+            normalised.ReporterError);
     }
 
     /// <summary>

@@ -394,6 +394,111 @@ public class MachineStateRepositoryTests
         await Assert.That(node.MachineId).IsEqualTo(machineId);
     }
 
+    private static async Task<long> SeedReportingClusterAsync(
+        TestDatabaseFactory dbFactory, int tenantId, long? activeReporterMachineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            ActiveReporterMachineId = activeReporterMachineId,
+            LastSnapshotReceivedAt = activeReporterMachineId == null ? null : seenAt,
+        });
+    }
+
+    private static async Task SeedKubernetesCandidateAsync(
+        TestDatabaseFactory dbFactory, int tenantId, long clusterId, long machineId)
+    {
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero),
+        });
+    }
+
+    [Test]
+    public async Task SoftDelete_RemovesTheMachinesReporterCandidateOnly()
+    {
+        // Intent: a soft delete never fires the foreign key from a candidate row to its machine, so the
+        // repository removes the row itself. Another machine's candidate in the same cluster, and a
+        // candidate of another tenant, stay.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long otherTenantMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: otherTenantId));
+        long clusterId = await SeedReportingClusterAsync(dbFactory, tenantId, null);
+        long otherClusterId = await SeedReportingClusterAsync(dbFactory, otherTenantId, null);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, doomedMachineId);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, siblingMachineId);
+        await SeedKubernetesCandidateAsync(dbFactory, otherTenantId, otherClusterId, otherTenantMachineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        await Assert.That(deletedKeyHash).IsNotNull();
+        List<long> remaining = await dbFactory.Context.KubernetesReporterCandidates.Select(c => c.MachineId).ToListAsync();
+        await Assert.That(remaining).IsEquivalentTo(new List<long> { siblingMachineId, otherTenantMachineId });
+        await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task SoftDelete_ClearsTheActiveReporterOfClustersThatNameTheMachine()
+    {
+        // Intent: a cluster whose latest snapshot came from the deleted machine stops naming it as the
+        // active reporter, while a cluster whose active reporter is another machine, and another
+        // tenant's cluster that was ever to carry the same id, keep theirs. The snapshot markers stay,
+        // because the snapshot itself is still the cluster's latest.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long activeCluster = await SeedReportingClusterAsync(dbFactory, tenantId, doomedMachineId);
+        long siblingCluster = await SeedReportingClusterAsync(dbFactory, tenantId, siblingMachineId);
+        long foreignCluster = await SeedReportingClusterAsync(dbFactory, otherTenantId, doomedMachineId);
+
+        await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        Dictionary<long, long?> active = await dbFactory.Context.KubernetesClusters.ToDictionaryAsync(c => c.Id, c => c.ActiveReporterMachineId);
+        await Assert.That(active[activeCluster]).IsNull();
+        await Assert.That(active[siblingCluster]).IsEqualTo(siblingMachineId);
+        await Assert.That(active[foreignCluster]).IsEqualTo(doomedMachineId);
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id == activeCluster)).LastSnapshotReceivedAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task SoftDelete_MachineOfAnotherTenant_LeavesCandidateAndActiveReporterAlone()
+    {
+        // Intent: a delete that matches no active machine of the caller's tenant changes nothing, so a
+        // foreign machine id cannot be used to strip another tenant's candidate or active reporter.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long clusterId = await SeedReportingClusterAsync(dbFactory, tenantId, machineId);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, otherTenantId, userId, CancellationToken.None);
+
+        await Assert.That(deletedKeyHash).IsNull();
+        await Assert.That(await dbFactory.Context.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(1);
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id == clusterId)).ActiveReporterMachineId).IsEqualTo(machineId);
+    }
+
     // ========== GetHostnameMapAsync tests ==========
 
     [Test]

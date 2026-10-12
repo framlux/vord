@@ -292,10 +292,11 @@ public sealed class TenantPurgeIntegrationTests
     [Test]
     public async Task Purge_WithKubernetesRows_DoesNotViolateMachineForeignKey()
     {
-        // Intent: a node row points at its machine and at its tenant with plain foreign keys, so the
-        // purge must remove the Kubernetes rows before it removes the machines. SQLite runs the other
-        // purge tests with foreign keys off, so only real Postgres can show that the order is right
-        // and that a node linked to a machine does not stop the machine from being deleted.
+        // Intent: a node row, a reporter candidate row and a cluster's active reporter all point at a
+        // machine with plain foreign keys, so the purge must remove the Kubernetes rows before it
+        // removes the machines. SQLite runs the other purge tests with foreign keys off, so only real
+        // Postgres can show that the order is right and that a machine named by those rows does not
+        // stop the machine from being deleted.
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepository(db);
 
@@ -318,6 +319,8 @@ public sealed class TenantPurgeIntegrationTests
         await Assert.That(await db.Machines.CountAsync(m => m.TenantId == purged.Id)).IsEqualTo(0);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == purged.Id)).IsEqualTo(0);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => (c.TenantId == kept.Id) && (c.MachineId == keptMachine.Id))).IsEqualTo(1);
         await Assert.That(await db.Machines.CountAsync(m => m.TenantId == kept.Id)).IsEqualTo(1);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == kept.Id)).IsEqualTo(1);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => (n.TenantId == kept.Id) && (n.MachineId == keptMachine.Id))).IsEqualTo(1);
@@ -334,6 +337,8 @@ public sealed class TenantPurgeIntegrationTests
             Distro = "k3s",
             FirstSeenAt = seenAt,
             LastSeenAt = seenAt,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = seenAt,
         });
         await db.InsertWithInt64IdentityAsync(new KubernetesNode
         {
@@ -348,6 +353,13 @@ public sealed class TenantPurgeIntegrationTests
             TenantId = tenantId,
             ClusterId = clusterId,
             NodeName = "unlinked-node",
+        });
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = seenAt,
         });
     }
 
