@@ -7,12 +7,14 @@ package sender
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/jitter"
@@ -1075,5 +1077,311 @@ func TestRunTier_ShutdownFlush_SkippedWhilePaused(t *testing.T) {
 	}
 	if got := flushedItems(t, true); got != 0 {
 		t.Errorf("expected no shutdown flush while paused, got %d RPC(s)", got)
+	}
+}
+
+// --- byte budget tests ---
+
+// osVersionItem builds a telemetry item whose encoded size is roughly size bytes, carried in a free-text field.
+func osVersionItem(id string, size int) *pb.TelemetryItem {
+	return &pb.TelemetryItem{
+		EventId: id,
+		Type:    pb.TelemetryTypes(db.TelemetryOsVersion),
+		Payload: &pb.TelemetryItem_OsVersion{OsVersion: &pb.OsVersionRecord{Extra: strings.Repeat("x", size)}},
+	}
+}
+
+func chunkIDs(chunk []*pb.TelemetryItem) []string {
+	ids := make([]string, len(chunk))
+	for i, item := range chunk {
+		ids[i] = item.EventId
+	}
+
+	return ids
+}
+
+// Intent: small items that fit the budget together travel in a single envelope.
+func TestSplitByBudget_SmallItemsShareOneEnvelope(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("a", 100), osVersionItem("b", 100), osVersionItem("c", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	if len(chunks) != 1 || len(chunks[0]) != 3 {
+		t.Fatalf("expected one envelope of 3 items, got %v", chunks)
+	}
+}
+
+// Intent: items are split at the budget, and their order is kept across envelopes, so the server sees them in
+// the order they were collected.
+func TestSplitByBudget_SplitsAtBudgetAndKeepsOrder(t *testing.T) {
+	items := []*pb.TelemetryItem{
+		osVersionItem("1", 4_000), osVersionItem("2", 4_000), osVersionItem("3", 4_000), osVersionItem("4", 4_000),
+	}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	want := [][]string{{"1", "2"}, {"3", "4"}}
+	if len(chunks) != len(want) {
+		t.Fatalf("expected %d envelopes, got %d", len(want), len(chunks))
+	}
+	for i := range want {
+		got := chunkIDs(chunks[i])
+		if strings.Join(got, ",") != strings.Join(want[i], ",") {
+			t.Errorf("envelope %d: expected %v, got %v", i, want[i], got)
+		}
+		size := 0
+		for _, item := range chunks[i] {
+			size += proto.Size(item) + itemFramingBytes
+		}
+		if size > 10_000 {
+			t.Errorf("envelope %d is %d bytes, over the 10000 budget", i, size)
+		}
+	}
+}
+
+// Intent: an item bigger than the budget but under the item limit is still sendable. It goes alone, and it
+// neither drags its neighbours over the budget nor is discarded.
+func TestSplitByBudget_ItemOverBudgetGoesAlone(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("small-1", 100), osVersionItem("big", 15_000), osVersionItem("small-2", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	want := [][]string{{"small-1"}, {"big"}, {"small-2"}}
+	if len(chunks) != len(want) {
+		t.Fatalf("expected %d envelopes, got %d: %v", len(want), len(chunks), chunks)
+	}
+	for i := range want {
+		if strings.Join(chunkIDs(chunks[i]), ",") != strings.Join(want[i], ",") {
+			t.Errorf("envelope %d: expected %v, got %v", i, want[i], chunkIDs(chunks[i]))
+		}
+	}
+}
+
+// Intent: an item over the item limit can never be accepted, so it is reported as oversized and left out of
+// every envelope, while the items around it are still sent.
+func TestSplitByBudget_ItemOverLimitIsSetAside(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("ok-1", 100), osVersionItem("huge", 25_000), osVersionItem("ok-2", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 1 || oversized[0].EventId != "huge" {
+		t.Fatalf("expected only %q oversized, got %v", "huge", oversized)
+	}
+	if len(chunks) != 1 || strings.Join(chunkIDs(chunks[0]), ",") != "ok-1,ok-2" {
+		t.Fatalf("expected one envelope [ok-1 ok-2], got %v", chunks)
+	}
+}
+
+// Intent: nothing in means nothing out, with no empty envelope that would make a pointless RPC.
+func TestSplitByBudget_Empty(t *testing.T) {
+	chunks, oversized := splitByBudget(nil, 10_000, 20_000)
+
+	if len(chunks) != 0 || len(oversized) != 0 {
+		t.Fatalf("expected no envelopes and nothing oversized, got %v and %v", chunks, oversized)
+	}
+}
+
+// enqueueOsVersion queues an OS version payload of roughly size bytes.
+func enqueueOsVersion(t *testing.T, store *db.Store, id string, size int) {
+	t.Helper()
+	payload := fmt.Sprintf(`{"extra":"%s"}`, strings.Repeat("x", size))
+	if err := store.EnqueueTelemetry(id, db.TelemetryOsVersion, payload); err != nil {
+		t.Fatalf("enqueue %s: %v", id, err)
+	}
+}
+
+// Intent: a backlog bigger than the server's limit, such as one built up during an outage, is delivered in one
+// tick across several envelopes. Each envelope is under the 1 MB limit, and the items arrive in order.
+func TestSendBatch_SplitsBacklogIntoEnvelopesUnderBudget(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("backlog-%d", i), 300*1024)
+	}
+
+	var envelopes []*pb.TelemetryEnvelope
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		envelopes = append(envelopes, in)
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if len(envelopes) < 3 {
+		t.Fatalf("expected the 1.8 MB backlog to need at least 3 envelopes, got %d", len(envelopes))
+	}
+	var delivered []string
+	for i, env := range envelopes {
+		if size := proto.Size(env); size >= 1024*1024 {
+			t.Errorf("envelope %d is %d bytes, at or over the server's 1 MB limit", i, size)
+		}
+		for _, item := range env.Items {
+			delivered = append(delivered, item.EventId)
+		}
+	}
+	want := "backlog-0,backlog-1,backlog-2,backlog-3,backlog-4,backlog-5"
+	if strings.Join(delivered, ",") != want {
+		t.Errorf("expected items delivered in order %s, got %s", want, strings.Join(delivered, ","))
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected every item completed, %d still pending", len(remaining))
+	}
+}
+
+// Intent: an item queued by an older agent, before the enqueue cap existed, that is too large for the server is
+// dropped instead of blocking its tier forever. The items queued with it are still delivered.
+func TestSendBatch_DiscardsItemTooLargeToSend(t *testing.T) {
+	store := newTestStore(t)
+	enqueueOsVersion(t, store, "before", 100)
+	// Insert directly, as an older agent without the cap would have.
+	huge := fmt.Sprintf(`{"extra":"%s"}`, strings.Repeat("x", 950*1024))
+	if _, err := store.DB().Exec(
+		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)`,
+		"legacy-huge", int(db.TelemetryOsVersion), huge, "2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z",
+	); err != nil {
+		t.Fatalf("insert legacy item: %v", err)
+	}
+	// Invalidate the cached count so the direct insert is seen.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	var sent []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		for _, item := range in.Items {
+			sent = append(sent, item.EventId)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if strings.Join(sent, ",") != "before" {
+		t.Errorf("expected only %q sent, got %v", "before", sent)
+	}
+	// The oversized item must be gone, so a restart cannot bring it back either.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected the oversized item discarded, found %d items", len(remaining))
+	}
+}
+
+// Intent: one item bigger than the envelope budget but within the item limit is delivered on its own, not
+// discarded.
+func TestSendBatch_DeliversLoneItemBetweenBudgetAndLimit(t *testing.T) {
+	store := newTestStore(t)
+	enqueueOsVersion(t, store, "big-but-legal", 800*1024)
+
+	var sent []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		if size := proto.Size(in); size >= 1024*1024 {
+			t.Errorf("envelope is %d bytes, at or over the 1 MB limit", size)
+		}
+		for _, item := range in.Items {
+			sent = append(sent, item.EventId)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if strings.Join(sent, ",") != "big-but-legal" {
+		t.Errorf("expected the item delivered, got %v", sent)
+	}
+}
+
+// Intent: when a later envelope in a tick fails, the envelopes already acknowledged stay completed. The failed
+// envelope and every envelope after it return to pending, unsent, so the next tick retries them in order.
+func TestSendBatch_LaterEnvelopeFails_RemainingItemsReturnToPending(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("item-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var acked []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			for _, item := range in.Items {
+				acked = append(acked, item.EventId)
+			}
+
+			return &pb.TelemetryAck{Success: true}, nil
+		}
+
+		return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 2 {
+		t.Errorf("expected sending to stop after the rejected envelope (2 calls), got %d", calls)
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(acked)+len(remaining) != 6 {
+		t.Fatalf("expected acked plus pending to cover all 6 items, got %d acked and %d pending", len(acked), len(remaining))
+	}
+	for _, item := range remaining {
+		for _, done := range acked {
+			if item.ID == done {
+				t.Errorf("item %s was acknowledged but is pending again", item.ID)
+			}
+		}
+	}
+}
+
+// Intent: once an ack says the host is paused, the sender stops sending the rest of the tick's envelopes. The
+// server would discard them anyway, and a paused host must go quiet.
+func TestSendBatch_PauseAckStopsRemainingEnvelopes(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("p-%d", i), 300*1024)
+	}
+
+	calls := 0
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+
+		return &pb.TelemetryAck{Success: true, Reason: pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED}, nil
+	})
+	recorder := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected exactly one envelope before the pause stopped sending, got %d", calls)
+	}
+	if recorder.pauses.Load() != 1 {
+		t.Errorf("expected the host to enter pause once, got %d", recorder.pauses.Load())
 	}
 }

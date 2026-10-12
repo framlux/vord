@@ -51,6 +51,16 @@ const (
 	maxBatchSize   = 50
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 1 * time.Second
+
+	// maxEnvelopeBytes is the most item data one envelope carries. The server refuses any message over 1 MB, and
+	// the margin below that covers the envelope's own fields.
+	maxEnvelopeBytes = 768 * 1024
+	// maxItemBytes is the largest single item the sender puts on the wire. Anything bigger could never be
+	// accepted and would block its tier forever if left queued, so it is discarded instead.
+	maxItemBytes = 900 * 1024
+	// itemFramingBytes bounds the field tag and length prefix added when an item is placed in an envelope,
+	// which proto.Size of the item alone does not count.
+	itemFramingBytes = 8
 )
 
 // tierStream holds a per-tier gRPC stream and its mutex. The mutex is held for the whole of a send, from writing
@@ -225,11 +235,43 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 		return
 	}
 
-	envelope := s.buildEnvelope(items)
-	ids := make([]string, len(items))
-	for i, item := range items {
-		ids[i] = item.ID
+	chunks, oversized := splitByBudget(s.buildItems(items), maxEnvelopeBytes, maxItemBytes)
+	if len(oversized) > 0 {
+		for _, item := range oversized {
+			s.logger.Error("discarding telemetry item too large for the server to accept",
+				"tier", tier, "type", item.Type, "event_id", item.EventId, "bytes", proto.Size(item), "limit", maxItemBytes)
+		}
+		if _, err := s.store.DiscardTelemetry(eventIDs(oversized)); err != nil {
+			s.logger.Error("failed to discard oversized telemetry", "tier", tier, "error", err)
+		}
 	}
+
+	for i, chunk := range chunks {
+		if s.sendEnvelope(ctx, tier, chunk) {
+			continue
+		}
+
+		// Stop at the first envelope that was not delivered, or that left the host paused. Everything not yet
+		// sent goes back to pending so the next tick retries it in order. If a pause cleared the queue, these
+		// ids are already gone and marking them changes nothing.
+		var unsent []string
+		for _, rest := range chunks[i+1:] {
+			unsent = append(unsent, eventIDs(rest)...)
+		}
+		if markErr := s.store.MarkTelemetryPending(unsent); markErr != nil {
+			s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
+		}
+
+		return
+	}
+}
+
+// sendEnvelope sends one envelope and settles its items in the queue: completed when the server accepts them,
+// pending when it does not. It reports whether the caller may go on to send the next envelope, which it may not
+// after a failure or once the server has reported the host paused.
+func (s *Sender) sendEnvelope(ctx context.Context, tier string, items []*pb.TelemetryItem) bool {
+	envelope := s.newEnvelope(items)
+	ids := eventIDs(items)
 
 	s.logger.Debug("sending telemetry batch", "tier", tier, "count", len(items), "batch_id", envelope.BatchId)
 
@@ -245,10 +287,12 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 		if markErr := s.store.MarkTelemetryPending(ids); markErr != nil {
 			s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
 		}
-		return
+
+		return false
 	}
 
-	if ack.Success {
+	delivered := ack.Success
+	if delivered {
 		if err := s.store.MarkTelemetryCompleted(ids); err != nil {
 			s.logger.Error("failed to mark telemetry completed", "error", err)
 		}
@@ -267,15 +311,16 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 	// read as "resumed", and a plain ack proves nothing about a pause that is already in force.
 	if reason := pause.FromProto(ack.Reason); reason != pause.None {
 		s.pause.Observe(reason)
+
+		return false
 	}
+
+	return delivered
 }
 
-func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvelope {
-	envelope := &pb.TelemetryEnvelope{
-		BatchId:        id.NewV7(),
-		AgentTimestamp: timestamppb.New(s.clock()),
-	}
-
+// buildItems converts queued rows into wire items, keeping their order.
+func (s *Sender) buildItems(items []db.TelemetryQueueItem) []*pb.TelemetryItem {
+	telItems := make([]*pb.TelemetryItem, 0, len(items))
 	for _, item := range items {
 		telItem := &pb.TelemetryItem{
 			EventId:     item.ID,
@@ -284,10 +329,61 @@ func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvel
 		}
 
 		s.setPayload(telItem, item)
-		envelope.Items = append(envelope.Items, telItem)
+		telItems = append(telItems, telItem)
 	}
 
-	return envelope
+	return telItems
+}
+
+// newEnvelope wraps wire items in a freshly identified, timestamped envelope.
+func (s *Sender) newEnvelope(items []*pb.TelemetryItem) *pb.TelemetryEnvelope {
+	return &pb.TelemetryEnvelope{
+		BatchId:        id.NewV7(),
+		AgentTimestamp: timestamppb.New(s.clock()),
+		Items:          items,
+	}
+}
+
+// buildEnvelope converts queued rows into a single envelope.
+func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvelope {
+	return s.newEnvelope(s.buildItems(items))
+}
+
+// splitByBudget groups items, in order, into envelopes whose summed encoded size stays within budget. An item
+// larger than the budget but within maxItem goes in an envelope of its own. An item larger than maxItem can
+// never be accepted by the server, so it is returned as oversized and placed in no envelope.
+func splitByBudget(items []*pb.TelemetryItem, budget, maxItem int) (chunks [][]*pb.TelemetryItem, oversized []*pb.TelemetryItem) {
+	var current []*pb.TelemetryItem
+	currentSize := 0
+	for _, item := range items {
+		size := proto.Size(item) + itemFramingBytes
+		if size > maxItem {
+			oversized = append(oversized, item)
+
+			continue
+		}
+		if len(current) > 0 && currentSize+size > budget {
+			chunks = append(chunks, current)
+			current = nil
+			currentSize = 0
+		}
+		current = append(current, item)
+		currentSize += size
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+
+	return chunks, oversized
+}
+
+func eventIDs(items []*pb.TelemetryItem) []string {
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.EventId
+	}
+
+	return ids
 }
 
 // payloadEntry describes how to unmarshal a telemetry type's JSON payload and wrap it in a TelemetryItem oneof.
