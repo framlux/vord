@@ -587,6 +587,38 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_MachineIdsLinkedToOtherClusters_FindNodesAndCandidatesOfAnotherClusterOnPostgres()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        string sharedCa = NewFingerprint();
+        long own = await SeedLiveClusterAsync(db, tenantId, sharedCa);
+        long sibling = await SeedLiveClusterAsync(db, tenantId, sharedCa);
+        long foreignCluster = await SeedLiveClusterAsync(db, otherTenantId, sharedCa);
+        long nodeElsewhere = await SeedMachineAsync(db, tenantId);
+        long candidateElsewhere = await SeedMachineAsync(db, tenantId);
+        long candidateHere = await SeedMachineAsync(db, tenantId);
+        long foreignLinked = await SeedMachineAsync(db, tenantId);
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = sibling,
+            NodeName = "sibling-node",
+            MachineId = nodeElsewhere,
+        });
+        await SeedLiveCandidateAsync(db, tenantId, sibling, candidateElsewhere, DateTimeOffset.UtcNow);
+        await SeedLiveCandidateAsync(db, tenantId, own, candidateHere, DateTimeOffset.UtcNow);
+        await SeedLiveCandidateAsync(db, otherTenantId, foreignCluster, foreignLinked, DateTimeOffset.UtcNow);
+
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(
+            tenantId, own, [nodeElsewhere, candidateElsewhere, candidateHere, foreignLinked], CancellationToken.None);
+
+        await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere }.Order().ToArray());
+    }
+
+    [Test]
     public async Task Live_LatestTelemetryPerType_LeavesOutTheExcludedTypesOnPostgres()
     {
         // Intent: the machine page's read must not load the cluster snapshot on the production database

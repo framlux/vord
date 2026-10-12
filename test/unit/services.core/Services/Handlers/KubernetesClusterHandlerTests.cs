@@ -51,6 +51,7 @@ public class KubernetesClusterHandlerTests
             pingService ?? new InMemoryMachinePingService(),
             TestQuotaPause.Nothing(),
             TestMetricsFactory.CreateQuotaPauseMetrics(),
+            TestMetricsFactory.CreateKubernetesInventoryMetrics(),
             clock,
             NullLogger<KubernetesReporterMachineReader>.Instance);
 
@@ -67,6 +68,7 @@ public class KubernetesClusterHandlerTests
             Substitute.For<IMachinePingService>(),
             TestQuotaPause.Nothing(),
             TestMetricsFactory.CreateQuotaPauseMetrics(),
+            TestMetricsFactory.CreateKubernetesInventoryMetrics(),
             new FakeTimeProvider(Now),
             NullLogger<KubernetesReporterMachineReader>.Instance);
     }
@@ -730,6 +732,79 @@ public class KubernetesClusterHandlerTests
         await Assert.That(node.KubeletSkew).IsTrue();
     }
 
+    [Test]
+    public async Task GetAsync_TwoClustersSharingACa_OfferEachMachineOnlyToTheClusterItIsLinkedTo()
+    {
+        // Intent: two clusters of one tenant that share a CA fingerprint match every control-plane host
+        // of either by fingerprint alone. A host already a node of one cluster, or a candidate of the
+        // other, must be offered to that cluster only, and a host linked to neither to both.
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long nodeOfFirst = await SeedMachineAsync(dbFactory.Context, tenantId, "first-cp");
+        long candidateOfSecond = await SeedMachineAsync(dbFactory.Context, tenantId, "second-cp");
+        long unlinked = await SeedMachineAsync(dbFactory.Context, tenantId, "unlinked-cp");
+        long first = await SeedReportingClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long second = await SeedReportingClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        await SeedNodeAsync(dbFactory.Context, tenantId, first, "first-1", nodeOfFirst, controlPlane: true);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, second, candidateOfSecond);
+        foreach (long machine in new[] { nodeOfFirst, candidateOfSecond, unlinked })
+        {
+            await SeedLocalReportAsync(dbFactory.Context, tenantId, machine, LocalReportJson(FingerprintA));
+        }
+
+        KubernetesClusterHandler handler = CreateHandler(dbFactory);
+
+        KubernetesClusterDetailDto firstDetail = (await handler.GetAsync(first, tenantId, CancellationToken.None)).Data!;
+        KubernetesClusterDetailDto secondDetail = (await handler.GetAsync(second, tenantId, CancellationToken.None)).Data!;
+
+        await Assert.That(firstDetail.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { nodeOfFirst, unlinked });
+        await Assert.That(secondDetail.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { candidateOfSecond, unlinked });
+    }
+
+    [Test]
+    public async Task GetAsync_DeletedMachineWithAReportAndANodeRow_IsNotEligible()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        Machine deleted = TestDataBuilder.BuildMachine(tenantId, hostname: "deleted-cp");
+        deleted.IsDeleted = true;
+        long deletedId = await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
+        long live = await SeedMachineAsync(dbFactory.Context, tenantId, "live-cp");
+        long clusterId = await SeedReportingClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "deleted-1", deletedId, controlPlane: true);
+        await SeedLocalReportAsync(dbFactory.Context, tenantId, deletedId, LocalReportJson(FingerprintA));
+        await SeedLocalReportAsync(dbFactory.Context, tenantId, live, LocalReportJson(FingerprintA));
+        KubernetesClusterHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<KubernetesClusterDetailDto> result = await handler.GetAsync(clusterId, tenantId, CancellationToken.None);
+
+        await Assert.That(result.Data!.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { live });
+    }
+
+    [Test]
+    public async Task GetAsync_CapabilityStoreUnavailable_StillReturnsTheClusterWithRemoteCommandsUnknown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machine = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-host");
+        long clusterId = await SeedReportingClusterAsync(dbFactory.Context, tenantId, FingerprintA, machine, Now);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, machine);
+        await SeedLocalReportAsync(dbFactory.Context, tenantId, machine, LocalReportJson(FingerprintA, enrolled: true));
+        IMachinePingService ping = Substitute.For<IMachinePingService>();
+        ping.GetAgentCapabilitiesBatchAsync(Arg.Any<IEnumerable<long>>())
+            .Returns<Task<Dictionary<long, ulong>>>(_ => throw new InvalidOperationException("redis unavailable"));
+        KubernetesClusterHandler handler = CreateHandler(dbFactory, pingService: ping);
+
+        ServiceResult<KubernetesClusterDetailDto> result = await handler.GetAsync(clusterId, tenantId, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.Candidates.Single().MachineId).IsEqualTo(machine);
+        KubernetesEligibleMachineDto eligible = result.Data.EligibleMachines.Single();
+        await Assert.That(eligible.MachineId).IsEqualTo(machine);
+        await Assert.That(eligible.RemoteCommandsEnabled).IsNull();
+        await Assert.That(eligible.Enrolled).IsTrue();
+    }
+
     // ========== Constructor ==========
 
     [Test]
@@ -740,7 +815,8 @@ public class KubernetesClusterHandlerTests
         FakeTimeProvider clock = new(Now);
         KubernetesReporterMachineReader machines = new(
             repo, repo, repo, repo, new InMemoryMachinePingService(), TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), clock, NullLogger<KubernetesReporterMachineReader>.Instance);
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), clock,
+            NullLogger<KubernetesReporterMachineReader>.Instance);
 
         await Assert.That(() => new KubernetesClusterHandler(null!, machines, repo, repo, clock)).Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesClusterHandler(repo, null!, repo, repo, clock)).Throws<ArgumentNullException>();

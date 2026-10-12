@@ -200,6 +200,29 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyCollection<long>> GetMachineIdsLinkedToOtherClustersAsync(
+        int tenantId, long clusterId, IReadOnlyCollection<long> machineIds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(machineIds);
+
+        if (machineIds.Count == 0)
+        {
+            return [];
+        }
+
+        List<long> ids = machineIds.Distinct().ToList();
+        IQueryable<long> nodeMachines = _db.KubernetesNodes
+            .Where(n => (n.TenantId == tenantId) && (n.ClusterId != clusterId) && (n.MachineId != null) && ids.Contains(n.MachineId.Value))
+            .Select(n => n.MachineId!.Value);
+        IQueryable<long> candidateMachines = _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.ClusterId != clusterId) && ids.Contains(c.MachineId))
+            .Select(c => c.MachineId);
+        List<long> linked = await nodeMachines.Union(candidateMachines).ToListAsync(ct);
+
+        return linked;
+    }
+
+    /// <inheritdoc/>
     public async Task<IReadOnlyDictionary<long, string>> GetMachineNamesInTenantAsync(
         int tenantId, IReadOnlyCollection<long> machineIds, CancellationToken ct)
     {

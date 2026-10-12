@@ -75,11 +75,11 @@ public static class ObservabilityServiceCollectionExtensions
             // descriptor it would never be constructed, its instrument would never be created, and
             // vord_fleet_machines would never exist while every test still passed.
             AddObservable<FleetMetrics>(services);
-
-            // Only the worker runs the Kubernetes inventory projection, so only it records these
-            // failures; the API server has no use for the class.
-            AddInitialisable<KubernetesInventoryMetrics>(services);
         }
+
+        // The worker's projection records skipped rows into this class and the API server's cluster
+        // page records capability reads that fail, so both processes need it resolvable.
+        AddInitialisable<KubernetesInventoryMetrics>(services);
 
         // Registered in both processes because AddCoreServices registers AlertDeliveryService
         // unconditionally on both. A host-conditional registration here would leave one of them

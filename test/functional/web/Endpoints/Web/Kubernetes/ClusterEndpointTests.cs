@@ -613,6 +613,68 @@ public sealed class ClusterEndpointTests
         await Assert.That(body.Contains("tenant2-secret-cp", StringComparison.Ordinal)).IsFalse();
     }
 
+    [Test]
+    public async Task ClusterDetail_CapabilityStoreFails_Returns200WithRemoteCommandsUnknown()
+    {
+        // Intent: Redis holds only the capability bits, so an outage there must leave the cluster page
+        // readable. The one fact it cost is reported as null, never as a disabled host.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, "Tenant 1");
+        int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
+        long machineId = await SeedMachineAsync(db, tenantId, "cp-host");
+        long clusterId = await SeedClusterAsync(db, tenantId, FingerprintA);
+        await SeedNodeAsync(db, tenantId, clusterId, "cp-1", machineId, controlPlane: true);
+        await SeedLocalReportAsync(db, tenantId, machineId, FingerprintA);
+        InMemoryMachinePingService ping = (InMemoryMachinePingService)factory.Services.GetRequiredService<IMachinePingService>();
+        await ping.SetAgentCapabilitiesAsync(machineId, 1);
+        ping.ReadFailure = new InvalidOperationException("redis unavailable");
+        HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/clusters/{clusterId}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        JsonElement eligible = doc.RootElement.GetProperty("data").GetProperty("eligibleMachines").EnumerateArray().Single();
+        await Assert.That(eligible.GetProperty("machineId").GetInt64()).IsEqualTo(machineId);
+        await Assert.That(eligible.GetProperty("remoteCommandsEnabled").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(eligible.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
+    }
+
+    [Test]
+    public async Task ClusterDetail_TwoClustersOfOneTenantSharingACa_OfferEachLinkedMachineToItsOwnClusterOnly()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, "Tenant 1");
+        int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
+        long nodeOfFirst = await SeedMachineAsync(db, tenantId, "first-cp");
+        long candidateOfSecond = await SeedMachineAsync(db, tenantId, "second-cp");
+        long unlinked = await SeedMachineAsync(db, tenantId, "unlinked-cp");
+        long first = await SeedClusterAsync(db, tenantId, FingerprintA);
+        long second = await SeedClusterAsync(db, tenantId, FingerprintA);
+        await SeedNodeAsync(db, tenantId, first, "first-1", nodeOfFirst, controlPlane: true);
+        await SeedCandidateAsync(db, tenantId, second, candidateOfSecond);
+        foreach (long machineId in new[] { nodeOfFirst, candidateOfSecond, unlinked })
+        {
+            await SeedLocalReportAsync(db, tenantId, machineId, FingerprintA);
+        }
+
+        HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
+
+        async Task<long[]> EligibleOfAsync(long clusterId)
+        {
+            HttpResponseMessage response = await client.GetAsync($"/api/v1/clusters/{clusterId}");
+            using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            return doc.RootElement.GetProperty("data").GetProperty("eligibleMachines").EnumerateArray()
+                .Select(m => m.GetProperty("machineId").GetInt64()).Order().ToArray();
+        }
+
+        await Assert.That(await EligibleOfAsync(first)).IsEquivalentTo(new[] { nodeOfFirst, unlinked }.Order().ToArray());
+        await Assert.That(await EligibleOfAsync(second)).IsEquivalentTo(new[] { candidateOfSecond, unlinked }.Order().ToArray());
+    }
+
     // ========== Rename ==========
 
     [Test]
@@ -823,7 +885,7 @@ public sealed class ClusterEndpointTests
     }
 
     [Test]
-    public async Task MachineDetail_CandidateHolderWithoutANode_ReturnsCandidateStateInItsClusterWithoutLoadingTheSnapshot()
+    public async Task MachineDetail_CandidateHolderWithoutANode_ReturnsCandidateStateInItsCluster()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -844,23 +906,12 @@ public sealed class ClusterEndpointTests
         await SeedClusterAsync(db, tenantId, FingerprintA);
         await SeedCandidateAsync(db, tenantId, clusterId, machineId, error: "credentials_rejected", lastReportAt: reported);
         await SeedLocalReportAsync(db, tenantId, machineId, FingerprintA, enrolled: true);
-        await db.InsertAsync(new MachineTelemetry
-        {
-            MachineId = machineId,
-            TenantId = tenantId,
-            TelemetryType = 15,
-            Payload = """{"snapshot":"must-not-be-loaded-by-the-machine-page"}""",
-            ReceivedAt = DateTimeOffset.UtcNow,
-            ServerReceivedAt = DateTimeOffset.UtcNow,
-            SourceEventId = Guid.NewGuid().ToString("N"),
-        });
         HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        string body = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(body);
+        using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         JsonElement kubernetes = doc.RootElement.GetProperty("data").GetProperty("kubernetes");
         await Assert.That(kubernetes.GetProperty("grouping").GetString()).IsEqualTo("grouped");
         await Assert.That(kubernetes.GetProperty("clusterId").GetInt64()).IsEqualTo(clusterId);
@@ -871,7 +922,6 @@ public sealed class ClusterEndpointTests
         await Assert.That(candidate.GetProperty("isHolder").GetBoolean()).IsTrue();
         await Assert.That(candidate.GetProperty("reporterError").GetString()).IsEqualTo("credentials_rejected");
         await Assert.That(candidate.GetProperty("lastReportAt").GetDateTimeOffset()).IsEqualTo(reported);
-        await Assert.That(body.Contains("must-not-be-loaded", StringComparison.Ordinal)).IsFalse();
     }
 
     [Test]

@@ -201,6 +201,19 @@ public interface IKubernetesInventoryRepository
         int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct);
 
     /// <summary>
+    /// Returns which of the given machines are already a node or a reporter candidate of a different
+    /// cluster than <paramref name="clusterId"/>, in one query. Only the tenant's own rows are read. It
+    /// tells a machine that merely holds a CA shared by several clusters from one that is known to belong
+    /// to another of them.
+    /// </summary>
+    /// <param name="tenantId">The tenant the nodes and candidate rows must belong to.</param>
+    /// <param name="clusterId">The cluster the machines are being considered for; its own rows do not count.</param>
+    /// <param name="machineIds">The machines to look up.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyCollection<long>> GetMachineIdsLinkedToOtherClustersAsync(
+        int tenantId, long clusterId, IReadOnlyCollection<long> machineIds, CancellationToken ct);
+
+    /// <summary>
     /// Returns the names of the given machines in one query. Only machines of the tenant are
     /// returned, so an id belonging to another tenant's machine is absent from the result, as is an
     /// unknown id.

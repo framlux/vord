@@ -10,13 +10,14 @@ using System.Diagnostics.Metrics;
 namespace Framlux.FleetManagement.Test.Observability;
 
 /// <summary>
-/// Pins the Kubernetes projection failure series. A row the projector skips is lost from the
-/// inventory for good, so this counter is the only evidence that it happened; the reason tag must
-/// match what an alert rule is written against, and the series must exist before the first failure.
+/// Pins the Kubernetes failure series. A row the projector skips is lost from the inventory for good,
+/// so its counter is the only evidence that it happened; the reason tag must match what an alert rule
+/// is written against, and every series must exist before the first failure.
 /// </summary>
 public sealed class KubernetesInventoryMetricsTests
 {
     private const string Instrument = "vord.kubernetes.projection_failures";
+    private const string CapabilityInstrument = "vord.kubernetes.capability_read_failures";
 
     private static (KubernetesInventoryMetrics Metrics, IMeterFactory Factory) Build()
     {
@@ -61,5 +62,33 @@ public sealed class KubernetesInventoryMetricsTests
 
         string[] reasons = [.. measurements.Select(measurement => (string)measurement.Tags["reason"]!)];
         await Assert.That(reasons.Order().ToArray()).IsEquivalentTo(new[] { "apply_failed", "invalid_payload", "retries_exhausted" });
+    }
+
+    [Test]
+    public async Task RecordCapabilityReadFailure_RecordsOneUntaggedMeasurement()
+    {
+        // Intent: the counter is fleet-wide, so a tenant or machine tag must never creep in.
+        (KubernetesInventoryMetrics metrics, IMeterFactory factory) = Build();
+        using MetricCollector<long> failures = new(factory, VordMeter.Name, CapabilityInstrument);
+
+        metrics.RecordCapabilityReadFailure();
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task InitialiseSeries_RecordsAZeroForTheCapabilityReadFailures()
+    {
+        (KubernetesInventoryMetrics metrics, IMeterFactory factory) = Build();
+        using MetricCollector<long> failures = new(factory, VordMeter.Name, CapabilityInstrument);
+
+        metrics.InitialiseSeries();
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(0L);
     }
 }

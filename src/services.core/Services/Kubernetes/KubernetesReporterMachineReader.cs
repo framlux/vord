@@ -21,11 +21,15 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 /// A machine is eligible when its latest local report from the last seven days says it runs a control plane
 /// and holds a cluster-admin credential, which is the rule the command check applies, and it either belongs
 /// to the cluster by a node or a candidate row or reports the cluster's CA fingerprint. The fingerprint is
-/// what finds a k0s controller, or a k3s server run with its agent disabled, before it has enrolled.
+/// what finds a k0s controller, or a k3s server run with its agent disabled, before it has enrolled. Clusters
+/// of one tenant can share a CA, so a machine that matches by fingerprint alone is left out once it is known
+/// to be a node or candidate of a different cluster.
 /// </para>
 /// <para>
-/// Every read is one query for however many machines there are: the reports, the online state, the
-/// capabilities and the authorized keys are each fetched for the whole set at once.
+/// Every read is one query for however many machines there are: the reports, the other-cluster links, the
+/// online state, the capabilities and the authorized keys are each fetched for the whole set at once. The
+/// capabilities live in Redis, which nothing else on the page needs, so a failed read costs only that one
+/// field: it is reported as unknown (null) and counted.
 /// </para>
 /// </remarks>
 public sealed class KubernetesReporterMachineReader
@@ -37,6 +41,7 @@ public sealed class KubernetesReporterMachineReader
     private readonly IMachinePingService _pingService;
     private readonly IQuotaPauseService _quotaPause;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly KubernetesInventoryMetrics _kubernetesMetrics;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<KubernetesReporterMachineReader> _logger;
 
@@ -51,6 +56,7 @@ public sealed class KubernetesReporterMachineReader
         IMachinePingService pingService,
         IQuotaPauseService quotaPause,
         QuotaPauseMetrics quotaPauseMetrics,
+        KubernetesInventoryMetrics kubernetesMetrics,
         TimeProvider timeProvider,
         ILogger<KubernetesReporterMachineReader> logger)
     {
@@ -61,6 +67,7 @@ public sealed class KubernetesReporterMachineReader
         ArgumentNullException.ThrowIfNull(pingService);
         ArgumentNullException.ThrowIfNull(quotaPause);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(kubernetesMetrics);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -71,6 +78,7 @@ public sealed class KubernetesReporterMachineReader
         _pingService = pingService;
         _quotaPause = quotaPause;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _kubernetesMetrics = kubernetesMetrics;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -135,7 +143,8 @@ public sealed class KubernetesReporterMachineReader
 
     /// <summary>
     /// Reads the latest local report of every active machine of the tenant in one query and keeps those of
-    /// machines that can enrol and belong to the cluster.
+    /// machines that can enrol and belong to the cluster. Only active machines are asked about, which is
+    /// what keeps a deleted machine out whatever rows still name it.
     /// </summary>
     private async Task<Dictionary<long, KubernetesNodePayload>> FindEligibleReportsAsync(
         int tenantId,
@@ -160,25 +169,37 @@ public sealed class KubernetesReporterMachineReader
         IReadOnlyDictionary<long, string> payloads = await _kubernetesRepo.GetLatestKubernetesNodePayloadsAsync(
             tenantId, activeMachineIds, serverReceivedAfter, ct);
 
-        HashSet<long> active = activeMachineIds.ToHashSet();
+        List<long> matchedByCaOnly = [];
         foreach (KeyValuePair<long, string> stored in payloads)
         {
-            if (active.Contains(stored.Key) == false)
-            {
-                continue;
-            }
-
             KubernetesNodePayload? report = KubernetesNodePayloadNormaliser.NormaliseJson(stored.Value);
             if (KubernetesCommandEligibility.CanEnrol(report) == false)
             {
                 continue;
             }
 
-            // A report without a usable fingerprint holds no CA, and the cluster's own is never empty.
-            bool holdsTheCa = string.Equals(report!.CaFingerprint, cluster.CaFingerprint, StringComparison.Ordinal);
-            if (members.Contains(stored.Key) || holdsTheCa)
+            if (members.Contains(stored.Key))
             {
+                eligible[stored.Key] = report!;
+            }
+            else if (string.Equals(report!.CaFingerprint, cluster.CaFingerprint, StringComparison.Ordinal))
+            {
+                // An unusable fingerprint is normalised to empty, and the cluster's own is never empty, so
+                // only a report that really carries this cluster's CA gets here.
+                matchedByCaOnly.Add(stored.Key);
                 eligible[stored.Key] = report;
+            }
+        }
+
+        if (matchedByCaOnly.Count > 0)
+        {
+            // Clusters of one tenant can share a CA, so a fingerprint says only that the machine might
+            // belong here. One already known to be a node or candidate of another cluster does not.
+            IReadOnlyCollection<long> linkedElsewhere = await _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
+                tenantId, cluster.Id, matchedByCaOnly, ct);
+            foreach (long machineId in linkedElsewhere)
+            {
+                eligible.Remove(machineId);
             }
         }
 
@@ -199,7 +220,7 @@ public sealed class KubernetesReporterMachineReader
 
         List<long> ids = reports.Keys.ToList();
         QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId, ct);
-        Dictionary<long, ulong> capabilities = await _pingService.GetAgentCapabilitiesBatchAsync(ids);
+        Dictionary<long, ulong>? capabilities = await TryReadCapabilitiesAsync(tenantId, ids);
         IReadOnlyDictionary<long, IReadOnlyList<int>> keys = await _signingKeyRepo.GetActiveSigningKeyIdsForMachinesAsync(tenantId, ids, ct);
 
         return ids
@@ -209,13 +230,36 @@ public sealed class KubernetesReporterMachineReader
                 MachineName = names.GetValueOrDefault(id) ?? string.Empty,
                 Online = online.Contains(id),
                 IsPaused = cutoff.IsPaused(id),
-                RemoteCommandsEnabled = AgentCapabilities.HasRemoteCommands(capabilities.GetValueOrDefault(id)),
+                RemoteCommandsEnabled = (capabilities is null) ? null : AgentCapabilities.HasRemoteCommands(capabilities.GetValueOrDefault(id)),
                 Enrolled = reports[id].ReporterEnrolled,
                 AuthorizedSigningKeyIds = keys.TryGetValue(id, out IReadOnlyList<int>? keyIds) ? keyIds.ToList() : [],
             })
             .OrderBy(m => m.MachineName, StringComparer.Ordinal)
             .ThenBy(m => m.MachineId)
             .ToList();
+    }
+
+    /// <summary>
+    /// Reads the machines' capability masks, or returns null when the store cannot be read. The masks only
+    /// say whether remote commands are enabled, so a failure is logged and counted and the page goes on
+    /// without them, rather than failing for a fact the rest of it does not depend on. Redis raises several
+    /// kinds of exception, so any is absorbed except a cancellation, which still cancels the request.
+    /// </summary>
+    private async Task<Dictionary<long, ulong>?> TryReadCapabilitiesAsync(int tenantId, List<long> machineIds)
+    {
+        try
+        {
+            return await _pingService.GetAgentCapabilitiesBatchAsync(machineIds);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _kubernetesMetrics.RecordCapabilityReadFailure();
+            _logger.LogWarning(
+                ex, "Could not read agent capabilities for {MachineCount} machines of tenant {TenantId}; reporting remote commands as unknown",
+                machineIds.Count, tenantId);
+
+            return null;
+        }
     }
 
     /// <summary>

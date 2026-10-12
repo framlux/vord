@@ -16,6 +16,12 @@ public sealed class InMemoryMachinePingService : IMachinePingService
 {
     private readonly ConcurrentDictionary<long, ulong> _capabilities = new();
 
+    /// <summary>
+    /// When set, every capability read throws it, as a Redis outage would, so a test can prove what a
+    /// surface does when the capabilities cannot be read. Writes are unaffected.
+    /// </summary>
+    public Exception? ReadFailure { get; set; }
+
     /// <inheritdoc/>
     public Task SetAgentCapabilitiesAsync(long machineId, ulong capabilities)
     {
@@ -27,6 +33,11 @@ public sealed class InMemoryMachinePingService : IMachinePingService
     /// <inheritdoc/>
     public Task<ulong> GetAgentCapabilitiesAsync(long machineId)
     {
+        if (ReadFailure is not null)
+        {
+            throw ReadFailure;
+        }
+
         _capabilities.TryGetValue(machineId, out ulong capabilities);
 
         return Task.FromResult(capabilities);
@@ -35,6 +46,11 @@ public sealed class InMemoryMachinePingService : IMachinePingService
     /// <inheritdoc/>
     public Task<Dictionary<long, ulong>> GetAgentCapabilitiesBatchAsync(IEnumerable<long> machineIds)
     {
+        if (ReadFailure is not null)
+        {
+            throw ReadFailure;
+        }
+
         Dictionary<long, ulong> result = new();
         foreach (long machineId in machineIds)
         {

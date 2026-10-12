@@ -8,10 +8,13 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Kubernetes;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 
 namespace Framlux.FleetManagement.Test.Services.Kubernetes;
@@ -26,6 +29,8 @@ public sealed class KubernetesReporterMachineReaderTests
     private const long ClusterId = 11;
 
     private const string Fingerprint = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
+    private const string CapabilityFailureInstrument = "vord.kubernetes.capability_read_failures";
+
     private const string OtherFingerprint = "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978";
 
     private static readonly DateTimeOffset Now = new(2026, 10, 12, 9, 30, 0, TimeSpan.Zero);
@@ -43,8 +48,10 @@ public sealed class KubernetesReporterMachineReaderTests
     private Dictionary<long, IReadOnlyList<int>> _keys = new();
     private List<MachineStateSummary> _summaries = [];
     private List<long> _activeMachineIds = [];
+    private readonly List<long> _linkedToOtherClusters = [];
+    private readonly IMeterFactory _meterFactory = TestMetricsFactory.CreateMeterFactory();
 
-    private KubernetesReporterMachineReader CreateReader(IQuotaPauseService? quotaPause = null)
+    private KubernetesReporterMachineReader CreateReader(IQuotaPauseService? quotaPause = null, Exception? capabilityFailure = null)
     {
         _machineRepo.GetActiveMachineIdsForTenantAsync(TenantId, Arg.Any<CancellationToken>()).Returns(_ => _activeMachineIds);
         _kubernetesRepo.GetLatestKubernetesNodePayloadsAsync(
@@ -72,9 +79,22 @@ public sealed class KubernetesReporterMachineReaderTests
         _pingService.GetAgentCapabilitiesBatchAsync(Arg.Any<IEnumerable<long>>())
             .Returns(call =>
             {
+                if (capabilityFailure is not null)
+                {
+                    throw capabilityFailure;
+                }
+
                 IEnumerable<long> asked = call.ArgAt<IEnumerable<long>>(0);
 
-                return asked.ToDictionary(id => id, id => _capabilities.GetValueOrDefault(id));
+                return Task.FromResult(asked.ToDictionary(id => id, id => _capabilities.GetValueOrDefault(id)));
+            });
+        _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
+                TenantId, ClusterId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                IReadOnlyCollection<long> asked = call.ArgAt<IReadOnlyCollection<long>>(2);
+
+                return (IReadOnlyCollection<long>)_linkedToOtherClusters.Where(asked.Contains).ToList();
             });
         _signingKeyRepo.GetActiveSigningKeyIdsForMachinesAsync(TenantId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
             .Returns(call =>
@@ -92,6 +112,7 @@ public sealed class KubernetesReporterMachineReaderTests
             _pingService,
             quotaPause ?? TestQuotaPause.Nothing(),
             TestMetricsFactory.CreateQuotaPauseMetrics(),
+            new KubernetesInventoryMetrics(_meterFactory),
             _time,
             NullLogger<KubernetesReporterMachineReader>.Instance);
     }
@@ -278,17 +299,91 @@ public sealed class KubernetesReporterMachineReaderTests
     }
 
     [Test]
-    public async Task LoadAsync_MemberThatIsNotAnActiveMachine_IsNotEligible()
+    public async Task LoadAsync_MachinesThatAreNotActive_AreNeverAskedAboutAndSoNeverEligible()
     {
-        // Intent: a machine that was deleted can still have telemetry and a node row, but cannot be
-        // sent a command, so it must not be offered.
+        // Intent: a deleted machine can keep telemetry, a node row and a candidate row, but cannot be sent
+        // a command. What keeps it out is that the report query is given the tenant's active machine ids
+        // only, so the deleted machine's report is never read, however it is related to the cluster.
+        Machine(21, "active-host", PayloadJson());
         Machine(32, "deleted-host", PayloadJson(), active: false);
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
             TenantId, Cluster(), [NodeOf(32)], [CandidateOf(32)], new Dictionary<long, string>(), CancellationToken.None);
 
-        await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
+        await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 21L });
+        await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
+            TenantId,
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.SequenceEqual(new long[] { 21 })),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ========== Eligible machines: shared CA ==========
+
+    [Test]
+    public async Task LoadAsync_MachineThatOnlyHoldsTheCaButIsLinkedToAnotherCluster_IsNotEligible()
+    {
+        // Intent: two clusters of one tenant can share a CA until a snapshot tells them apart. A machine
+        // already known to be a node or candidate of the other one must not be offered for this cluster
+        // just because the fingerprint matches.
+        Machine(24, "belongs-elsewhere", PayloadJson());
+        Machine(25, "free", PayloadJson());
+        _linkedToOtherClusters.Add(24);
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 25L });
+    }
+
+    [Test]
+    public async Task LoadAsync_MemberOfThisClusterAlsoLinkedElsewhere_StaysEligible()
+    {
+        // Intent: only a match by fingerprint alone is refused. A machine that is a node or candidate of
+        // this cluster is a member whatever else its rows say, because the projection repairs a transient
+        // disagreement in favour of the node.
+        Machine(26, "node-here", PayloadJson());
+        Machine(27, "candidate-here", PayloadJson());
+        _linkedToOtherClusters.AddRange([26, 27]);
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(26)], [CandidateOf(27)], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 26L, 27L });
+    }
+
+    [Test]
+    public async Task LoadAsync_FingerprintOnlyMachines_AreCheckedForOtherClustersInOneBatch()
+    {
+        Machine(21, "member", PayloadJson());
+        Machine(22, "a", PayloadJson());
+        Machine(23, "b", PayloadJson());
+        Machine(24, "c", PayloadJson());
+        Machine(25, "elsewhere-fingerprint", PayloadJson(fingerprint: OtherFingerprint));
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await _kubernetesRepo.Received(1).GetMachineIdsLinkedToOtherClustersAsync(
+            TenantId,
+            ClusterId,
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 22, 23, 24 })),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task LoadAsync_NoFingerprintOnlyMachines_SkipsTheOtherClusterLookup()
+    {
+        Machine(21, "member", PayloadJson());
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await _kubernetesRepo.DidNotReceive().GetMachineIdsLinkedToOtherClustersAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -364,7 +459,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachines result = await reader.LoadAsync(
             TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
 
-        Dictionary<long, bool> enabled = result.EligibleMachines.ToDictionary(m => m.MachineId, m => m.RemoteCommandsEnabled);
+        Dictionary<long, bool?> enabled = result.EligibleMachines.ToDictionary(m => m.MachineId, m => m.RemoteCommandsEnabled);
         await Assert.That(enabled[21]).IsTrue();
         await Assert.That(enabled[22]).IsFalse();
         await Assert.That(enabled[23]).IsFalse();
@@ -436,6 +531,68 @@ public sealed class KubernetesReporterMachineReaderTests
             TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Single().AuthorizedSigningKeyIds.Count).IsEqualTo(0);
+    }
+
+    // ========== Eligible machines: unreadable capabilities ==========
+
+    [Test]
+    public async Task LoadAsync_CapabilityReadFails_ListsTheMachinesWithRemoteCommandsUnknown()
+    {
+        // Intent: the capability bits live in Redis, which the rest of the page does not need, so an outage
+        // there must cost only that one fact. Every other field of every machine is still reported, and the
+        // unknown is distinguishable from "not enabled".
+        Machine(21, "cp-host", PayloadJson(reporterEnrolled: true));
+        Machine(22, "cp-two", PayloadJson());
+        Summary(21, 0);
+        _keys[21] = [3];
+        _capabilities[21] = 1;
+        KubernetesReporterMachineReader reader = CreateReader(capabilityFailure: new InvalidOperationException("redis unavailable"));
+        using MetricCollector<long> failures = new(_meterFactory, VordMeter.Name, CapabilityFailureInstrument);
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Count).IsEqualTo(2);
+        KubernetesEligibleMachineDto first = result.EligibleMachines.Single(m => m.MachineId == 21);
+        await Assert.That(first.RemoteCommandsEnabled).IsNull();
+        await Assert.That(first.MachineName).IsEqualTo("cp-host");
+        await Assert.That(first.Online).IsTrue();
+        await Assert.That(first.Enrolled).IsTrue();
+        await Assert.That(first.AuthorizedSigningKeyIds.ToArray()).IsEquivalentTo(new[] { 3 });
+        await Assert.That(result.EligibleMachines.Single(m => m.MachineId == 22).RemoteCommandsEnabled).IsNull();
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task LoadAsync_CapabilityReadSucceeds_RecordsNoFailureAndReportsKnownValues()
+    {
+        Machine(21, "enabled", PayloadJson());
+        Machine(22, "disabled", PayloadJson());
+        _capabilities[21] = 1;
+        KubernetesReporterMachineReader reader = CreateReader();
+        using MetricCollector<long> failures = new(_meterFactory, VordMeter.Name, CapabilityFailureInstrument);
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+        await Assert.That(result.EligibleMachines.Single(m => m.MachineId == 21).RemoteCommandsEnabled == true).IsTrue();
+        await Assert.That(result.EligibleMachines.Single(m => m.MachineId == 22).RemoteCommandsEnabled == false).IsTrue();
+    }
+
+    [Test]
+    public async Task LoadAsync_CapabilityReadCancelled_StillCancels()
+    {
+        // Intent: a cancelled request is not a Redis failure to absorb.
+        Machine(21, "cp-host", PayloadJson());
+        KubernetesReporterMachineReader reader = CreateReader(capabilityFailure: new OperationCanceledException());
+
+        await Assert.That(async () => await reader.LoadAsync(
+                TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None))
+            .Throws<OperationCanceledException>();
     }
 
     // ========== Candidates ==========
@@ -522,39 +679,43 @@ public sealed class KubernetesReporterMachineReaderTests
     {
         await Assert.That(() => new KubernetesReporterMachineReader(
             null!, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, null!, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, null!, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, null!, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, null!, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, null!,
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            null!, _time, NullLogger<KubernetesReporterMachineReader>.Instance))
+            null!, TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), null!, NullLogger<KubernetesReporterMachineReader>.Instance))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), null!, _time, NullLogger<KubernetesReporterMachineReader>.Instance))
             .Throws<ArgumentNullException>();
         await Assert.That(() => new KubernetesReporterMachineReader(
             _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
-            TestMetricsFactory.CreateQuotaPauseMetrics(), _time, null!))
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), null!, NullLogger<KubernetesReporterMachineReader>.Instance))
+            .Throws<ArgumentNullException>();
+        await Assert.That(() => new KubernetesReporterMachineReader(
+            _kubernetesRepo, _machineRepo, _machineStateRepo, _signingKeyRepo, _pingService, TestQuotaPause.Nothing(),
+            TestMetricsFactory.CreateQuotaPauseMetrics(), TestMetricsFactory.CreateKubernetesInventoryMetrics(), _time, null!))
             .Throws<ArgumentNullException>();
     }
 }

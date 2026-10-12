@@ -59,4 +59,21 @@ public sealed class KubernetesInventoryProjectionRegistrationTests
 
         await Assert.That(initialisable.OfType<KubernetesInventoryMetrics>().Count()).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task ApiServerHost_RegistersTheKubernetesMetricsTheClusterPageRecordsInto()
+    {
+        // Intent: the cluster detail runs in the API server and counts capability reads that fail, so
+        // the instrument class must be resolvable there and its series pre-recorded, not only in the worker.
+        IConfiguration configuration = new ConfigurationBuilder().Build();
+        ServiceCollection services = new();
+        services.AddLogging();
+        services.AddCoreObservability(configuration, ObservabilityHost.ApiServer);
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        IInitialisableMetrics[] initialisable = [.. provider.GetServices<IInitialisableMetrics>()];
+
+        await Assert.That(initialisable.OfType<KubernetesInventoryMetrics>().Count()).IsEqualTo(1);
+        await Assert.That(provider.GetRequiredService<KubernetesInventoryMetrics>()).IsNotNull();
+    }
 }
