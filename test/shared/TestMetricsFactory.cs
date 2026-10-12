@@ -116,6 +116,15 @@ public static class TestMetricsFactory
     }
 
     /// <summary>
+    /// Creates Kubernetes inventory instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Kubernetes inventory metrics ready to record into.</returns>
+    public static KubernetesInventoryMetrics CreateKubernetesInventoryMetrics()
+    {
+        return new KubernetesInventoryMetrics(CreateMeterFactory());
+    }
+
+    /// <summary>
     /// Creates projection instruments on a fresh meter factory, backed by a scope factory that
     /// resolves nothing. Intended for tests that need the dependency but never collect from it.
     /// </summary>
