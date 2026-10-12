@@ -363,7 +363,8 @@ function sparseDetail(machine: MachineDto, healthStatus: MachineHealthStatus): M
 		totalServices: 0,
 		recentSshSessions: [],
 		telemetryLastUpdated: machine.lastPing,
-		agentVersion: null
+		agentVersion: null,
+		kubernetes: null
 	};
 }
 
@@ -506,7 +507,8 @@ const web01Detail: MachineDetailDto = {
 		{ user: 'deploy', sourceIp: '10.0.2.11', sourcePort: 44_021, action: 'connect', authMethod: 'publickey', timestamp: hoursAgo(3) }
 	],
 	telemetryLastUpdated: secondsAgo(12),
-	agentVersion: '1.16.0'
+	agentVersion: '1.16.0',
+	kubernetes: null
 };
 
 // Rich detail for db-primary — the Warning machine. Disk wearout at 84% is the
@@ -643,7 +645,8 @@ const dbPrimaryDetail: MachineDetailDto = {
 		{ user: 'postgres-ops', sourceIp: '10.0.0.50', sourcePort: 38_902, action: 'connect', authMethod: 'publickey', timestamp: hoursAgo(7) }
 	],
 	telemetryLastUpdated: secondsAgo(4),
-	agentVersion: '1.15.3'
+	agentVersion: '1.15.3',
+	kubernetes: null
 };
 
 // Build the detail map: rich entries for ID 1 and 3, sparse for everything else.

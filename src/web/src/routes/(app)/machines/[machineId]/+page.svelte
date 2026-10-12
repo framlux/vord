@@ -24,6 +24,7 @@
 	import PausedHostBanner from '$lib/components/machine/PausedHostBanner.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
 	import AgentVersionRow from '$lib/components/machine/AgentVersionRow.svelte';
+	import KubernetesSection from '$lib/components/machine/KubernetesSection.svelte';
 	import RemoveMachineControl from '$lib/components/machine/RemoveMachineControl.svelte';
 	import { CircleAlert, Terminal, Pencil, History, ShieldAlert } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
@@ -788,6 +789,7 @@
 							</div>
 						</div>
 					{/if}
+					<KubernetesSection kubernetes={machineDetail?.kubernetes ?? null} />
 				</div>
 			</div>
 

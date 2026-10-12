@@ -686,6 +686,65 @@ describe('ApiClient', () => {
             );
         });
 
+        it('should GET /api/v1/clusters and return the cluster list', async () => {
+            const clusters = [{ id: 4, name: 'k3s cp-1', displayName: null, distro: 'k3s', nodeCount: 3, managedNodeCount: 2, unmanagedNodeCount: 1, kubeletVersions: ['v1.31.4+k3s1'], reportingState: 'identity_only', firstSeenAt: '2026-10-01T00:00:00Z', lastSeenAt: '2026-10-11T00:00:00Z' }];
+            mockSuccess(clusters);
+            const result = await client.getClusters();
+            expect(result).toEqual(clusters);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters',
+                expect.objectContaining({ method: 'GET' })
+            );
+        });
+
+        it('should GET /api/v1/clusters/{id} and return the cluster with its nodes', async () => {
+            const cluster = { id: 4, name: 'k3s cp-1', caFingerprint: 'ab12', hasFingerprintMismatch: false, nodes: [] };
+            mockSuccess(cluster);
+            const result = await client.getCluster(4);
+            expect(result).toEqual(cluster);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({ method: 'GET' })
+            );
+        });
+
+        it('should reject with a 404 ApiError when the cluster does not exist', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 404,
+                statusText: 'Not Found',
+                json: () => Promise.resolve({ success: false, data: null, message: 'Cluster not found', errors: null })
+            });
+
+            await expect(client.getCluster(99)).rejects.toMatchObject({ status: 404 });
+        });
+
+        it('should PATCH /api/v1/clusters/{id} with the display name and return the updated cluster', async () => {
+            const updated = { id: 4, name: 'Production', displayName: 'Production' };
+            mockSuccess(updated);
+            const result = await client.renameCluster(4, 'Production');
+            expect(result).toEqual(updated);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({
+                    method: 'PATCH',
+                    body: JSON.stringify({ displayName: 'Production' })
+                })
+            );
+        });
+
+        it('should PATCH a null display name to reset the cluster to its default name', async () => {
+            mockSuccess({ id: 4, name: 'k3s cp-1', displayName: null });
+            await client.renameCluster(4, null);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({
+                    method: 'PATCH',
+                    body: JSON.stringify({ displayName: null })
+                })
+            );
+        });
+
         it('should GET /api/v1/machines/{id}/status and return status data', async () => {
             const statusData = { isOnline: true, lastPing: '2026-03-15T10:00:00Z' };
             mockSuccess(statusData);

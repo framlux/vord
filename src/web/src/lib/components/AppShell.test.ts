@@ -189,6 +189,29 @@ describe('AppShell', () => {
             expect(screen.getByText('SSH Sessions')).toBeInTheDocument();
         });
 
+        it('should show a Clusters entry after Machines, linking to the clusters list', () => {
+            setRoute('/dashboard');
+            const user = makeUser({
+                tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: '3' }]
+            });
+            render(AppShell, { props: { user } });
+
+            const machinesLink = screen.getByText('Machines').closest('a');
+            const clustersLink = screen.getByText('Clusters').closest('a');
+
+            expect(clustersLink).toHaveAttribute('href', '/clusters');
+            expect(clustersLink?.previousElementSibling).toBe(machinesLink);
+        });
+
+        it('should highlight Clusters on a cluster page and not Machines', () => {
+            setRoute('/clusters/12');
+            const user = makeUser();
+            render(AppShell, { props: { user } });
+
+            expect(screen.getByText('Clusters').closest('a')?.className).toContain('bg-primary-500');
+            expect(screen.getByText('Machines').closest('a')?.className).not.toContain('bg-primary-500');
+        });
+
         it('should show Register link for MachineAdmin users', () => {
             setRoute('/dashboard');
             const user = makeUser({

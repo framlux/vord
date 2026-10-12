@@ -395,6 +395,7 @@ function makeDetail(overrides: Partial<MachineDetailDto> = {}): MachineDetailDto
 		recentSshSessions: [],
 		telemetryLastUpdated: '2026-08-28T10:00:00Z',
 		agentVersion: null,
+		kubernetes: null,
 		...overrides
 	};
 }
@@ -406,6 +407,40 @@ function renderWithDetail(detail: MachineDetailDto) {
 		}
 	});
 }
+
+describe('machine detail Kubernetes identity', () => {
+	it('shows the Kubernetes section for a machine that reported Kubernetes state', () => {
+		renderWithDetail(
+			makeDetail({
+				kubernetes: {
+					local: {
+						distro: 'k3s',
+						kubeletVersion: 'v1.31.4+k3s1',
+						nodeName: 'cp-1',
+						nodeNameSource: 'certificate',
+						hasKubelet: true,
+						controlPlane: true,
+						adminCredentialPresent: true,
+						reporterEnrolled: false
+					},
+					node: null,
+					clusterId: 12,
+					clusterName: 'Production',
+					grouping: 'grouped'
+				}
+			})
+		);
+
+		expect(screen.getByTestId('kubernetes-section')).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Production' })).toHaveAttribute('href', '/clusters/12');
+	});
+
+	it('shows no Kubernetes section for a machine that is not a Kubernetes node', () => {
+		renderWithDetail(makeDetail({ kubernetes: null }));
+
+		expect(screen.queryByTestId('kubernetes-section')).not.toBeInTheDocument();
+	});
+});
 
 describe('machine detail CPU breakdown', () => {
 	it('shows the user, system and iowait components of the CPU figure', () => {

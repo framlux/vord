@@ -96,6 +96,22 @@ describe('audit log action labels', () => {
 		expect(screen.getByRole('option', { name: 'Hosts Paused' })).toBeInTheDocument();
 	});
 
+	it('shows a readable label for a cluster rename, not the raw action name', () => {
+		render(AuditLogPage, {
+			props: { data: makeData([makeEntry({ action: 'KubernetesClusterRenamed' })]) }
+		});
+
+		const table = screen.getByRole('table');
+		expect(within(table).getByText('Cluster Renamed')).toBeInTheDocument();
+		expect(within(table).queryByText('KubernetesClusterRenamed')).not.toBeInTheDocument();
+	});
+
+	it('offers a cluster rename as an action to filter by', () => {
+		render(AuditLogPage, { props: { data: makeData([]) } });
+
+		expect(screen.getByRole('option', { name: 'Cluster Renamed' })).toBeInTheDocument();
+	});
+
 	it('still falls back to the raw action name for an action it has no label for', () => {
 		render(AuditLogPage, {
 			props: { data: makeData([makeEntry({ action: 'SomeFutureAction' })]) }

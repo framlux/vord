@@ -42,6 +42,7 @@
 		RegistrationTokenRevoked: 'Token Revoked',
 		DataExportRequested: 'Data Export',
 		DataExportThrottled: 'Data Export Refused',
+		KubernetesClusterRenamed: 'Cluster Renamed',
 	};
 
 	const allActions = Object.keys(actionLabels);

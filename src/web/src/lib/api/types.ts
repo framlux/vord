@@ -212,6 +212,8 @@ export interface MachineDetailDto {
 	telemetryLastUpdated: string | null;
 	/** The running agent's build version, or null when the agent has not reported one. */
 	agentVersion: string | null;
+	/** What the machine reported about Kubernetes and its place in a cluster, or null when it has neither. */
+	kubernetes: MachineKubernetesDto | null;
 }
 
 export interface SystemInfoDto {
@@ -805,3 +807,68 @@ export interface SshHistoryResponse {
 	totalEvents: number;
 }
 
+/** How a machine relates to the Kubernetes clusters of its tenant. */
+export type KubernetesGrouping = 'grouped' | 'ambiguous' | 'unknown' | 'ungrouped';
+
+export interface KubernetesClusterSummaryDto {
+	id: number;
+	/** The name to show: the operator-chosen name when there is one, else the derived default. */
+	name: string;
+	/** The operator-chosen name as stored, or null while the cluster uses its derived name. */
+	displayName: string | null;
+	/** k3s, rke2, kubeadm, k0s, microk8s or unknown. */
+	distro: string;
+	nodeCount: number;
+	managedNodeCount: number;
+	unmanagedNodeCount: number;
+	kubeletVersions: string[];
+	/** How much of the cluster Vord can see. Always identity_only for now. */
+	reportingState: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+}
+
+export interface KubernetesNodeDto {
+	id: number;
+	nodeName: string;
+	controlPlane: boolean;
+	kubeletVersion: string | null;
+	/** The linked machine, or null while the node is not managed by Vord. */
+	machineId: number | null;
+	machineName: string | null;
+	/** True while the node reports a CA fingerprint different from its cluster's. */
+	fingerprintMismatch: boolean;
+	/** When the node's own machine last reported it, or null if only another source has. */
+	lastLocalReportAt: string | null;
+}
+
+export interface KubernetesClusterDetailDto extends KubernetesClusterSummaryDto {
+	caFingerprint: string;
+	/** True when any node reports a CA fingerprint different from the cluster's. */
+	hasFingerprintMismatch: boolean;
+	nodes: KubernetesNodeDto[];
+}
+
+export interface MachineKubernetesLocalDto {
+	distro: string;
+	/** Empty when no kubelet was found on the host. */
+	kubeletVersion: string;
+	nodeName: string;
+	/** Where the node name came from: certificate or hostname. */
+	nodeNameSource: string;
+	hasKubelet: boolean;
+	controlPlane: boolean;
+	adminCredentialPresent: boolean;
+	reporterEnrolled: boolean;
+}
+
+export interface MachineKubernetesDto {
+	/** The machine's latest local report from the past seven days, or null when there is none. */
+	local: MachineKubernetesLocalDto | null;
+	/** The node the machine is linked to, or null when it is not a known node. */
+	node: KubernetesNodeDto | null;
+	/** The cluster the machine belongs to, or null when it has none or the choice is ambiguous. */
+	clusterId: number | null;
+	clusterName: string | null;
+	grouping: KubernetesGrouping;
+}

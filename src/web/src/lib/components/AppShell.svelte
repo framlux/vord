@@ -6,6 +6,7 @@
     import {
         LayoutDashboard,
         Monitor,
+        Boxes,
         Terminal,
         Search,
         Settings,
@@ -172,6 +173,10 @@
             <a href="/machines" class={navItemClass('/machines')} onclick={onNavigate}>
                 <Monitor size={16} />
                 Machines
+            </a>
+            <a href="/clusters" class={navItemClass('/clusters')} onclick={onNavigate}>
+                <Boxes size={16} />
+                Clusters
             </a>
             {#if canAdminMachines(user)}
                 <a href="/machines/register" class={navItemClass('/machines/register')} onclick={onNavigate}>
