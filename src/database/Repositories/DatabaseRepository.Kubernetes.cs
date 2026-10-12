@@ -23,6 +23,9 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>The projection is a single stream, so its cursor table holds one row with this key.</summary>
     private const int KubernetesCursorRowId = 1;
 
+    /// <summary>The distro value a report carries when the host's layout matched no known distribution.</summary>
+    private const string UnknownKubernetesDistro = "unknown";
+
     /// <summary>
     /// How recently a node must have reported for its reported fingerprint to count as evidence about
     /// its cluster: a node that reported within this window is taking part in a rotation or reinstall.
@@ -261,9 +264,19 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         LocalReportOutcome outcome = LocalReportOutcome.Grouped;
         if (existing != null)
         {
-            // Established membership wins over whatever fingerprint the machine reports now.
+            // Established membership wins over whatever fingerprint the machine reports now, with one
+            // exception: a machine that reports the CA of exactly one other cluster has moved there.
             long existingClusterId = existing.ClusterId;
             cluster = await _db.KubernetesClusters.FirstAsync(c => (c.Id == existingClusterId) && (c.TenantId == tenantId), ct);
+
+            KubernetesCluster? movedTo = await FindClusterTheMachineMovedToAsync(cluster, report.CaFingerprint, ct);
+            if (movedTo != null)
+            {
+                _logger.LogInformation(
+                    "Kubernetes node {NodeName} of machine {MachineId} moved from cluster {PreviousClusterId} to cluster {ClusterId}",
+                    report.NodeName, machineId, cluster.Id, movedTo.Id);
+                cluster = movedTo;
+            }
         }
         else
         {
@@ -289,10 +302,10 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         }
 
         // The machine's previous link is cleared before the new one is set, which keeps the unique
-        // machine link satisfied however the node moves. Established membership put the report in the
-        // cluster of the machine's own node, so a different row can only mean the machine's node was
-        // renamed inside its cluster, for example from its hostname to its certificate name, and the
-        // old row is replaced rather than left as a second node.
+        // machine link satisfied however the node moves. A different row than the machine's own means
+        // its node was renamed inside its cluster, for example from its hostname to its certificate
+        // name, or that the machine moved to another cluster. Either way the old row is replaced rather
+        // than left behind as a second node.
         if ((existing != null) && ((target == null) || (existing.Id != target.Id)))
         {
             long existingId = existing.Id;
@@ -355,6 +368,18 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
                 .UpdateAsync(ct);
         }
 
+        // A distro the report could name replaces the stored one, so a cluster first seen by a host with
+        // an unrecognised layout learns its distro later; a report that could not name it changes nothing.
+        string distro = report.Distro;
+        bool distroKnown = (string.IsNullOrEmpty(distro) == false) && string.Equals(distro, UnknownKubernetesDistro, StringComparison.Ordinal) == false;
+        if (distroKnown && (string.Equals(distro, cluster.Distro, StringComparison.Ordinal) == false))
+        {
+            await _db.KubernetesClusters
+                .Where(c => c.Id == clusterId)
+                .Set(c => c.Distro, distro)
+                .UpdateAsync(ct);
+        }
+
         await ReKeyClusterIfRotationFinishedAsync(cluster, report.ServerReceivedAt, ct);
 
         return outcome;
@@ -363,8 +388,9 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>
     /// Finds the cluster for a machine that is not yet a node: the single cluster holding its CA
     /// fingerprint, the one of several sharing it that already has a node of this name, the single
-    /// cluster whose nodes recently reported the fingerprint (a rotation or reinstall in progress), or
-    /// a new cluster. Returns no cluster, with the reason, when the report cannot be placed.
+    /// cluster where most of the recently reporting nodes have reported the fingerprint (a rotation or
+    /// reinstall in progress), or a new cluster. Returns no cluster, with the reason, when the report
+    /// cannot be placed.
     /// </summary>
     private async Task<(KubernetesCluster? Cluster, LocalReportOutcome Outcome)> ResolveClusterForUnlinkedMachineAsync(
         LocalNodeReport report, CancellationToken ct)
@@ -407,14 +433,34 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             return (null, LocalReportOutcome.Ambiguous);
         }
 
-        // No cluster holds the fingerprint. If exactly one cluster has a node that reported it within
-        // the hour, this is a rotation or reinstall in progress and the machine belongs there.
+        // No cluster holds the fingerprint. If exactly one cluster has most of its recently reporting
+        // nodes on it, this is a rotation or reinstall in progress and the machine belongs there. A
+        // single node that drifted ahead of the others is not enough, so it cannot pull a newcomer into
+        // its cluster.
         DateTimeOffset recentSince = report.ServerReceivedAt - KubernetesRecentReportWindow;
-        List<long> joinable = await _db.KubernetesNodes
+        List<long> candidates = await _db.KubernetesNodes
             .Where(n => (n.TenantId == tenantId) && (n.ReportedCaFingerprint == fingerprint) && (n.LastLocalReportAt >= recentSince))
             .Select(n => n.ClusterId)
             .Distinct()
             .ToListAsync(ct);
+
+        List<long> joinable = [];
+        if (candidates.Count > 0)
+        {
+            List<KubernetesNode> recentNodes = await _db.KubernetesNodes
+                .Where(n => (n.TenantId == tenantId) && candidates.Contains(n.ClusterId) && (n.LastLocalReportAt >= recentSince))
+                .ToListAsync(ct);
+
+            foreach (long candidateId in candidates)
+            {
+                int recent = recentNodes.Count(n => n.ClusterId == candidateId);
+                int agreeing = recentNodes.Count(n => (n.ClusterId == candidateId) && string.Equals(n.ReportedCaFingerprint, fingerprint, StringComparison.Ordinal));
+                if ((agreeing * 2) > recent)
+                {
+                    joinable.Add(candidateId);
+                }
+            }
+        }
 
         if (joinable.Count == 1)
         {
@@ -435,6 +481,31 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         created.Id = await _db.InsertWithInt64IdentityAsync(created, token: ct);
 
         return (created, LocalReportOutcome.ClusterCreated);
+    }
+
+    /// <summary>
+    /// Returns the cluster a machine has moved to: the one other cluster in the tenant that holds the
+    /// fingerprint the machine reports now. A machine moves only when that is unambiguous: with no
+    /// fingerprint, a fingerprint its own cluster holds, or no other holder (as during a rotation, when
+    /// nobody holds the new CA yet) or several, it stays where it is.
+    /// </summary>
+    private async Task<KubernetesCluster?> FindClusterTheMachineMovedToAsync(
+        KubernetesCluster current, string? fingerprint, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(fingerprint) || string.Equals(fingerprint, current.CaFingerprint, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        long currentId = current.Id;
+        int tenantId = current.TenantId;
+        List<KubernetesCluster> holders = await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.Id != currentId) && (c.CaFingerprint == fingerprint))
+            .OrderBy(c => c.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        return holders.Count == 1 ? holders[0] : null;
     }
 
     /// <summary>

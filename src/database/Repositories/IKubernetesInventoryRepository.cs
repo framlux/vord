@@ -45,11 +45,12 @@ public interface IKubernetesInventoryRepository
 
     /// <summary>
     /// Applies one local report in its own transaction under the tenant's Kubernetes lock: resolves the
-    /// machine into a cluster by established membership or CA fingerprint, links or updates its node,
-    /// re-keys the cluster when a CA rotation has finished, and advances the projection cursor to the
-    /// report's telemetry id in the same transaction whatever the outcome. The method opens that
-    /// transaction itself, so it must not be called inside one: a transaction already open on the same
-    /// connection would make the nested begin fail.
+    /// machine into a cluster by established membership or CA fingerprint (a machine whose node reports
+    /// the CA of exactly one other cluster moves to it), links or updates its node, refreshes the
+    /// cluster's distro, re-keys the cluster when a CA rotation has finished, and advances the
+    /// projection cursor to the report's telemetry id in the same transaction whatever the outcome.
+    /// The method opens that transaction itself, so it must not be called inside one: a transaction
+    /// already open on the same connection would make the nested begin fail.
     /// </summary>
     /// <param name="report">The report to apply.</param>
     /// <param name="now">The time to record as the cursor's last advance.</param>

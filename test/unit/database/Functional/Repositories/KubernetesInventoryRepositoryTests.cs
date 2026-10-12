@@ -600,20 +600,22 @@ public class KubernetesInventoryRepositoryTests
     public async Task ApplyLocalReport_NewNodeDuringRotation_JoinsExistingCluster()
     {
         // Intent: a machine that reports a fingerprint no cluster holds yet, while exactly one cluster
-        // has a node that reported that fingerprint within the hour, is a node joining mid-rotation. It
-        // joins that cluster instead of founding a second one.
+        // has a majority of its recently reporting nodes on that fingerprint, is a node joining
+        // mid-rotation. It joins that cluster instead of founding a second one.
         using TestDatabaseFactory dbFactory = new();
         IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
         int tenantId = await SeedTenantAsync(dbFactory.Context);
-        long rotated = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long rotatedOne = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long rotatedTwo = await SeedMachineAsync(dbFactory.Context, tenantId);
         long unrotated = await SeedMachineAsync(dbFactory.Context, tenantId);
         long newcomer = await SeedMachineAsync(dbFactory.Context, tenantId);
         long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, T0);
-        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-1", rotated, FingerprintB, T0, mismatch: true);
-        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-2", unrotated, FingerprintA, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-1", rotatedOne, FingerprintB, T0, mismatch: true);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-2", rotatedTwo, FingerprintB, T0, mismatch: true);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-3", unrotated, FingerprintA, T0);
 
         LocalReportOutcome outcome = await repo.ApplyLocalNodeReportAsync(
-            Report(9, tenantId, newcomer, T0.AddMinutes(5), nodeName: "node-3", fingerprint: FingerprintB),
+            Report(9, tenantId, newcomer, T0.AddMinutes(5), nodeName: "node-4", fingerprint: FingerprintB),
             T0.AddMinutes(5), CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(LocalReportOutcome.Grouped);
@@ -677,20 +679,23 @@ public class KubernetesInventoryRepositoryTests
     }
 
     [Test]
-    public async Task ApplyLocalReport_ReKeyBlockedWhenAnotherClusterHoldsNewFingerprint()
+    public async Task ApplyLocalReport_ReKeyBlockedWhenOtherClustersHoldNewFingerprint()
     {
-        // Intent: a cluster never takes a fingerprint another cluster in the tenant already holds,
-        // because two clusters claiming one CA could no longer be told apart. The node that reports it
-        // stays flagged in its own cluster, which keeps its key.
+        // Intent: a cluster never takes a fingerprint other clusters in the tenant already hold, because
+        // clusters claiming one CA could no longer be told apart. With two other holders the node cannot
+        // be moved to either, so it stays flagged in its own cluster, which keeps its key.
         using TestDatabaseFactory dbFactory = new();
         IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
         int tenantId = await SeedTenantAsync(dbFactory.Context);
         long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
         long otherMachine = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long thirdMachine = await SeedMachineAsync(dbFactory.Context, tenantId);
         long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, T0);
         long holder = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, T0);
+        long secondHolder = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, T0);
         await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "node-1", machineId, FingerprintA, T0);
         await SeedNodeAsync(dbFactory.Context, tenantId, holder, "other-1", otherMachine, FingerprintB, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, secondHolder, "third-1", thirdMachine, FingerprintB, T0);
 
         await repo.ApplyLocalNodeReportAsync(
             Report(6, tenantId, machineId, T0.AddMinutes(5), nodeName: "node-1", fingerprint: FingerprintB),
@@ -722,6 +727,259 @@ public class KubernetesInventoryRepositoryTests
         await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync()).IsEqualTo(1);
         await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).CaFingerprint).IsEqualTo(FingerprintB);
         await Assert.That((await NodeOfMachineAsync(dbFactory.Context, machineId)).FingerprintMismatch).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_NodeMovedToAnExistingCluster_LeavesItsOldClusterBehind()
+    {
+        // Intent: a machine whose node belongs to one cluster but now reports the CA of exactly one other
+        // cluster in the tenant has moved clusters. Its node leaves the old cluster for the other one,
+        // and the cluster it left keeps its key and its remaining nodes, none of them flagged.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long m1 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m2 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long mover = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long mb = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterA = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, T0);
+        long clusterB = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterA, "a-1", m1, FingerprintA, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterA, "a-2", m2, FingerprintA, T0);
+        long oldRow = await SeedNodeAsync(dbFactory.Context, tenantId, clusterA, "a-3", mover, FingerprintA, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterB, "b-1", mb, FingerprintB, T0);
+
+        LocalReportOutcome outcome = await repo.ApplyLocalNodeReportAsync(
+            Report(10, tenantId, mover, T0.AddMinutes(10), nodeName: "a-3", fingerprint: FingerprintB),
+            T0.AddMinutes(10), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(LocalReportOutcome.Grouped);
+        KubernetesNode moved = await NodeOfMachineAsync(dbFactory.Context, mover);
+        await Assert.That(moved.ClusterId).IsEqualTo(clusterB);
+        await Assert.That(moved.Id == oldRow).IsFalse();
+        await Assert.That(moved.FingerprintMismatch).IsFalse();
+        await Assert.That(moved.ReportedCaFingerprint).IsEqualTo(FingerprintB);
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.Id == oldRow)).IsEqualTo(0);
+
+        List<KubernetesNode> remaining = await dbFactory.Context.KubernetesNodes.Where(n => n.ClusterId == clusterA).ToListAsync();
+        await Assert.That(remaining.Select(n => n.NodeName).OrderBy(n => n).ToList()).IsEquivalentTo(new List<string> { "a-1", "a-2" });
+        await Assert.That(remaining.Any(n => n.FingerprintMismatch)).IsFalse();
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterA)).CaFingerprint).IsEqualTo(FingerprintA);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterB)).CaFingerprint).IsEqualTo(FingerprintB);
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.ClusterId == clusterB)).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_NodeReportsCaHeldByTwoOtherClusters_StaysFlaggedInItsCluster()
+    {
+        // Intent: moving a node needs unambiguous evidence. When two other clusters hold the fingerprint
+        // the node reports, the report does not say which one it joined, so the node stays in its own
+        // cluster, flagged, instead of being moved on a guess.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long mover = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long sibling = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterA = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, T0);
+        await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, T0);
+        await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterA, "a-1", mover, FingerprintA, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterA, "a-2", sibling, FingerprintA, T0);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(10, tenantId, mover, T0.AddMinutes(10), nodeName: "a-1", fingerprint: FingerprintB),
+            T0.AddMinutes(10), CancellationToken.None);
+
+        KubernetesNode node = await NodeOfMachineAsync(dbFactory.Context, mover);
+        await Assert.That(node.ClusterId).IsEqualTo(clusterA);
+        await Assert.That(node.FingerprintMismatch).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_NodeMovedToABrandNewCluster_FollowsTheNewHostOnItsNextReport()
+    {
+        // Intent: one node of a cluster reporting a new CA alone is not a rotation, so a new host
+        // reporting that CA founds its own cluster instead of being pulled into the old one. The node
+        // that reported first then follows on its next report, and the old cluster keeps its key and its
+        // other nodes, none of them flagged.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long m1 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m2 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m3 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m5 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantId, m1, T0, nodeName: "n1"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(2, tenantId, m2, T0, nodeName: "n2"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(3, tenantId, m3, T0, nodeName: "n3"), T0, CancellationToken.None);
+        long clusterA = (await dbFactory.Context.KubernetesClusters.SingleAsync()).Id;
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(4, tenantId, m3, T0.AddMinutes(10), nodeName: "n3", fingerprint: FingerprintB), T0.AddMinutes(10), CancellationToken.None);
+        LocalReportOutcome newHost = await repo.ApplyLocalNodeReportAsync(
+            Report(5, tenantId, m5, T0.AddMinutes(11), nodeName: "n5", fingerprint: FingerprintB), T0.AddMinutes(11), CancellationToken.None);
+
+        await Assert.That(newHost).IsEqualTo(LocalReportOutcome.ClusterCreated);
+        long clusterB = (await NodeOfMachineAsync(dbFactory.Context, m5)).ClusterId;
+        await Assert.That(clusterB == clusterA).IsFalse();
+        await Assert.That((await NodeOfMachineAsync(dbFactory.Context, m3)).ClusterId).IsEqualTo(clusterA);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(6, tenantId, m3, T0.AddMinutes(25), nodeName: "n3", fingerprint: FingerprintB), T0.AddMinutes(25), CancellationToken.None);
+
+        await Assert.That((await NodeOfMachineAsync(dbFactory.Context, m3)).ClusterId).IsEqualTo(clusterB);
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.ClusterId == clusterB)).IsEqualTo(2);
+        List<KubernetesNode> remaining = await dbFactory.Context.KubernetesNodes.Where(n => n.ClusterId == clusterA).ToListAsync();
+        await Assert.That(remaining.Select(n => n.NodeName).OrderBy(n => n).ToList()).IsEquivalentTo(new List<string> { "n1", "n2" });
+        await Assert.That(remaining.Any(n => n.FingerprintMismatch)).IsFalse();
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterA)).CaFingerprint).IsEqualTo(FingerprintA);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterB)).CaFingerprint).IsEqualTo(FingerprintB);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_RotationWithMajorityRotated_NewNodeJoinsTheRotatingCluster()
+    {
+        // Intent: when two of a cluster's three recently reporting nodes already report the new CA, the
+        // rotation is well under way, so a new node reporting that CA joins the rotating cluster instead
+        // of founding a second one.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long m1 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m2 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m3 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m4 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantId, m1, T0, nodeName: "n1"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(2, tenantId, m2, T0, nodeName: "n2"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(3, tenantId, m3, T0, nodeName: "n3"), T0, CancellationToken.None);
+        long clusterA = (await dbFactory.Context.KubernetesClusters.SingleAsync()).Id;
+        await repo.ApplyLocalNodeReportAsync(
+            Report(4, tenantId, m1, T0.AddMinutes(10), nodeName: "n1", fingerprint: FingerprintB), T0.AddMinutes(10), CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(5, tenantId, m2, T0.AddMinutes(20), nodeName: "n2", fingerprint: FingerprintB), T0.AddMinutes(20), CancellationToken.None);
+
+        LocalReportOutcome outcome = await repo.ApplyLocalNodeReportAsync(
+            Report(6, tenantId, m4, T0.AddMinutes(30), nodeName: "n4", fingerprint: FingerprintB), T0.AddMinutes(30), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(LocalReportOutcome.Grouped);
+        await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync()).IsEqualTo(1);
+        KubernetesNode joined = await NodeOfMachineAsync(dbFactory.Context, m4);
+        await Assert.That(joined.ClusterId).IsEqualTo(clusterA);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterA)).CaFingerprint).IsEqualTo(FingerprintA);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_RotationWithMinorityRotated_NewNodeFoundsAClusterAndTheOthersFollow()
+    {
+        // Intent: one drifted node out of three is not a rotation, so a new node reporting its CA founds
+        // a cluster of its own. As the old cluster's nodes rotate they each move to it, the old cluster
+        // is left with no nodes, and garbage collection deletes it.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long m1 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m2 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m3 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long m4 = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantId, m1, T0, nodeName: "n1"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(2, tenantId, m2, T0, nodeName: "n2"), T0, CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(Report(3, tenantId, m3, T0, nodeName: "n3"), T0, CancellationToken.None);
+        long clusterA = (await dbFactory.Context.KubernetesClusters.SingleAsync()).Id;
+        await repo.ApplyLocalNodeReportAsync(
+            Report(4, tenantId, m1, T0.AddMinutes(10), nodeName: "n1", fingerprint: FingerprintB), T0.AddMinutes(10), CancellationToken.None);
+
+        LocalReportOutcome newNode = await repo.ApplyLocalNodeReportAsync(
+            Report(5, tenantId, m4, T0.AddMinutes(20), nodeName: "n4", fingerprint: FingerprintB), T0.AddMinutes(20), CancellationToken.None);
+
+        await Assert.That(newNode).IsEqualTo(LocalReportOutcome.ClusterCreated);
+        long clusterB = (await NodeOfMachineAsync(dbFactory.Context, m4)).ClusterId;
+        await Assert.That(clusterB == clusterA).IsFalse();
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(6, tenantId, m1, T0.AddMinutes(30), nodeName: "n1", fingerprint: FingerprintB), T0.AddMinutes(30), CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(7, tenantId, m2, T0.AddMinutes(40), nodeName: "n2", fingerprint: FingerprintB), T0.AddMinutes(40), CancellationToken.None);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(8, tenantId, m3, T0.AddMinutes(50), nodeName: "n3", fingerprint: FingerprintB), T0.AddMinutes(50), CancellationToken.None);
+
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.ClusterId == clusterB)).IsEqualTo(4);
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.ClusterId == clusterA)).IsEqualTo(0);
+        await Assert.That(await dbFactory.Context.KubernetesNodes.CountAsync(n => n.FingerprintMismatch)).IsEqualTo(0);
+
+        int deleted = await repo.CollectGarbageAsync(T0.AddMinutes(60), CancellationToken.None);
+
+        await Assert.That(deleted).IsEqualTo(1);
+        KubernetesCluster survivor = await dbFactory.Context.KubernetesClusters.SingleAsync();
+        await Assert.That(survivor.Id).IsEqualTo(clusterB);
+        await Assert.That(survivor.CaFingerprint).IsEqualTo(FingerprintB);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_RotationJoinCountsOnlyNodesThatReportedWithinTheHour()
+    {
+        // Intent: the majority is taken over the nodes that reported in the last hour. Two of three nodes
+        // on the new CA are a majority, but when one of them has been silent for more than an hour only
+        // one of two recent nodes agrees, which is a tie and not a majority, so the newcomer founds a
+        // cluster.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long rotatedRecent = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long rotatedSilent = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long unrotated = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long newcomer = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, T0);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "n1", rotatedRecent, FingerprintB, T0.AddMinutes(100), mismatch: true);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "n2", rotatedSilent, FingerprintB, T0.AddMinutes(20), mismatch: true);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "n3", unrotated, FingerprintA, T0.AddMinutes(100));
+
+        LocalReportOutcome outcome = await repo.ApplyLocalNodeReportAsync(
+            Report(9, tenantId, newcomer, T0.AddMinutes(110), nodeName: "n4", fingerprint: FingerprintB),
+            T0.AddMinutes(110), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(LocalReportOutcome.ClusterCreated);
+        await Assert.That((await NodeOfMachineAsync(dbFactory.Context, newcomer)).ClusterId == clusterId).IsFalse();
+    }
+
+    [Test]
+    [Arguments("unknown", "kubeadm", "kubeadm")]
+    [Arguments("k3s", "rke2", "rke2")]
+    [Arguments("k3s", "unknown", "k3s")]
+    [Arguments("kubeadm", "kubeadm", "kubeadm")]
+    public async Task ApplyLocalReport_ClusterDistroFollowsTheLatestKnownDistro(string stored, string reported, string expected)
+    {
+        // Intent: a cluster first seen by a host that could not name its distro learns it from a later
+        // report, and a later known distro replaces an earlier one, but a report that cannot name the
+        // distro never erases what the cluster already holds.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantId, machineId, T0, distro: stored), T0, CancellationToken.None);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(2, tenantId, machineId, T0.AddMinutes(15), distro: reported), T0.AddMinutes(15), CancellationToken.None);
+
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync()).Distro).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_SecondMachineWithAKnownDistro_RefreshesAClusterFoundedAsUnknown()
+    {
+        // Intent: the distro is refreshed for a machine joining the cluster as well as for an established
+        // node, so a cluster founded by a host with an unrecognised layout is named correctly as soon as
+        // any member reports a known distro.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long first = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long second = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantId, first, T0, nodeName: "n1", distro: "unknown"), T0, CancellationToken.None);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(2, tenantId, second, T0.AddMinutes(1), nodeName: "n2", distro: "rke2"), T0.AddMinutes(1), CancellationToken.None);
+
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync()).Distro).IsEqualTo("rke2");
     }
 
     [Test]
