@@ -68,6 +68,61 @@ public interface IKubernetesInventoryRepository
     Task<int> CollectGarbageAsync(DateTimeOffset now, CancellationToken ct);
 
     /// <summary>
+    /// Returns every Kubernetes cluster the tenant has, oldest first.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose clusters are listed.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyList<KubernetesCluster>> ListClustersAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns one of the tenant's clusters, or null when the id is unknown or belongs to another
+    /// tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant the cluster must belong to.</param>
+    /// <param name="clusterId">The cluster id.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<KubernetesCluster?> GetClusterAsync(int tenantId, long clusterId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the nodes of the given clusters, each with the name of the machine it is linked to.
+    /// Only nodes of the tenant are returned, so an id belonging to another tenant's cluster matches
+    /// nothing.
+    /// </summary>
+    /// <param name="tenantId">The tenant the clusters must belong to.</param>
+    /// <param name="clusterIds">The clusters whose nodes are wanted.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyList<KubernetesNodeWithMachine>> ListNodesAsync(
+        int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct);
+
+    /// <summary>
+    /// Sets or clears the operator-chosen name of one of the tenant's clusters. Takes the tenant's
+    /// Kubernetes lock, so it must run inside the caller's transaction.
+    /// </summary>
+    /// <param name="tenantId">The tenant the cluster must belong to.</param>
+    /// <param name="clusterId">The cluster to rename.</param>
+    /// <param name="displayName">The new name, or null to return to the derived name.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>True when the cluster exists in the tenant, false otherwise.</returns>
+    Task<bool> RenameClusterAsync(int tenantId, long clusterId, string? displayName, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the node a machine is linked to, or null when it is not linked to one.
+    /// </summary>
+    /// <param name="tenantId">The tenant the machine and node must belong to.</param>
+    /// <param name="machineId">The machine id.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<KubernetesNode?> GetNodeForMachineAsync(int tenantId, long machineId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the tenant's clusters that hold a CA fingerprint, oldest first. Several can share one
+    /// fingerprint.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose clusters are searched.</param>
+    /// <param name="caFingerprint">The lowercase hex SHA-256 CA fingerprint.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyList<KubernetesCluster>> ListClustersByFingerprintAsync(int tenantId, string caFingerprint, CancellationToken ct);
+
+    /// <summary>
     /// Takes a transaction-scoped advisory lock covering all of this tenant's Kubernetes inventory
     /// writes, so the projection, garbage collection and operator edits never interleave on one
     /// tenant. The caller must be inside a transaction: the lock releases when that transaction ends.

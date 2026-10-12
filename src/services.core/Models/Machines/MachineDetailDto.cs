@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Models.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 
 namespace Framlux.FleetManagement.Services.Core.Models.Machines;
@@ -86,4 +87,10 @@ public sealed class MachineDetailDto
 
     /// <summary>The running agent's build version, or null when the agent has not reported one.</summary>
     public string? AgentVersion { get; set; }
+
+    /// <summary>
+    /// What the machine reported about the Kubernetes it runs, the node it is linked to and its cluster,
+    /// or null when it has neither a recent report nor a linked node.
+    /// </summary>
+    public MachineKubernetesDto? Kubernetes { get; set; }
 }

@@ -90,6 +90,85 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyList<KubernetesCluster>> ListClustersAsync(int tenantId, CancellationToken ct)
+    {
+        List<KubernetesCluster> clusters = await _db.KubernetesClusters
+            .Where(c => c.TenantId == tenantId)
+            .OrderBy(c => c.Id)
+            .ToListAsync(ct);
+
+        return clusters;
+    }
+
+    /// <inheritdoc/>
+    public async Task<KubernetesCluster?> GetClusterAsync(int tenantId, long clusterId, CancellationToken ct)
+    {
+        return await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.Id == clusterId))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<KubernetesNodeWithMachine>> ListNodesAsync(
+        int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(clusterIds);
+
+        if (clusterIds.Count == 0)
+        {
+            return [];
+        }
+
+        // The machine is joined on the node's own tenant as well as its id, so a node never picks up the
+        // name of a machine that belongs to someone else.
+        List<long> ids = clusterIds.ToList();
+        List<KubernetesNodeWithMachine> rows = await (
+            from node in _db.KubernetesNodes
+            where (node.TenantId == tenantId) && ids.Contains(node.ClusterId)
+            from machine in _db.Machines
+                .Where(m => (m.Id == node.MachineId) && (m.TenantId == node.TenantId))
+                .DefaultIfEmpty()
+            orderby node.ClusterId, node.Id
+            select new KubernetesNodeWithMachine(node, machine.Name))
+            .ToListAsync(ct);
+
+        return rows;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> RenameClusterAsync(int tenantId, long clusterId, string? displayName, CancellationToken ct)
+    {
+        await AcquireKubernetesTenantLockAsync(tenantId, ct);
+
+        int updated = await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.Id == clusterId))
+            .Set(c => c.DisplayName, displayName)
+            .UpdateAsync(ct);
+
+        return updated > 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<KubernetesNode?> GetNodeForMachineAsync(int tenantId, long machineId, CancellationToken ct)
+    {
+        return await _db.KubernetesNodes
+            .Where(n => (n.TenantId == tenantId) && (n.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<KubernetesCluster>> ListClustersByFingerprintAsync(
+        int tenantId, string caFingerprint, CancellationToken ct)
+    {
+        List<KubernetesCluster> clusters = await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.CaFingerprint == caFingerprint))
+            .OrderBy(c => c.Id)
+            .ToListAsync(ct);
+
+        return clusters;
+    }
+
+    /// <inheritdoc/>
     public async Task<LocalReportOutcome> ApplyLocalNodeReportAsync(LocalNodeReport report, DateTimeOffset now, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(report);

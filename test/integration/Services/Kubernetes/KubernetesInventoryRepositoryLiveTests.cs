@@ -318,6 +318,123 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_RenameCluster_WaitsForTheTenantLockThenRenames()
+    {
+        // Intent: renaming a cluster is a Kubernetes write, so it takes the tenant's lock inside the
+        // caller's transaction. While another transaction holds the lock the rename must wait with the
+        // old name still in place, and once the holder finishes it completes. The wait is observed in
+        // the server's lock table, never by sleeping.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long machineId = await SeedMachineAsync(seedDb, tenantId);
+        long nodeId = await SeedLinkedNodeAsync(seedDb, tenantId, machineId);
+        long clusterId = (await seedDb.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).ClusterId;
+        string renamerName = NewApplicationName("renamer");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task<bool> rename;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            rename = Task.Run(async () =>
+            {
+                await using DatabaseContext renamerDb = CreateContext(renamerName);
+                DatabaseRepository renamer = CreateRepo(renamerDb);
+                using IDatabaseTransaction renameTransaction = await renamer.BeginTransactionAsync(CancellationToken.None);
+                bool renamed = await renamer.RenameClusterAsync(tenantId, clusterId, "Production", CancellationToken.None);
+                await renameTransaction.CommitAsync(CancellationToken.None);
+
+                return renamed;
+            });
+            bool blocked = await PostgresLockProbe.WaitUntilBlockedAsync(
+                _migratedConnectionString, renamerName, rename, failsafe.Token);
+
+            await Assert.That(blocked).IsTrue();
+            await Assert.That((await seedDb.KubernetesClusters.SingleAsync(c => c.Id == clusterId)).DisplayName).IsNull();
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        bool renamedAfterWait = await rename;
+
+        await Assert.That(renamedAfterWait).IsTrue();
+        await Assert.That((await seedDb.KubernetesClusters.SingleAsync(c => c.Id == clusterId)).DisplayName).IsEqualTo("Production");
+    }
+
+    [Test]
+    public async Task Live_ClusterReads_ScopeToTheTenantAndJoinTheLinkedMachineName()
+    {
+        // Intent: the API's cluster reads run on the production database exactly as on SQLite: the
+        // left join of a node to its machine yields the machine's name or null, and nothing of another
+        // tenant's shows through however its cluster id was obtained.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        long otherMachineId = await SeedMachineAsync(db, otherTenantId);
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = FingerprintA,
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+        });
+        long otherClusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = otherTenantId,
+            CaFingerprint = FingerprintA,
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "managed",
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "unmanaged",
+            LastLocalReportAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = otherTenantId,
+            ClusterId = otherClusterId,
+            NodeName = "foreign",
+            MachineId = otherMachineId,
+            LastLocalReportAt = seenAt,
+        });
+
+        IReadOnlyList<KubernetesNodeWithMachine> nodes = await repo.ListNodesAsync(tenantId, [clusterId, otherClusterId], CancellationToken.None);
+        IReadOnlyList<KubernetesCluster> clusters = await repo.ListClustersAsync(tenantId, CancellationToken.None);
+        IReadOnlyList<KubernetesCluster> byFingerprint = await repo.ListClustersByFingerprintAsync(tenantId, FingerprintA, CancellationToken.None);
+        KubernetesCluster? foreign = await repo.GetClusterAsync(tenantId, otherClusterId, CancellationToken.None);
+        KubernetesNode? foreignNode = await repo.GetNodeForMachineAsync(tenantId, otherMachineId, CancellationToken.None);
+        KubernetesNode? ownNode = await repo.GetNodeForMachineAsync(tenantId, machineId, CancellationToken.None);
+
+        await Assert.That(nodes.Count).IsEqualTo(2);
+        await Assert.That(nodes.Single(n => n.Node.NodeName == "managed").MachineName).IsEqualTo("kubernetes-live-machine");
+        await Assert.That(nodes.Single(n => n.Node.NodeName == "unmanaged").MachineName).IsNull();
+        await Assert.That(clusters.Count).IsEqualTo(1);
+        await Assert.That(byFingerprint.Count).IsEqualTo(1);
+        await Assert.That(byFingerprint[0].Id).IsEqualTo(clusterId);
+        await Assert.That(foreign).IsNull();
+        await Assert.That(foreignNode).IsNull();
+        await Assert.That(ownNode).IsNotNull();
+    }
+
+    [Test]
     public async Task Live_TenantPurge_WaitsForTheTenantLockThenRemovesTheKubernetesRows()
     {
         // Intent: the purge deletes a tenant's Kubernetes rows under the same per-tenant lock as the

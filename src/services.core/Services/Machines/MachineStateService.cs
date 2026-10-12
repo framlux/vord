@@ -7,7 +7,9 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Models.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Observability;
@@ -173,6 +175,7 @@ public sealed class MachineStateService : IMachineStateService
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        IKubernetesInventoryRepository kubernetesRepo = scope.ServiceProvider.GetRequiredService<IKubernetesInventoryRepository>();
 
         Machine? machine = await machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
@@ -207,6 +210,10 @@ public sealed class MachineStateService : IMachineStateService
         PackageUpdatesPayload? packages = DeserializePayload<PackageUpdatesPayload>(latestByType, TelemetryTypeIds.PackageUpdates);
         ServiceStatusPayload? services = DeserializePayload<ServiceStatusPayload>(latestByType, TelemetryTypeIds.ServiceStatus);
         AgentVersionPayload? agentVersion = DeserializePayload<AgentVersionPayload>(latestByType, TelemetryTypeIds.AgentVersion);
+        KubernetesNodePayload? kubernetesNode = DeserializePayload<KubernetesNodePayload>(latestByType, TelemetryTypeIds.KubernetesNode);
+
+        MachineKubernetesDto? kubernetes = await MachineKubernetesBuilder.BuildAsync(
+            kubernetesRepo, tenantId.Value, machine.Id, machine.Name, kubernetesNode, ct);
 
         List<ServiceEntryDto> failedServices = services?.Services
             .Where(s => string.Equals(s.ActiveState, "failed", StringComparison.OrdinalIgnoreCase))
@@ -254,6 +261,7 @@ public sealed class MachineStateService : IMachineStateService
             RecentSshSessions = sshSessions,
             TelemetryLastUpdated = state?.LastSeenAt,
             AgentVersion = NormalizeAgentVersion(agentVersion?.Version),
+            Kubernetes = kubernetes,
         };
     }
 
