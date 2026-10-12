@@ -150,6 +150,7 @@ func main() {
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
 	registry.Register(collector.NewAgentVersionCollector(version))
+	registry.Register(collector.NewKubernetesCollector(cfg.DataDir))
 	registry.RegisterDynamic(collector.NewServicesCollector(runtimeState), runtimeState.ServiceStatusInterval)
 
 	telemetrySender = sender.New(store, grpcClient.Telemetry, runtimeState, jit, pauseCoordinator)
