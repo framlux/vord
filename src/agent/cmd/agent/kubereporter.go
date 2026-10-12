@@ -50,14 +50,16 @@ func newSnapshotFence(deleteByType func(db.TelemetryType) (int64, error)) func()
 }
 
 // newReporterGate builds the agent-side inputs of the reporter's health gate: whether the host is paused, when
-// the server last acknowledged a batch, when the oldest undelivered cluster snapshot was queued, and when the
-// agent started counting from. The count of error snapshots in a row is the runtime's own and is not set here.
-func newReporterGate(paused func() bool, lastAck func() time.Time, oldestPendingSnapshot func() (time.Time, bool), startedAt time.Time) kubereporter.Gate {
+// the server last acknowledged a batch, when the oldest undelivered cluster snapshot was queued, how often the
+// slow telemetry tier is sent (which sets how long a snapshot may wait), and when the agent started counting
+// from. The count of error snapshots in a row is the runtime's own and is not set here.
+func newReporterGate(paused func() bool, lastAck func() time.Time, oldestPendingSnapshot func() (time.Time, bool), slowSendInterval func() time.Duration, startedAt time.Time) kubereporter.Gate {
 	return kubereporter.Gate{
 		Paused:                paused,
 		LastAck:               lastAck,
 		StartedAt:             startedAt,
 		OldestPendingSnapshot: oldestPendingSnapshot,
+		SlowSendInterval:      slowSendInterval,
 	}
 }
 

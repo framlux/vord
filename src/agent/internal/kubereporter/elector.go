@@ -45,8 +45,13 @@ const (
 	// gateMaxAckAge is how long the holder may go without the server acknowledging a batch.
 	gateMaxAckAge = 5 * time.Minute
 
-	// gateMaxSnapshotAge is how old a cluster snapshot may be while still waiting to be delivered.
+	// gateMaxSnapshotAge is the least age at which a cluster snapshot waiting to be delivered fails the gate. A
+	// slow telemetry send interval longer than a third of it raises the limit; see Elector.snapshotAgeLimit.
 	gateMaxSnapshotAge = 15 * time.Minute
+
+	// gateSnapshotSends is how many slow-tier sends a cluster snapshot may wait through before it counts as stuck:
+	// the server sets the interval, and a snapshot is only sent when the slow tier next runs.
+	gateSnapshotSends = 3
 
 	// gateMaxErrorSnapshots is how many error snapshots in a row the holder may produce.
 	gateMaxErrorSnapshots = 3
@@ -80,6 +85,9 @@ type Gate struct {
 	// OldestPendingSnapshot returns the creation time of the oldest cluster snapshot that is pending or
 	// processing in the queue, and false when there is none.
 	OldestPendingSnapshot func() (time.Time, bool)
+	// SlowSendInterval returns how often the slow telemetry tier, which carries the snapshots, is sent. It sets
+	// how long a waiting snapshot is normal; nil means the shortest limit applies.
+	SlowSendInterval func() time.Duration
 	// ConsecutiveErrorSnaps returns how many error snapshots the holder has produced in a row.
 	ConsecutiveErrorSnaps func() int
 }
@@ -248,7 +256,7 @@ func (e *Elector) gateFailure(now time.Time) string {
 	}
 
 	if e.gate.OldestPendingSnapshot != nil {
-		if created, pending := e.gate.OldestPendingSnapshot(); pending && (now.Sub(created) >= gateMaxSnapshotAge) {
+		if created, pending := e.gate.OldestPendingSnapshot(); pending && (now.Sub(created) >= e.snapshotAgeLimit()) {
 			return "snapshot_not_delivered"
 		}
 	}
@@ -258,6 +266,19 @@ func (e *Elector) gateFailure(now time.Time) string {
 	}
 
 	return ""
+}
+
+// snapshotAgeLimit is how old a waiting cluster snapshot may get before the gate fails: three slow-tier sends,
+// and at least gateMaxSnapshotAge. A server that sends slow telemetry every half hour would otherwise make a
+// healthy holder give up the Lease for a snapshot that has only waited for its turn.
+func (e *Elector) snapshotAgeLimit() time.Duration {
+	limit := gateMaxSnapshotAge
+
+	if e.gate.SlowSendInterval != nil {
+		limit = max(limit, gateSnapshotSends*e.gate.SlowSendInterval())
+	}
+
+	return limit
 }
 
 // step reads the Lease and renews it, takes it or leaves it alone.

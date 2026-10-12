@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -802,10 +804,11 @@ func TestSnapshot_ConsecutiveErrorsCountClearOnSuccessAndOnTheEndOfATenure(t *te
 	}
 }
 
-// Intent: a snapshot is sent when it changed or when it has not been sent for half an hour, so an unchanged
-// cluster is heard from often enough to stay fresh without being resent every collection. The half hour is
-// measured on the injected clock, and runs from the last send.
-func TestSnapshot_ASnapshotIsSentWhenItChangesOrHalfAnHourPasses(t *testing.T) {
+// Intent: a snapshot is sent when it changes, and an unchanged one is sent again about every half hour. The
+// collections come every quarter hour give or take a little, so the resend must land on the first collection at or
+// after roughly 30 minutes whichever way the ticks jitter, not slip a whole interval because one came a few seconds
+// early. The time is measured on the injected clock and runs from the last send.
+func TestSnapshot_AnUnchangedSnapshotIsResentOnTheFirstTickNearHalfAnHourDespiteJitter(t *testing.T) {
 	rig := newSnapshotRig(t)
 
 	rig.collect()
@@ -815,30 +818,62 @@ func TestSnapshot_ASnapshotIsSentWhenItChangesOrHalfAnHourPasses(t *testing.T) {
 		t.Fatalf("snapshots queued after two identical collections = %d, want 1", rig.queue.count())
 	}
 
-	rig.clock.Advance(snapshotHeartbeat - time.Second)
+	// The next tick comes a little late and is only 15 minutes after the send: too soon.
+	rig.clock.Advance(snapshotInterval + 4*time.Second)
 	rig.collect()
 
 	if rig.queue.count() != 1 {
-		t.Fatalf("snapshots queued one second before the heartbeat = %d, want 1", rig.queue.count())
+		t.Fatalf("snapshots queued 15 minutes after the send = %d, want 1", rig.queue.count())
+	}
+
+	// The tick after it comes early, 29 minutes 58 seconds after the send. It is the one that must resend.
+	rig.clock.Advance(snapshotInterval - 6*time.Second)
+	rig.collect()
+
+	if rig.queue.count() != 2 {
+		t.Fatalf("snapshots queued at 29m58s = %d, want the heartbeat to go out on this tick", rig.queue.count())
+	}
+
+	// The resend is dated from this collection: a tick 15 minutes later is too soon, the one after it is not.
+	rig.clock.Advance(snapshotInterval + 6*time.Second)
+	rig.collect()
+
+	if rig.queue.count() != 2 {
+		t.Fatalf("snapshots queued 15 minutes after the resend = %d, want 2", rig.queue.count())
+	}
+
+	rig.clock.Advance(snapshotInterval + 7*time.Second)
+	rig.collect()
+
+	if rig.queue.count() != 3 {
+		t.Errorf("snapshots queued at 30m13s after the resend = %d, want 3", rig.queue.count())
+	}
+}
+
+// Intent: the line between too soon and due is exact: a collection one second short of it sends nothing, and one
+// on it sends the heartbeat.
+func TestSnapshot_TheHeartbeatIsDueAtTheResendThreshold(t *testing.T) {
+	rig := newSnapshotRig(t)
+
+	rig.collect()
+	rig.clock.Advance(snapshotResendAfter - time.Second)
+	rig.collect()
+
+	if rig.queue.count() != 1 {
+		t.Fatalf("snapshots queued a second before the threshold = %d, want 1", rig.queue.count())
 	}
 
 	rig.clock.Advance(time.Second)
 	rig.collect()
 
 	if rig.queue.count() != 2 {
-		t.Fatalf("snapshots queued at the heartbeat = %d, want 2", rig.queue.count())
-	}
-
-	rig.clock.Advance(snapshotHeartbeat - time.Second)
-	rig.collect()
-
-	if rig.queue.count() != 2 {
-		t.Errorf("snapshots queued a second before the next heartbeat = %d, want the half hour to run from the last send", rig.queue.count())
+		t.Errorf("snapshots queued at the threshold = %d, want 2", rig.queue.count())
 	}
 }
 
 // Intent: the heartbeat is half an hour and a collection is a quarter of one, which keeps a snapshot well inside
-// the 90 minutes after which the server treats a reporter as gone.
+// the 90 minutes after which the server treats a reporter as gone, and the threshold sits half an interval short of
+// the heartbeat so jitter cannot push the resend a whole interval late.
 func TestSnapshot_TimingConstants(t *testing.T) {
 	if snapshotInterval != 15*time.Minute {
 		t.Errorf("snapshotInterval = %v, want 15 minutes", snapshotInterval)
@@ -846,6 +881,10 @@ func TestSnapshot_TimingConstants(t *testing.T) {
 
 	if snapshotHeartbeat != 30*time.Minute {
 		t.Errorf("snapshotHeartbeat = %v, want 30 minutes", snapshotHeartbeat)
+	}
+
+	if snapshotResendAfter != 22*time.Minute+30*time.Second {
+		t.Errorf("snapshotResendAfter = %v, want 22 minutes 30 seconds", snapshotResendAfter)
 	}
 
 	if snapshotMaxBytes != 256*1024 {
@@ -1394,5 +1433,70 @@ func TestSnapshot_EverySnapshotGetsItsOwnId(t *testing.T) {
 
 	if rig.queue.items[0].id == rig.queue.items[1].id {
 		t.Errorf("two snapshots share the id %q", rig.queue.items[0].id)
+	}
+}
+
+// blockingQueue holds an insert open until the test lets it finish, and records that it did.
+type blockingQueue struct {
+	entered  chan struct{}
+	release  chan struct{}
+	inserted atomic.Bool
+}
+
+func (q *blockingQueue) ReplaceTelemetryOfType(string, db.TelemetryType, string) error {
+	close(q.entered)
+	<-q.release
+	q.inserted.Store(true)
+
+	return nil
+}
+
+// Intent: the end of a tenure drops the queue only after a snapshot that is being queued has been inserted. If the
+// drop could run first, the dying tenure's snapshot would be inserted after it and survive the loss, to be sent
+// by a host that no longer holds the Lease.
+func TestSnapshot_TheDropWaitsForASnapshotThatIsBeingQueued(t *testing.T) {
+	rig := newSnapshotRig(t)
+	queue := &blockingQueue{entered: make(chan struct{}), release: make(chan struct{})}
+	rig.snaps.queue = queue
+
+	collected := make(chan struct{})
+
+	go func() {
+		defer close(collected)
+
+		rig.collect()
+	}()
+
+	// The collection is now inside the insert, holding the snapshotter.
+	<-queue.entered
+
+	dropSawInsert := make(chan bool, 1)
+	ended := make(chan struct{})
+
+	go func() {
+		defer close(ended)
+
+		rig.snaps.tenureEnded(func() { dropSawInsert <- queue.inserted.Load() })
+	}()
+
+	// Wait until the loss has been registered, then give a drop that is not held back every chance to run.
+	for rig.snaps.lostGen.Load() == 0 {
+		runtime.Gosched()
+	}
+
+	for i := 0; (i < 10000) && (len(dropSawInsert) == 0); i++ {
+		runtime.Gosched()
+	}
+
+	if len(dropSawInsert) != 0 {
+		t.Error("the drop ran while a snapshot was still being inserted")
+	}
+
+	close(queue.release)
+	<-collected
+	<-ended
+
+	if inserted := <-dropSawInsert; inserted == false {
+		t.Error("the drop ran before the insert finished: the snapshot of the ended tenure would survive it")
 	}
 }

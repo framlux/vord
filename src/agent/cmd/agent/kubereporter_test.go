@@ -111,7 +111,10 @@ func TestNewReporterGate_UsesTheAgentsOwnInputs(t *testing.T) {
 	queued := started.Add(2 * time.Minute)
 	paused := false
 
-	gate := newReporterGate(func() bool { return paused }, func() time.Time { return acked }, func() (time.Time, bool) { return queued, true }, started)
+	slowSend := 7 * time.Minute
+
+	gate := newReporterGate(func() bool { return paused }, func() time.Time { return acked }, func() (time.Time, bool) { return queued, true },
+		func() time.Duration { return slowSend }, started)
 
 	if gate.Paused() {
 		t.Error("Paused() = true for a host that is not paused")
@@ -133,6 +136,10 @@ func TestNewReporterGate_UsesTheAgentsOwnInputs(t *testing.T) {
 
 	if oldest, pending := gate.OldestPendingSnapshot(); (pending == false) || oldest.Equal(queued) == false {
 		t.Errorf("OldestPendingSnapshot() = %v, %v; want %v, true", oldest, pending, queued)
+	}
+
+	if got := gate.SlowSendInterval(); got != slowSend {
+		t.Errorf("SlowSendInterval() = %v, want %v", got, slowSend)
 	}
 }
 

@@ -34,10 +34,16 @@ const (
 	// snapshotInterval is how often the holder reads the cluster.
 	snapshotInterval = 15 * time.Minute
 
-	// snapshotHeartbeat is how long an unchanged snapshot is held back before it is sent anyway, so the server
-	// keeps hearing from a cluster that does not change. It is well inside the 90 minutes after which the server
-	// treats a cluster's reporter as gone.
+	// snapshotHeartbeat is how often an unchanged snapshot is sent anyway, so the server keeps hearing from a
+	// cluster that does not change. It is well inside the 90 minutes after which the server treats a cluster's
+	// reporter as gone.
 	snapshotHeartbeat = 30 * time.Minute
+
+	// snapshotResendAfter is how long an unchanged snapshot is held back. Collections come every snapshotInterval
+	// give or take a little, so a threshold of exactly snapshotHeartbeat would let a tick that comes a few seconds
+	// early wait a whole interval more. Half an interval short of it, the resend goes out on the first tick near
+	// the heartbeat, and the tick before that, a full interval earlier, is still too soon.
+	snapshotResendAfter = snapshotHeartbeat - snapshotInterval/2
 
 	// snapshotMaxBytes caps the encoded size of one snapshot. The nodes beyond it are left out.
 	snapshotMaxBytes = 256 * 1024
@@ -98,7 +104,10 @@ type snapshotter struct {
 
 	// lostGen counts the tenures that have ended. A collection reads it before it confirms its tenure and checks it
 	// again once it holds mu, so a tenure that ends in between is noticed and its snapshot is not queued after the
-	// queue was dropped.
+	// queue was dropped. A loss is not always a change of holder: an agent that lost the Lease by missing its renew
+	// deadline can take its own claim back in place, and a collection that confirmed its tenure just before the
+	// loss may still queue its snapshot after that re-take. That snapshot is harmless: the acquisition starts a
+	// collection of its own, which replaces it.
 	lostGen atomic.Uint64
 
 	// errorRun is how many error snapshots in a row the holder has made. The health gate reads it from the
@@ -234,7 +243,7 @@ func (s *snapshotter) queueIfDue(lead leadership, record *pb.KubernetesClusterRe
 		return
 	}
 
-	if s.sent && (hash == s.lastHash) && (startedAt.Sub(s.lastSentAt) < snapshotHeartbeat) {
+	if s.sent && (hash == s.lastHash) && (startedAt.Sub(s.lastSentAt) < snapshotResendAfter) {
 		slog.Debug("the cluster snapshot has not changed")
 
 		return

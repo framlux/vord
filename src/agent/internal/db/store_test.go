@@ -2105,7 +2105,7 @@ func TestReplaceTelemetryOfType_RefusesAnOversizedPayloadAndKeepsTheOldSnapshot(
 	}
 
 	err := store.ReplaceTelemetryOfType("huge", TelemetryKubernetesCluster, strings.Repeat("x", MaxPayloadBytes+1))
-	if !errors.Is(err, ErrPayloadTooLarge) {
+	if errors.Is(err, ErrPayloadTooLarge) == false {
 		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
 	}
 
@@ -2204,7 +2204,7 @@ func TestReplaceTelemetryOfType_EvictsTheOldestPendingWhenTheQueueIsFull(t *test
 		t.Errorf("pending count = %d, want the queue held to its limit of 3", got)
 	}
 
-	if got := queuedIDs(t, store); !strings.Contains(got, "snap-3") || strings.Count(got, ",") != 2 {
+	if got := queuedIDs(t, store); (strings.Contains(got, "snap-3") == false) || (strings.Count(got, ",") != 2) {
 		t.Errorf("rows = %s, want three rows including the new snapshot", got)
 	}
 }

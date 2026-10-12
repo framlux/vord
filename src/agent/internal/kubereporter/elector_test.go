@@ -120,6 +120,7 @@ type candidate struct {
 	ackFresh   bool
 	lastAckAt  time.Time
 	oldest     func() (time.Time, bool)
+	slowSend   time.Duration
 	errorSnaps int
 
 	holderWhenLost string
@@ -160,6 +161,7 @@ func (r *electorRig) newCandidateWithClient(instance string, factory func() (*ku
 
 			return c.oldest()
 		},
+		SlowSendInterval:      func() time.Duration { return c.slowSend },
 		ConsecutiveErrorSnaps: func() int { return c.errorSnaps },
 	}, func() {
 		c.lost++
@@ -217,6 +219,7 @@ func (c *candidate) healthy() {
 	c.paused = false
 	c.ackFresh = true
 	c.oldest = nil
+	c.slowSend = 0
 	c.errorSnaps = 0
 }
 
@@ -594,6 +597,30 @@ func TestElector_GateThresholds(t *testing.T) {
 		{"snapshot 14m59s old", func() { a.oldest = func() (time.Time, bool) { return now.Add(-14*time.Minute - 59*time.Second), true } }, false},
 		{"snapshot 15m old", func() { a.oldest = func() (time.Time, bool) { return now.Add(-15 * time.Minute), true } }, true},
 		{"no pending snapshot", func() { a.oldest = func() (time.Time, bool) { return now.Add(-24 * time.Hour), false } }, false},
+		{"snapshot 15m old, slow tier every 1m", func() {
+			a.slowSend = time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-15 * time.Minute), true }
+		}, true},
+		{"snapshot 15m old, slow tier every 5m", func() {
+			a.slowSend = 5 * time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-15 * time.Minute), true }
+		}, true},
+		{"snapshot 29m59s old, slow tier every 10m", func() {
+			a.slowSend = 10 * time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-29*time.Minute - 59*time.Second), true }
+		}, false},
+		{"snapshot 30m old, slow tier every 10m", func() {
+			a.slowSend = 10 * time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-30 * time.Minute), true }
+		}, true},
+		{"snapshot 89m59s old, slow tier every 30m", func() {
+			a.slowSend = 30 * time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-89*time.Minute - 59*time.Second), true }
+		}, false},
+		{"snapshot 90m old, slow tier every 30m", func() {
+			a.slowSend = 30 * time.Minute
+			a.oldest = func() (time.Time, bool) { return now.Add(-90 * time.Minute), true }
+		}, true},
 		{"two error snapshots", func() { a.errorSnaps = 2 }, false},
 		{"three error snapshots", func() { a.errorSnaps = 3 }, true},
 	}
@@ -1918,5 +1945,77 @@ func TestElector_AnnouncesTheAcquisitionThatFollowsARelease(t *testing.T) {
 
 	if a.acquired != 2 {
 		t.Errorf("acquired = %d, want 2", a.acquired)
+	}
+}
+
+// Intent: the age at which a waiting snapshot fails the gate follows the server's slow-tier send interval: three
+// sends' worth, but never under 15 minutes. A server setting of half an hour must not make a healthy holder give
+// up the Lease for a snapshot that has only waited for its turn.
+func TestElector_SnapshotAgeLimitFollowsTheSlowTierInterval(t *testing.T) {
+	rig := newElectorRig(t)
+	rig.advance(time.Hour)
+
+	a := rig.newCandidate("aaaa")
+
+	tests := []struct {
+		interval time.Duration
+		want     time.Duration
+	}{
+		{0, 15 * time.Minute},
+		{-time.Minute, 15 * time.Minute},
+		{time.Minute, 15 * time.Minute},
+		{5 * time.Minute, 15 * time.Minute},
+		{5*time.Minute + time.Second, 15*time.Minute + 3*time.Second},
+		{10 * time.Minute, 30 * time.Minute},
+		{30 * time.Minute, 90 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		a.slowSend = tt.interval
+
+		if got := a.elector.snapshotAgeLimit(); got != tt.want {
+			t.Errorf("limit at a slow tier interval of %v = %v, want %v", tt.interval, got, tt.want)
+		}
+	}
+
+	a.elector.gate.SlowSendInterval = nil
+
+	if got := a.elector.snapshotAgeLimit(); got != 15*time.Minute {
+		t.Errorf("limit with no interval source = %v, want 15 minutes", got)
+	}
+}
+
+// Intent: a holder whose server sends slow telemetry every half hour keeps the Lease while its snapshot waits for
+// that send, and gives it up once the snapshot has waited three sends. The holder ticks as a running agent does, so
+// it renews throughout.
+func TestElector_ASlowSendIntervalKeepsAHealthyHolderWhoseSnapshotIsWaiting(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+	a.requireLeader(1)
+
+	a.slowSend = 30 * time.Minute
+	queuedAt := rig.clock.Now()
+	a.oldest = func() (time.Time, bool) { return queuedAt, true }
+
+	tickFor := func(d time.Duration) {
+		for end := rig.clock.Now().Add(d); rig.clock.Now().Before(end); {
+			rig.advance(electionInterval)
+			a.tick()
+		}
+	}
+
+	tickFor(80 * time.Minute)
+	a.requireLeader(1)
+
+	if a.lost != 0 {
+		t.Fatalf("onLost ran %d times for a snapshot that has waited 80 minutes of a 90 minute limit, want 0", a.lost)
+	}
+
+	tickFor(11 * time.Minute)
+	a.requireNotLeader()
+
+	if a.lost != 1 {
+		t.Errorf("onLost ran %d times after the snapshot waited three sends, want 1", a.lost)
 	}
 }

@@ -144,6 +144,7 @@ func main() {
 			pauseCoordinator.Paused,
 			func() time.Time { return telemetrySender.LastAckAt() },
 			newOldestPendingSnapshot(store.OldestQueuedTelemetry),
+			runtimeState.TelemetrySendSlowInterval,
 			time.Now(),
 		),
 		OnLost:    newSnapshotFence(store.DeleteTelemetryByType),

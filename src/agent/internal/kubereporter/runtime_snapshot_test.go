@@ -63,6 +63,24 @@ func (r *snapshotRuntimeRig) startSnapshotLoop() (stop func()) {
 	}
 }
 
+// collectOnAcquisition runs the one round of the snapshot loop that the elector's announcement starts, with no tick
+// that could start another, so any snapshot it queues is there because of the acquisition. The announcement is
+// checked first: without it the round would wait for a tick that never comes, and the test would hang where it
+// should fail.
+func (r *snapshotRuntimeRig) collectOnAcquisition() {
+	r.t.Helper()
+
+	if got := len(r.runtime.acquired); got != 1 {
+		r.t.Fatalf("announcements of an acquisition pending = %d, want 1: the elector did not tell the runtime", got)
+	}
+
+	var never <-chan time.Time
+
+	if r.runtime.snapshotRound(context.Background(), never) == false {
+		r.t.Fatal("the snapshot loop stopped")
+	}
+}
+
 // tickSnapshots starts one periodic collection. The channel is unbuffered, so the send completes only when the loop
 // is waiting again, which means every collection started earlier has finished.
 func (r *snapshotRuntimeRig) tickSnapshots() {
@@ -96,11 +114,7 @@ func TestRuntimeSnapshots_AnAcquisitionCollectsAtOnce(t *testing.T) {
 		t.Fatal("the runtime does not lead")
 	}
 
-	stop := rig.startSnapshotLoop()
-
-	<-rig.queue.replaced
-
-	stop()
+	rig.collectOnAcquisition()
 
 	if rig.queue.count() != 1 {
 		t.Fatalf("snapshots queued = %d, want 1", rig.queue.count())
@@ -172,11 +186,10 @@ func TestRuntimeSnapshots_PeriodicCollectionsSendChangesAndAHeartbeat(t *testing
 	rig := newSnapshotRuntimeRig(t)
 	rig.enrol()
 	rig.step()
+	rig.collectOnAcquisition()
 
 	stop := rig.startSnapshotLoop()
 	defer stop()
-
-	<-rig.queue.replaced
 
 	rig.tickSnapshots()
 	rig.tickSnapshots()
@@ -208,11 +221,10 @@ func TestRuntimeSnapshots_AnAcquisitionAlwaysSendsTheFirstSnapshot(t *testing.T)
 	rig := newSnapshotRuntimeRig(t)
 	rig.enrol()
 	rig.step()
+	rig.collectOnAcquisition()
 
 	stop := rig.startSnapshotLoop()
 	defer stop()
-
-	<-rig.queue.replaced
 
 	rig.tickSnapshots()
 	rig.tickSnapshots()
@@ -377,7 +389,14 @@ func TestRuntimeSnapshots_RunCollectsOnAcquisitionAndStopsTheLoopOnShutdown(t *t
 	rig.tickAndSettle()
 	rig.tickAndSettle()
 
-	<-rig.queue.replaced
+	// The loop has had the announcement of the acquisition and a tick by the time the second one is taken, so the
+	// cluster has been read, once, whichever of the two woke it first.
+	rig.tickSnapshots()
+	rig.tickSnapshots()
+
+	if got := rig.queue.count(); got != 1 {
+		t.Errorf("snapshots queued while the runtime ran = %d, want 1", got)
+	}
 
 	cancel()
 	<-done

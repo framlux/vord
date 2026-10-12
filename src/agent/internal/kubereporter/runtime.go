@@ -177,32 +177,42 @@ func (r *Runtime) runSnapshots(ctx context.Context) {
 	}
 
 	for {
-		acquired := false
-
-		select {
-		case <-ctx.Done():
+		if r.snapshotRound(ctx, ticks) == false {
 			return
-		case <-r.acquired:
-			acquired = true
-		case <-ticks:
 		}
-
-		// An acquisition announced while the loop was woken by a tick counts as well, so the two never cost two
-		// collections or leave the announcement waiting.
-		select {
-		case <-r.acquired:
-			acquired = true
-		default:
-		}
-
-		// The snapshots an earlier tenure queued were dropped when it ended, so the first of this one goes out
-		// whatever it holds.
-		if acquired {
-			r.snapshots.forgetLastSent()
-		}
-
-		r.collectSnapshot(ctx)
 	}
+}
+
+// snapshotRound waits for the next reason to collect, a tick or the announcement of an acquisition, and then
+// collects once. It reports false when ctx ended instead.
+func (r *Runtime) snapshotRound(ctx context.Context, ticks <-chan time.Time) bool {
+	acquired := false
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-r.acquired:
+		acquired = true
+	case <-ticks:
+	}
+
+	// An acquisition announced while the loop was woken by a tick counts as well, so the two never cost two
+	// collections or leave the announcement waiting.
+	select {
+	case <-r.acquired:
+		acquired = true
+	default:
+	}
+
+	// The snapshots an earlier tenure queued were dropped when it ended, so the first of this one goes out
+	// whatever it holds.
+	if acquired {
+		r.snapshots.forgetLastSent()
+	}
+
+	r.collectSnapshot(ctx)
+
+	return true
 }
 
 // collectSnapshot runs one collection with the running elector, if there is one. A collection that panics is
