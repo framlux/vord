@@ -5,11 +5,13 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1037,21 +1039,11 @@ func TestKubernetesCollector_HostnameFallback(t *testing.T) {
 	}
 }
 
-// Intent: when there is no certificate and the hostname cannot be a node name (the lookup fails, it
-// is empty, or it is not an RFC 1123 name), the collector reports an error and sends nothing rather
-// than reporting a blank or unsafe name.
-func TestKubernetesCollector_UnusableHostnameFailsWithoutSending(t *testing.T) {
-	cases := map[string]struct {
-		hostname string
-		err      error
-	}{
-		"lookup fails": {"", errors.New("hostname unavailable")},
-		"empty":        {"   ", nil},
-		"underscore":   {"Build_Host", nil},
-		"not utf-8":    {"host\xff\xfe", nil},
-	}
-
-	for name, tc := range cases {
+// Intent: when the host runs a kubelet, has no certificate to name it, and its hostname cannot be a node
+// name (the lookup fails, it is empty, or it is not an RFC 1123 name), the collector reports an error and
+// sends nothing rather than reporting a blank or unsafe name for a node that has a kubelet.
+func TestKubernetesCollector_UnusableHostnameWithKubeletFailsWithoutSending(t *testing.T) {
+	for name, tc := range unusableHostnames {
 		t.Run(name, func(t *testing.T) {
 			h := newK8sHost(t)
 			h.hostname = tc.hostname
@@ -1073,6 +1065,220 @@ func TestKubernetesCollector_UnusableHostnameFailsWithoutSending(t *testing.T) {
 				t.Errorf("expected 0 telemetry items, got %d", len(items))
 			}
 		})
+	}
+}
+
+var unusableHostnames = map[string]struct {
+	hostname string
+	err      error
+}{
+	"lookup fails": {"", errors.New("hostname unavailable")},
+	"empty":        {"   ", nil},
+	"underscore":   {"Build_Host", nil},
+	"not utf-8":    {"host\xff\xfe", nil},
+}
+
+// Intent: a control plane host without a kubelet has no node name to report, so an unusable hostname
+// does not hide it: the report is still sent, with an empty node name that the server accepts for a host
+// without a kubelet, and the name source says it came from the hostname.
+func TestKubernetesCollector_UnusableHostnameWithoutKubeletStillReports(t *testing.T) {
+	ca := newTestCert(t, "k3s-server-ca", 1)
+
+	for name, tc := range unusableHostnames {
+		t.Run(name, func(t *testing.T) {
+			h := newK8sHost(t)
+			h.hostname = tc.hostname
+			h.hostnameErr = tc.err
+			h.mkdir("/var/lib/rancher/k3s/server/tls")
+			h.write("/var/lib/rancher/k3s/server/tls/server-ca.crt", ca.certPEM)
+
+			assertNodePayload(t, collectOne(t, h), kubernetesNodePayload{
+				Distro:         "k3s",
+				NodeName:       "",
+				NodeNameSource: "hostname",
+				HasKubelet:     false,
+				ControlPlane:   true,
+				CaFingerprint:  fingerprintOf(ca),
+			})
+		})
+	}
+}
+
+// Intent: a host without a kubelet still takes a usable hostname as its node name, so the empty name is
+// only the last resort and not the new default for control plane hosts.
+func TestKubernetesCollector_UsableHostnameWithoutKubeletIsReported(t *testing.T) {
+	h := newK8sHost(t)
+	h.hostname = "Control-1"
+	h.mkdir("/var/lib/rancher/k3s/server/tls")
+
+	got := collectOne(t, h)
+
+	if (got.NodeName != "control-1") || (got.NodeNameSource != "hostname") || got.HasKubelet {
+		t.Errorf("node = %q from %q (has_kubelet %v), want %q from %q without a kubelet",
+			got.NodeName, got.NodeNameSource, got.HasKubelet, "control-1", "hostname")
+	}
+}
+
+// Intent: a distro whose marker matches but fails the reporting gate does not hide a real node of a
+// later distro: a stray /var/lib/rancher/k3s left by "k3s kubectl" on a kubeadm or RKE2 node must not
+// stop that node from being reported, and the stray distro's version command must not run.
+func TestKubernetesCollector_GatedOutDistroFallsThroughToLaterDistros(t *testing.T) {
+	ca := newTestCert(t, "kubernetes", 1)
+	node := newTestCert(t, "system:node:real-1", 2)
+
+	t.Run("kubeadm node with a stray k3s directory", func(t *testing.T) {
+		h := newK8sHost(t)
+		h.mkdir("/var/lib/rancher/k3s/data")
+		h.binary("/usr/local/bin/k3s", "k3s version v1.30.1+k3s1 (a1b2c3d4)\n")
+		h.binary("/usr/bin/kubelet", "Kubernetes v1.30.2\n")
+		h.kubeadmTree(ca, node)
+
+		assertNodePayload(t, collectOne(t, h), kubernetesNodePayload{
+			Distro:         "kubeadm",
+			KubeletVersion: "v1.30.2",
+			NodeName:       "real-1",
+			NodeNameSource: "certificate",
+			HasKubelet:     true,
+			CaFingerprint:  fingerprintOf(ca),
+		})
+
+		h.wantCalls("/usr/bin/kubelet --version")
+	})
+
+	t.Run("rke2 node with a stray k3s directory", func(t *testing.T) {
+		h := newK8sHost(t)
+		h.mkdir("/var/lib/rancher/k3s/data")
+		h.writeString("/var/lib/rancher/rke2/agent/kubelet.kubeconfig", "kubelet kubeconfig")
+		h.write("/var/lib/rancher/rke2/agent/server-ca.crt", ca.certPEM)
+		h.write("/var/lib/rancher/rke2/agent/client-kubelet.crt", node.certPEM)
+
+		assertNodePayload(t, collectOne(t, h), kubernetesNodePayload{
+			Distro:         "rke2",
+			NodeName:       "real-1",
+			NodeNameSource: "certificate",
+			HasKubelet:     true,
+			CaFingerprint:  fingerprintOf(ca),
+		})
+	})
+
+	t.Run("unknown layout node with a stray k3s directory", func(t *testing.T) {
+		h := newK8sHost(t)
+		h.mkdir("/var/lib/rancher/k3s/data")
+		h.write("/var/lib/kubelet/pki/kubelet-client-current.pem", combinedPEM(node))
+
+		got := collectOne(t, h)
+
+		if got.Distro != "unknown" {
+			t.Errorf("distro = %q, want %q", got.Distro, "unknown")
+		}
+	})
+
+	t.Run("only gated-out distros send nothing", func(t *testing.T) {
+		h := newK8sHost(t)
+		h.mkdir("/var/lib/rancher/k3s/data")
+		h.mkdir("/var/lib/rancher/rke2")
+		h.mkdir("/var/lib/k0s")
+
+		payloads := collectNodes(t, h.collector(), newTestStore(t))
+
+		if len(payloads) != 0 {
+			t.Errorf("expected 0 telemetry items, got %d", len(payloads))
+		}
+
+		h.wantCalls()
+	})
+}
+
+// Intent: a /var/snap/microk8s directory left behind after MicroK8s was removed is not a node: the
+// kubelet's own credentials file must exist before the host is reported, and a client.config or install
+// certificate alone does not make a host a control plane.
+func TestKubernetesCollector_Microk8sLeftoverDirectorySendsNothing(t *testing.T) {
+	installCA := newTestCert(t, "microk8s-install-ca", 1)
+	node := newTestCert(t, "system:node:mk8s-1", 2)
+
+	cases := map[string]func(h *k8sHost){
+		"empty directory": func(h *k8sHost) {
+			h.mkdir("/var/snap/microk8s")
+		},
+		"current directory only": func(h *k8sHost) {
+			h.mkdir("/var/snap/microk8s/current")
+		},
+		"install certificates and client config without the kubelet credentials": func(h *k8sHost) {
+			h.write("/var/snap/microk8s/current/certs/ca.crt", installCA.certPEM)
+			h.write("/var/snap/microk8s/current/certs/kubelet.crt", node.certPEM)
+			h.writeUnreadable("/var/snap/microk8s/current/credentials/client.config")
+		},
+	}
+
+	for name, build := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newK8sHost(t)
+			build(h)
+			h.writeString("/snap/microk8s/current/meta/snap.yaml", "name: microk8s\nversion: v1.30.1\n")
+
+			payloads := collectNodes(t, h.collector(), newTestStore(t))
+
+			if len(payloads) != 0 {
+				t.Errorf("expected 0 telemetry items, got %d", len(payloads))
+			}
+
+			h.wantCalls()
+		})
+	}
+}
+
+// Intent: a MicroK8s host that has its kubelet credentials is a node with a kubelet, whether it is a
+// control plane or a worker, and the hostname names it when no kubelet certificate does.
+func TestKubernetesCollector_Microk8sKubeletCredentialsMakeANode(t *testing.T) {
+	ca := newTestCert(t, "microk8s-cluster-ca", 1)
+
+	h := newK8sHost(t)
+	h.writeString("/var/snap/microk8s/current/credentials/kubelet.config", tokenKubeconfig(ca))
+
+	assertNodePayload(t, collectOne(t, h), kubernetesNodePayload{
+		Distro:         "microk8s",
+		NodeName:       "fallback-host",
+		NodeNameSource: "hostname",
+		HasKubelet:     true,
+		ControlPlane:   true,
+		CaFingerprint:  fingerprintOf(ca),
+	})
+}
+
+// captureDebugLogs routes the default logger into a buffer at debug level for the rest of the test.
+func captureDebugLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var logs bytes.Buffer
+
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	return &logs
+}
+
+// Intent: a kubeconfig can name any path on the host, so when the file it references cannot be read the
+// debug log names only the kubeconfig itself: neither the referenced path nor the operating system error
+// that repeats it is logged.
+func TestKubernetesCollector_UnreadableKubeconfigReferenceLogsOnlyTheKubeconfigPath(t *testing.T) {
+	h := newK8sHost(t)
+	h.writeString("/etc/kubernetes/kubelet.conf", pathKubeconfig("pki/missing-ca-marker.crt", "/etc/shadow-marker/client.pem"))
+
+	logs := captureDebugLogs(t)
+
+	collectOne(t, h)
+
+	logged := logs.String()
+
+	if strings.Contains(logged, "kubelet.conf") == false {
+		t.Errorf("debug log does not name the kubeconfig, got:\n%s", logged)
+	}
+
+	for _, referenced := range []string{"missing-ca-marker", "shadow-marker"} {
+		if strings.Contains(logged, referenced) {
+			t.Errorf("debug log echoes the kubeconfig-referenced path %q:\n%s", referenced, logged)
+		}
 	}
 }
 

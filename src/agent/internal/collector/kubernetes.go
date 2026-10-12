@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -68,6 +69,13 @@ type kubernetesLayout struct {
 	version         func(ctx context.Context) string
 }
 
+// reportable reports whether the host is worth reporting: it has a kubelet, an admin credential or a control
+// plane. A bare data directory, such as the one "k3s kubectl" unpacks or an uninstalled distro leaves behind,
+// matches a distro marker without being a node.
+func (l kubernetesLayout) reportable() bool {
+	return l.hasKubelet || l.adminCredential || l.controlPlane
+}
+
 // rancherDistro describes how k3s and RKE2, which share one directory layout, differ.
 type rancherDistro struct {
 	name              string
@@ -102,8 +110,8 @@ func (c *KubernetesCollector) Name() string { return "kubernetes" }
 // node, or stops being one, is noticed within one interval.
 func (c *KubernetesCollector) DefaultInterval() time.Duration { return 15 * time.Minute }
 
-// Collect enqueues one Kubernetes node report when the host is a node. A host with no distro marker, or with a
-// marker but no kubelet, no admin credential and no control plane, reports nothing: an empty data directory
+// Collect enqueues one Kubernetes node report when the host is a node. A host with no distro marker, or with
+// markers but no kubelet, no admin credential and no control plane, reports nothing: an empty data directory
 // left by an uninstalled distro or by running "k3s kubectl" does not make a machine a node.
 func (c *KubernetesCollector) Collect(ctx context.Context, store *db.Store) error {
 	layout, found := c.detect()
@@ -113,14 +121,7 @@ func (c *KubernetesCollector) Collect(ctx context.Context, store *db.Store) erro
 		return store.SaveCollectorState(c.Name(), nil)
 	}
 
-	if (layout.hasKubelet == false) && (layout.adminCredential == false) && (layout.controlPlane == false) {
-		slog.Debug("Kubernetes files found without a kubelet, admin credential or control plane, skipping Kubernetes telemetry",
-			"distro", layout.distro)
-
-		return store.SaveCollectorState(c.Name(), nil)
-	}
-
-	nodeName, nodeNameSource, err := c.resolveNodeName(layout.certSources)
+	nodeName, nodeNameSource, err := c.resolveNodeName(layout.certSources, layout.hasKubelet)
 	if err != nil {
 		return fmt.Errorf("resolving Kubernetes node name: %w", err)
 	}
@@ -152,8 +153,10 @@ func (c *KubernetesCollector) Collect(ctx context.Context, store *db.Store) erro
 	return store.SaveCollectorState(c.Name(), nil)
 }
 
-// detect returns the layout of the first distro whose marker exists. The order is fixed so a host that carries
-// the files of several distros is reported once.
+// detect returns the layout of the first distro, in a fixed order, whose marker exists and whose host passes
+// the reporting gate, so a host that carries the files of several distros is reported once. A distro that
+// matches but fails the gate is skipped rather than ending the search, so a stray data directory cannot hide a
+// real node of a later distro.
 func (c *KubernetesCollector) detect() (kubernetesLayout, bool) {
 	detectors := []func() (kubernetesLayout, bool){
 		c.detectK3s,
@@ -166,9 +169,18 @@ func (c *KubernetesCollector) detect() (kubernetesLayout, bool) {
 
 	for _, detectDistro := range detectors {
 		layout, found := detectDistro()
-		if found {
-			return layout, true
+		if found == false {
+			continue
 		}
+
+		if layout.reportable() == false {
+			slog.Debug("Kubernetes files found without a kubelet, admin credential or control plane, trying the next layout",
+				"distro", layout.distro)
+
+			continue
+		}
+
+		return layout, true
 	}
 
 	return kubernetesLayout{}, false
@@ -254,11 +266,14 @@ func (c *KubernetesCollector) detectMicrok8s() (kubernetesLayout, bool) {
 		return kubernetesLayout{}, false
 	}
 
-	controlPlane := c.fileExists(filepath.Join(dataDir, "current/var/lock/clustered.lock")) == false
+	// The kubelet's own credentials file is what a running MicroK8s node has; a directory left behind by a
+	// removed snap does not, and without a kubelet the host is not a control plane either.
+	hasKubelet := c.fileExists(filepath.Join(dataDir, "current/credentials/kubelet.config"))
+	controlPlane := hasKubelet && (c.fileExists(filepath.Join(dataDir, "current/var/lock/clustered.lock")) == false)
 
 	return kubernetesLayout{
 		distro:          "microk8s",
-		hasKubelet:      true,
+		hasKubelet:      hasKubelet,
 		controlPlane:    controlPlane,
 		adminCredential: controlPlane && c.fileExists(filepath.Join(dataDir, "current/credentials/client.config")),
 		caSources: []pemSource{
@@ -359,9 +374,10 @@ func (c *KubernetesCollector) snapVersion(path string) func(context.Context) str
 }
 
 // resolveNodeName takes the node name from the first kubelet client certificate that carries a node identity.
-// Without one it falls back to the lowercased hostname, which is what a kubelet uses to name itself, and fails
-// when the hostname is not a valid node name so that a blank or unsafe name is never reported.
-func (c *KubernetesCollector) resolveNodeName(sources []pemSource) (string, string, error) {
+// Without one it falls back to the lowercased hostname, which is what a kubelet uses to name itself. When the
+// hostname is not a valid node name, a host with a kubelet fails, so that a blank or unsafe name is never
+// reported for a node; a host without a kubelet has no node to name, so it is reported with an empty name.
+func (c *KubernetesCollector) resolveNodeName(sources []pemSource, hasKubelet bool) (string, string, error) {
 	for _, source := range sources {
 		pemData := c.loadPEM(source, func(refs kubeconfigRefs) ([]byte, string) { return refs.certData, refs.certPath })
 		if pemData == nil {
@@ -385,11 +401,19 @@ func (c *KubernetesCollector) resolveNodeName(sources []pemSource) (string, stri
 
 	host, err := lookup()
 	if err != nil {
+		if hasKubelet == false {
+			return "", nodeNameSourceHostname, nil
+		}
+
 		return "", "", fmt.Errorf("reading hostname: %w", err)
 	}
 
 	name := strings.ToLower(strings.TrimSpace(host))
 	if validNodeName(name) == false {
+		if hasKubelet == false {
+			return "", nodeNameSourceHostname, nil
+		}
+
 		return "", "", errors.New("hostname is not a valid node name")
 	}
 
@@ -459,7 +483,7 @@ func (c *KubernetesCollector) loadPEM(source pemSource, pick func(kubeconfigRefs
 
 	referenced, err := readKubernetesFile(target)
 	if err != nil {
-		slog.Debug("Kubernetes kubeconfig reference is unreadable", "kubeconfig", path, "path", target, "error", err)
+		slog.Debug("Kubernetes kubeconfig reference is unreadable", "kubeconfig", path, "reason", readFailure(err))
 
 		return nil
 	}
@@ -496,6 +520,17 @@ func fileExistsAt(path string) bool {
 	info, err := os.Stat(path)
 
 	return (err == nil) && (info.IsDir() == false)
+}
+
+// readFailure describes why a file could not be read without repeating its path, which the operating system's
+// error text includes. It is used where the path came from a file's content and is not worth logging.
+func readFailure(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+
+	return err.Error()
 }
 
 // readKubernetesFile reads a regular file of at most maxKubernetesFileBytes. Anything else, including a
