@@ -1412,6 +1412,83 @@ public class MachineStateServiceTests
     }
 
     [Test]
+    public async Task GetMachineDetailAsync_HostWithoutAKubelet_DoesNotShowItsReportedNodeName()
+    {
+        // Intent: a host without a kubelet is not a node, so the machine page gets no node name or name
+        // source for it, even though the host reported its hostname in the node name field.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "worker-1", null);
+        await SeedKubernetesPayloadAsync(
+            dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, nodeName: "cp-host", hasKubelet: false, nodeNameSource: "hostname"));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesLocalDto local = result!.Kubernetes!.Local!;
+        await Assert.That(local.HasKubelet).IsFalse();
+        await Assert.That(local.NodeName).IsNull();
+        await Assert.That(local.NodeNameSource).IsNull();
+        await Assert.That(local.ControlPlane).IsTrue();
+        await Assert.That(result.Kubernetes.Grouping).IsEqualTo("grouped");
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadWithAnInvalidNodeName_IsTreatedAsAbsent()
+    {
+        // Intent: a stored report the projection refuses to apply is not shown either. The machine keeps
+        // the node it is linked to, with no local part, and without a node there is nothing to show.
+        using TestDatabaseFactory dbFactory = new();
+        long linked = await SeedKubernetesMachineAsync(dbFactory);
+        long unlinked = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", linked, controlPlane: true);
+        await SeedKubernetesPayloadAsync(dbFactory, linked, KubernetesPayload(KubernetesFingerprintA, nodeName: "Not_A_Node"));
+        await SeedKubernetesPayloadAsync(dbFactory, unlinked, KubernetesPayload(KubernetesFingerprintA, nodeName: "Not_A_Node"));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? linkedResult = await service.GetMachineDetailAsync(linked, 1, CancellationToken.None);
+        MachineDetailDto? unlinkedResult = await service.GetMachineDetailAsync(unlinked, 1, CancellationToken.None);
+
+        await Assert.That(linkedResult!.Kubernetes!.Local).IsNull();
+        await Assert.That(linkedResult.Kubernetes.Node).IsNotNull();
+        await Assert.That(linkedResult.Kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(unlinkedResult!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadWithoutADistro_IsTreatedAsAbsent()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, "{}");
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadFingerprintThatIsNotLowercaseHex_IsNotUsedToPlaceTheMachine()
+    {
+        // Intent: the page places a host by the same fingerprint the projection would store, so a
+        // malformed one groups nothing even when a cluster holds its lowercase form.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA.ToUpperInvariant(), hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.Grouping).IsEqualTo("unknown");
+        await Assert.That(result.Kubernetes.ClusterId).IsNull();
+    }
+
+    [Test]
     public async Task GetMachineDetailAsync_KubernetesLocalBlock_NeverCarriesTheCaFingerprint()
     {
         // Intent: the CA fingerprint is used to group machines but is not part of what the machine page

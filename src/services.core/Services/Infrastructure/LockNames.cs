@@ -21,7 +21,7 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 /// </remarks>
 public static class LockNames
 {
-    /// <summary>State-streaming singleton lock (one consumer per cluster).</summary>
+    /// <summary>State-streaming singleton lock (one consumer per deployment).</summary>
     public const string StateStreaming = "state-streaming";
 
     /// <summary>

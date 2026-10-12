@@ -24,16 +24,20 @@ internal static class MachineKubernetesBuilder
     /// <param name="tenantId">The tenant that owns the machine.</param>
     /// <param name="machineId">The machine.</param>
     /// <param name="machineName">The machine's name, shown on the machine's own node.</param>
-    /// <param name="payload">The machine's latest local report from the past seven days, if any.</param>
+    /// <param name="rawPayload">
+    /// The machine's latest local report from the past seven days, if any. It is normalised the same way
+    /// the projection normalises it, and a report the projection would refuse is treated as absent.
+    /// </param>
     /// <param name="ct">A cancellation token.</param>
     public static async Task<MachineKubernetesDto?> BuildAsync(
         IKubernetesInventoryRepository repo,
         int tenantId,
         long machineId,
         string machineName,
-        KubernetesNodePayload? payload,
+        KubernetesNodePayload? rawPayload,
         CancellationToken ct)
     {
+        KubernetesNodePayload? payload = rawPayload == null ? null : KubernetesNodePayloadNormaliser.Normalise(rawPayload);
         KubernetesNode? node = await repo.GetNodeForMachineAsync(tenantId, machineId, ct);
         KubernetesCluster? cluster = null;
 
@@ -94,9 +98,18 @@ internal static class MachineKubernetesBuilder
     private static async Task PlaceInClusterAsync(
         MachineKubernetesDto block, IKubernetesInventoryRepository repo, int tenantId, KubernetesCluster cluster, CancellationToken ct)
     {
+        block.ClusterId = cluster.Id;
+
+        // The nodes only matter for the derived name, so a cluster an operator has named needs none.
+        if (KubernetesClusterMapper.HasDisplayName(cluster))
+        {
+            block.ClusterName = cluster.DisplayName;
+
+            return;
+        }
+
         IReadOnlyList<KubernetesNodeWithMachine> nodes = await repo.ListNodesAsync(tenantId, [cluster.Id], ct);
 
-        block.ClusterId = cluster.Id;
         block.ClusterName = KubernetesClusterMapper.NameOf(cluster, nodes.Select(n => n.Node));
     }
 
@@ -106,8 +119,8 @@ internal static class MachineKubernetesBuilder
         {
             Distro = payload.Distro,
             KubeletVersion = payload.KubeletVersion,
-            NodeName = payload.NodeName,
-            NodeNameSource = payload.NodeNameSource,
+            NodeName = payload.HasKubelet ? payload.NodeName : null,
+            NodeNameSource = payload.HasKubelet ? payload.NodeNameSource : null,
             HasKubelet = payload.HasKubelet,
             ControlPlane = payload.ControlPlane,
             AdminCredentialPresent = payload.AdminCredentialPresent,

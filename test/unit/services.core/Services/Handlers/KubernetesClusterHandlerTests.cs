@@ -133,6 +133,41 @@ public class KubernetesClusterHandlerTests
     }
 
     [Test]
+    public async Task ListAsync_TwoClusters_AttributesEachNodeToItsOwnCluster()
+    {
+        // Intent: a list of several clusters loads their nodes in one query, so each cluster must be
+        // summarised from its own nodes only. Giving the clusters different node counts, versions and
+        // control planes means a node counted for the wrong cluster changes at least one summary.
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machine = await SeedMachineAsync(dbFactory.Context, tenantId, "edge-host");
+        long first = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, distro: "k3s");
+        long second = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB, distro: "kubeadm");
+        await SeedNodeAsync(dbFactory.Context, tenantId, first, "edge-1", machine, controlPlane: true, kubeletVersion: "v1.30.4+k3s1");
+        await SeedNodeAsync(dbFactory.Context, tenantId, second, "prod-cp", controlPlane: true, kubeletVersion: "v1.31.0");
+        await SeedNodeAsync(dbFactory.Context, tenantId, second, "prod-w1", kubeletVersion: "v1.30.9");
+        await SeedNodeAsync(dbFactory.Context, tenantId, second, "prod-w2", kubeletVersion: "v1.30.9");
+        KubernetesClusterHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<List<KubernetesClusterSummaryDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.Count).IsEqualTo(2);
+        KubernetesClusterSummaryDto firstSummary = result.Data.Single(c => c.Id == first);
+        await Assert.That(firstSummary.Name).IsEqualTo("k3s edge-1");
+        await Assert.That(firstSummary.NodeCount).IsEqualTo(1);
+        await Assert.That(firstSummary.ManagedNodeCount).IsEqualTo(1);
+        await Assert.That(firstSummary.UnmanagedNodeCount).IsEqualTo(0);
+        await Assert.That(firstSummary.KubeletVersions.ToArray()).IsEquivalentTo(new[] { "v1.30.4+k3s1" });
+        KubernetesClusterSummaryDto secondSummary = result.Data.Single(c => c.Id == second);
+        await Assert.That(secondSummary.Name).IsEqualTo("kubeadm prod-cp");
+        await Assert.That(secondSummary.NodeCount).IsEqualTo(3);
+        await Assert.That(secondSummary.ManagedNodeCount).IsEqualTo(0);
+        await Assert.That(secondSummary.UnmanagedNodeCount).IsEqualTo(3);
+        await Assert.That(secondSummary.KubeletVersions.ToArray()).IsEquivalentTo(new[] { "v1.30.9", "v1.31.0" });
+    }
+
+    [Test]
     public async Task ListAsync_DisplayNameWinsOverTheDerivedName()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -403,13 +438,33 @@ public class KubernetesClusterHandlerTests
         await Assert.That(row.MachineId).IsNull();
         using JsonDocument details = JsonDocument.Parse(row.Details!);
         await Assert.That(details.RootElement.GetProperty("displayName").GetString()).IsEqualTo("Production");
+        bool hasPrevious = details.RootElement.TryGetProperty("previousDisplayName", out JsonElement previous) && (previous.ValueKind != JsonValueKind.Null);
+        await Assert.That(hasPrevious).IsFalse();
     }
 
     [Test]
-    public async Task RenameAsync_Reset_AuditsTheChangeWithoutAName()
+    public async Task RenameAsync_RenamingANamedCluster_AuditsThePreviousAndTheNewName()
     {
-        // The audit serializer leaves out null values, so a reset is recorded as a rename that carries
-        // no new name.
+        // Intent: the audit trail says what the name was as well as what it became, so a rename can be
+        // traced and undone from the log.
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, displayName: "Production");
+        KubernetesClusterHandler handler = CreateHandler(dbFactory);
+
+        await handler.RenameAsync(clusterId, tenantId, 7, "Staging", CancellationToken.None);
+
+        AuditLogEntry row = await dbFactory.Context.AuditLog.SingleAsync();
+        using JsonDocument details = JsonDocument.Parse(row.Details!);
+        await Assert.That(details.RootElement.GetProperty("displayName").GetString()).IsEqualTo("Staging");
+        await Assert.That(details.RootElement.GetProperty("previousDisplayName").GetString()).IsEqualTo("Production");
+    }
+
+    [Test]
+    public async Task RenameAsync_Reset_AuditsThePreviousNameAndNoNewName()
+    {
+        // Intent: a reset to the derived name is recorded with the name it removed. The audit serializer
+        // leaves out null values, so without the previous name a reset would be an empty record.
         using TestDatabaseFactory dbFactory = new();
         int tenantId = await SeedTenantAsync(dbFactory.Context);
         long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, displayName: "Production");
@@ -423,28 +478,66 @@ public class KubernetesClusterHandlerTests
         using JsonDocument details = JsonDocument.Parse(row.Details!);
         bool hasName = details.RootElement.TryGetProperty("displayName", out JsonElement name) && (name.ValueKind != JsonValueKind.Null);
         await Assert.That(hasName).IsFalse();
+        await Assert.That(details.RootElement.GetProperty("previousDisplayName").GetString()).IsEqualTo("Production");
     }
 
     [Test]
     public async Task RenameAsync_AuditsInTheSameTransactionBeforeItCommits()
     {
         // Intent: the audit entry and the rename commit or roll back together, so the audit insert has
-        // to happen after the rename and before the commit.
+        // to happen after the rename and before the commit. The previous name is read after the tenant
+        // lock is taken and before the rename, inside the transaction, so it is the name the rename
+        // replaces and no concurrent rename can slip in between. The cluster is read again after the
+        // commit to build the response.
+        List<string> calls = [];
         IKubernetesInventoryRepository kubernetesRepo = Substitute.For<IKubernetesInventoryRepository>();
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(transaction);
-        kubernetesRepo.RenameClusterAsync(5, 11, "Production", Arg.Any<CancellationToken>()).Returns(true);
-        kubernetesRepo.GetClusterAsync(5, 11, Arg.Any<CancellationToken>()).Returns(new KubernetesCluster
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
-            Id = 11,
-            TenantId = 5,
-            CaFingerprint = FingerprintA,
-            Distro = "k3s",
-            DisplayName = "Production",
-            FirstSeenAt = T0,
-            LastSeenAt = T0,
+            calls.Add("begin");
+
+            return transaction;
+        });
+        kubernetesRepo.AcquireKubernetesTenantLockAsync(5, Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls.Add("lock");
+
+            return Task.CompletedTask;
+        });
+        kubernetesRepo.GetClusterAsync(5, 11, Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls.Add("read");
+
+            return Task.FromResult<KubernetesCluster?>(new KubernetesCluster
+            {
+                Id = 11,
+                TenantId = 5,
+                CaFingerprint = FingerprintA,
+                Distro = "k3s",
+                DisplayName = "Production",
+                FirstSeenAt = T0,
+                LastSeenAt = T0,
+            });
+        });
+        kubernetesRepo.RenameClusterAsync(5, 11, "Production", Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls.Add("rename");
+
+            return Task.FromResult(true);
+        });
+        auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls.Add("audit");
+
+            return Task.CompletedTask;
+        });
+        transaction.CommitAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls.Add("commit");
+
+            return Task.CompletedTask;
         });
         kubernetesRepo.ListNodesAsync(5, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>()).Returns([]);
         KubernetesClusterHandler handler = new(kubernetesRepo, transactionProvider, auditLog);
@@ -452,13 +545,9 @@ public class KubernetesClusterHandlerTests
         ServiceResult<KubernetesClusterSummaryDto> result = await handler.RenameAsync(11, 5, 7, "Production", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
-        Received.InOrder(() =>
-        {
-            transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>());
-            kubernetesRepo.RenameClusterAsync(5, 11, "Production", Arg.Any<CancellationToken>());
-            auditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.KubernetesClusterRenamed), Arg.Any<CancellationToken>());
-            transaction.CommitAsync(Arg.Any<CancellationToken>());
-        });
+        await Assert.That(string.Join(" > ", calls)).IsEqualTo("begin > lock > read > rename > audit > commit > read");
+        await auditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.KubernetesClusterRenamed), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -488,12 +577,14 @@ public class KubernetesClusterHandlerTests
         IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(transaction);
-        kubernetesRepo.RenameClusterAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(false);
+        kubernetesRepo.GetClusterAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns((KubernetesCluster?)null);
         KubernetesClusterHandler handler = new(kubernetesRepo, transactionProvider, auditLog);
 
         ServiceResult<KubernetesClusterSummaryDto> result = await handler.RenameAsync(11, 5, 7, "Production", CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
+        await kubernetesRepo.DidNotReceive().RenameClusterAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
         await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
         await transaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
     }

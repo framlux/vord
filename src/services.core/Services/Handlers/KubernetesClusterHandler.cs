@@ -120,6 +120,15 @@ public sealed class KubernetesClusterHandler
 
         using (IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct))
         {
+            // The previous name is read under the tenant's lock, in the transaction that replaces it, so
+            // the audit row names the value this rename really overwrote.
+            await _kubernetesRepo.AcquireKubernetesTenantLockAsync(tenantId.Value, ct);
+            KubernetesCluster? before = await _kubernetesRepo.GetClusterAsync(tenantId.Value, clusterId, ct);
+            if (before is null)
+            {
+                return ServiceResult<KubernetesClusterSummaryDto>.NotFound();
+            }
+
             bool renamed = await _kubernetesRepo.RenameClusterAsync(tenantId.Value, clusterId, name, ct);
             if (renamed == false)
             {
@@ -129,7 +138,7 @@ public sealed class KubernetesClusterHandler
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId, userId, null,
                 AuditAction.KubernetesClusterRenamed, AuditResourceType.KubernetesCluster,
-                clusterId.ToString(), new { DisplayName = name }, null), ct);
+                clusterId.ToString(), new { DisplayName = name, PreviousDisplayName = before.DisplayName }, null), ct);
 
             await transaction.CommitAsync(ct);
         }

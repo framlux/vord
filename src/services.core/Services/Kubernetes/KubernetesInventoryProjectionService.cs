@@ -67,21 +67,6 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
     /// </summary>
     internal static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromSeconds(5);
 
-    private const int MaxNodeNameLength = 253;
-    private const int MaxKubeletVersionLength = 64;
-    private const int CaFingerprintLength = 64;
-    private const string UnknownDistro = "unknown";
-
-    private static readonly HashSet<string> KnownDistros = new(StringComparer.Ordinal)
-    {
-        "k3s",
-        "rke2",
-        "kubeadm",
-        "k0s",
-        "microk8s",
-        UnknownDistro,
-    };
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IAdvisoryLockProvider _advisoryLockProvider;
     private readonly ILogger<KubernetesInventoryProjectionService> _logger;
@@ -191,23 +176,8 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(row);
 
-        if (string.IsNullOrEmpty(payload.Distro))
-        {
-            return null;
-        }
-
-        string nodeName = payload.NodeName ?? string.Empty;
-        bool nameIsUsable;
-        if (nodeName.Length == 0)
-        {
-            nameIsUsable = payload.HasKubelet == false;
-        }
-        else
-        {
-            nameIsUsable = IsValidNodeName(nodeName);
-        }
-
-        if (nameIsUsable == false)
+        KubernetesNodePayload? normalised = KubernetesNodePayloadNormaliser.Normalise(payload);
+        if (normalised == null)
         {
             return null;
         }
@@ -217,110 +187,12 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
             row.TenantId,
             row.MachineId,
             row.ServerReceivedAt,
-            NormaliseDistro(payload.Distro),
-            nodeName,
-            payload.HasKubelet,
-            payload.ControlPlane,
-            NormaliseCaFingerprint(payload.CaFingerprint),
-            NormaliseKubeletVersion(payload.KubeletVersion));
-    }
-
-    /// <summary>
-    /// Reports whether a name is a Kubernetes node name: an RFC 1123 subdomain of at most 253
-    /// characters, which is lowercase alphanumeric labels joined by dots where a label may hold
-    /// hyphens but neither starts nor ends with one. Checked by hand rather than with a regular
-    /// expression so that a hostile name can never make the check time out and wedge the projection.
-    /// </summary>
-    private static bool IsValidNodeName(string name)
-    {
-        if ((name.Length == 0) || (name.Length > MaxNodeNameLength))
-        {
-            return false;
-        }
-
-        // Starting as if after a dot makes a leading dot or hyphen fail the same checks as one inside.
-        char previous = '.';
-        foreach (char character in name)
-        {
-            if (character == '.')
-            {
-                if ((previous == '.') || (previous == '-'))
-                {
-                    return false;
-                }
-            }
-            else if (character == '-')
-            {
-                if (previous == '.')
-                {
-                    return false;
-                }
-            }
-            else if (IsLowerAlphanumeric(character) == false)
-            {
-                return false;
-            }
-
-            previous = character;
-        }
-
-        return (previous != '.') && (previous != '-');
-    }
-
-    private static bool IsLowerAlphanumeric(char character)
-    {
-        return ((character >= 'a') && (character <= 'z')) || ((character >= '0') && (character <= '9'));
-    }
-
-    private static string NormaliseDistro(string? distro)
-    {
-        if ((distro is not null) && KnownDistros.Contains(distro))
-        {
-            return distro;
-        }
-
-        return UnknownDistro;
-    }
-
-    private static string? NormaliseCaFingerprint(string? fingerprint)
-    {
-        if ((fingerprint is null) || (fingerprint.Length != CaFingerprintLength))
-        {
-            return null;
-        }
-
-        foreach (char character in fingerprint)
-        {
-            bool isLowerHex = ((character >= '0') && (character <= '9')) || ((character >= 'a') && (character <= 'f'));
-            if (isLowerHex == false)
-            {
-                return null;
-            }
-        }
-
-        return fingerprint;
-    }
-
-    private static string? NormaliseKubeletVersion(string? version)
-    {
-        if (string.IsNullOrEmpty(version))
-        {
-            return null;
-        }
-
-        if (version.Length <= MaxKubeletVersionLength)
-        {
-            return version;
-        }
-
-        // Cutting between the halves of a surrogate pair would leave a character no database encodes.
-        int length = MaxKubeletVersionLength;
-        if (char.IsHighSurrogate(version[length - 1]))
-        {
-            length--;
-        }
-
-        return version[..length];
+            normalised.Distro,
+            normalised.NodeName,
+            normalised.HasKubelet,
+            normalised.ControlPlane,
+            normalised.CaFingerprint.Length == 0 ? null : normalised.CaFingerprint,
+            normalised.KubeletVersion.Length == 0 ? null : normalised.KubeletVersion);
     }
 
     /// <summary>

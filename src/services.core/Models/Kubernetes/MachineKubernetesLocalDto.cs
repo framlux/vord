@@ -16,11 +16,14 @@ public sealed class MachineKubernetesLocalDto
     /// <summary>The kubelet version found on the host, empty when none was found.</summary>
     public string KubeletVersion { get; set; } = "";
 
-    /// <summary>The name the node registers under in its cluster.</summary>
-    public string NodeName { get; set; } = "";
+    /// <summary>
+    /// The name the node registers under in its cluster, or null when the host runs no kubelet and so
+    /// is not a node.
+    /// </summary>
+    public string? NodeName { get; set; }
 
-    /// <summary>Where the node name came from: certificate or hostname.</summary>
-    public string NodeNameSource { get; set; } = "";
+    /// <summary>Where the node name came from (certificate or hostname), or null when <see cref="NodeName"/> is null.</summary>
+    public string? NodeNameSource { get; set; }
 
     /// <summary>Whether the host runs a kubelet, which makes it a worker node.</summary>
     public bool HasKubelet { get; set; }

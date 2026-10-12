@@ -20,13 +20,23 @@ internal static class KubernetesClusterMapper
     /// <param name="nodes">The cluster's nodes.</param>
     public static string NameOf(KubernetesCluster cluster, IEnumerable<KubernetesNode> nodes)
     {
-        if (string.IsNullOrWhiteSpace(cluster.DisplayName) == false)
+        if (HasDisplayName(cluster))
         {
-            return cluster.DisplayName;
+            return cluster.DisplayName!;
         }
 
         return KubernetesClusterNames.Derive(
             cluster.Distro, cluster.CaFingerprint, nodes.Select(n => (n.NodeName, n.LocalControlPlane)));
+    }
+
+    /// <summary>
+    /// Returns whether an operator has named the cluster, which makes its nodes irrelevant to its name.
+    /// A blank name counts as none.
+    /// </summary>
+    /// <param name="cluster">The cluster.</param>
+    public static bool HasDisplayName(KubernetesCluster cluster)
+    {
+        return string.IsNullOrWhiteSpace(cluster.DisplayName) == false;
     }
 
     /// <summary>
