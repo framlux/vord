@@ -36,4 +36,7 @@ internal static class TableNames
     public const string RemoteCommands = "RemoteCommands";
     public const string DataProtectionKeys = "DataProtectionKeys";
     public const string TenantDeletions = "TenantDeletions";
+    public const string KubernetesClusters = "KubernetesClusters";
+    public const string KubernetesNodes = "KubernetesNodes";
+    public const string KubernetesInventoryProjectionCursor = "KubernetesInventoryProjectionCursor";
 }
