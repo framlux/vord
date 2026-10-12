@@ -40,11 +40,12 @@ const (
 
 // Client talks to one Kubernetes API server. It is safe for concurrent use.
 type Client struct {
-	http    *http.Client
-	base    *url.URL
-	token   string
-	timeout time.Duration
-	maxBody int64
+	http     *http.Client
+	base     *url.URL
+	token    string
+	timeout  time.Duration
+	maxBody  int64
+	maxPages int
 }
 
 // String names the client by its server and omits the credentials, so formatting a Client cannot leak them.
@@ -117,10 +118,11 @@ func New(cfg Config) (*Client, error) {
 				return http.ErrUseLastResponse
 			},
 		},
-		base:    base,
-		token:   cfg.Token,
-		timeout: requestTimeout,
-		maxBody: maxResponseBytes,
+		base:     base,
+		token:    cfg.Token,
+		timeout:  requestTimeout,
+		maxBody:  maxResponseBytes,
+		maxPages: maxListPages,
 	}, nil
 }
 

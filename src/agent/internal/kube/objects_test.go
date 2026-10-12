@@ -5,6 +5,7 @@
 package kube
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,37 +16,54 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 const leasePath = "/apis/coordination.k8s.io/v1/namespaces/vord-system/leases/vord-reporter"
 
-// Intent: read-modify-write through GetRaw and PutRaw keeps every field the agent does not know. The server
-// stands in for an API version newer than the agent, and what it stored must come back unchanged except for the
-// field the agent edited.
-func TestRawReadModifyWritePreservesUnknownFields(t *testing.T) {
-	stored := map[string]any{
-		"apiVersion": "coordination.k8s.io/v1",
-		"kind":       "Lease",
-		"metadata": map[string]any{
-			"name":            "vord-reporter",
-			"namespace":       "vord-system",
-			"resourceVersion": "41",
-			"annotations":     map[string]any{"vord.framlux.io/role-version": "1", "example.com/keep": "me"},
-		},
-		"spec": map[string]any{
-			"holderIdentity":       "vord-old",
-			"leaseDurationSeconds": float64(60),
-			"leaseTransitions":     float64(7),
-			"strategy":             "OldestEmulationVersion",
-			"preferredHolder":      "vord-other",
-			"futureField":          map[string]any{"nested": []any{"a", float64(1), nil, true}},
-		},
+// decodeExact decodes JSON the way GetRaw does, keeping numbers exact.
+func decodeExact(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	var obj map[string]any
+	if err := decoder.Decode(&obj); err != nil {
+		t.Fatalf("decode %s: %v", data, err)
 	}
 
+	return obj
+}
+
+const storedLease = `{
+  "apiVersion": "coordination.k8s.io/v1",
+  "kind": "Lease",
+  "metadata": {
+    "name": "vord-reporter",
+    "namespace": "vord-system",
+    "resourceVersion": "41",
+    "generation": 9007199254740993,
+    "annotations": {"vord.framlux.io/role-version": "1", "example.com/keep": "me"}
+  },
+  "spec": {
+    "holderIdentity": "vord-old",
+    "leaseDurationSeconds": 60,
+    "leaseTransitions": 7,
+    "strategy": "OldestEmulationVersion",
+    "preferredHolder": "vord-other",
+    "futureField": {"nested": ["a", 1, null, true, 1.5, 12345678901234567890]}
+  }
+}`
+
+// Intent: read-modify-write through GetRaw and PutRaw keeps every field the agent does not know, and every number
+// exactly. The server stands in for an API version newer than the agent, and what it stored must come back
+// unchanged except for the field the agent edited, including an integer above 2^53 that a float64 would round.
+func TestRawReadModifyWritePreservesUnknownFields(t *testing.T) {
 	var mu sync.Mutex
 
-	var received map[string]any
+	var received []byte
 
 	server := newTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -53,14 +71,13 @@ func TestRawReadModifyWritePreservesUnknownFields(t *testing.T) {
 
 		switch r.Method {
 		case http.MethodGet:
-			writeJSON(w, http.StatusOK, stored)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(storedLease))
 		case http.MethodPut:
-			data, _ := io.ReadAll(r.Body)
-			if err := json.Unmarshal(data, &received); err != nil {
-				t.Errorf("PUT body: %v", err)
-			}
+			received, _ = io.ReadAll(r.Body)
 
-			writeJSON(w, http.StatusOK, received)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(received)
 		}
 	}))
 
@@ -77,32 +94,41 @@ func TestRawReadModifyWritePreservesUnknownFields(t *testing.T) {
 	}
 
 	spec["holderIdentity"] = "vord-new"
-	spec["leaseTransitions"] = float64(8)
+	spec["leaseTransitions"] = int64(8)
 
 	updated, err := client.PutRaw(context.Background(), leasePath, lease)
 	if err != nil {
 		t.Fatalf("PutRaw: %v", err)
 	}
 
-	want := map[string]any{}
-
-	data, _ := json.Marshal(stored)
-	_ = json.Unmarshal(data, &want)
-
+	want := decodeExact(t, []byte(storedLease))
 	wantSpec := want["spec"].(map[string]any)
 	wantSpec["holderIdentity"] = "vord-new"
-	wantSpec["leaseTransitions"] = float64(8)
+	wantSpec["leaseTransitions"] = json.Number("8")
 
-	if reflect.DeepEqual(received, want) == false {
-		t.Errorf("the PUT body lost or changed fields:\n got %v\nwant %v", received, want)
+	if got := decodeExact(t, received); reflect.DeepEqual(got, want) == false {
+		t.Errorf("the PUT body lost or changed fields:\n got %v\nwant %v", got, want)
 	}
 
-	if received["spec"].(map[string]any)["strategy"] != "OldestEmulationVersion" {
-		t.Errorf("spec.strategy was dropped: %v", received["spec"])
+	if bytes.Contains(received, []byte("9007199254740993")) == false {
+		t.Errorf("the integer above 2^53 did not survive the round trip: %s", received)
+	}
+
+	if bytes.Contains(received, []byte("12345678901234567890")) == false {
+		t.Errorf("the integer above 2^63 did not survive the round trip: %s", received)
+	}
+
+	if bytes.Contains(received, []byte(`"strategy":"OldestEmulationVersion"`)) == false {
+		t.Errorf("spec.strategy was dropped: %s", received)
 	}
 
 	if reflect.DeepEqual(updated, want) == false {
 		t.Errorf("PutRaw returned %v, want the stored object %v", updated, want)
+	}
+
+	generation := lease["metadata"].(map[string]any)["generation"]
+	if generation != json.Number("9007199254740993") {
+		t.Errorf("generation = %#v, want json.Number 9007199254740993", generation)
 	}
 }
 
@@ -222,7 +248,7 @@ func TestListWalksThreePages(t *testing.T) {
 		pages = append(pages, string(body))
 
 		return nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -255,7 +281,7 @@ func TestListWithoutLimitOmitsIt(t *testing.T) {
 	script := &listServer{steps: []listStep{{body: pageBody("")}}}
 	client := newTestClient(t, configFor(newTLSServer(t, script)))
 
-	if err := client.List(context.Background(), "/api/v1/nodes", nil, 0, func([]byte) error { return nil }); err != nil {
+	if err := client.List(context.Background(), "/api/v1/nodes", nil, 0, func([]byte) error { return nil }, nil); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 
@@ -265,7 +291,7 @@ func TestListWithoutLimitOmitsIt(t *testing.T) {
 }
 
 // Intent: when the continue token expires (410) on page two, List starts again from page one and finishes. The
-// callback sees page one twice, so a caller that accumulates must expect that.
+// callback receives page one twice, the second time after the restart.
 func TestListRestartsAfterExpiredContinueToken(t *testing.T) {
 	script := &listServer{steps: []listStep{
 		{body: pageBody("t1", "a")},
@@ -279,7 +305,7 @@ func TestListRestartsAfterExpiredContinueToken(t *testing.T) {
 
 	var pages int
 
-	if err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil }); err != nil {
+	if err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil }, nil); err != nil {
 		t.Fatalf("List: %v", err)
 	}
 
@@ -289,6 +315,141 @@ func TestListRestartsAfterExpiredContinueToken(t *testing.T) {
 
 	if len(script.queries) != 5 {
 		t.Errorf("server saw %d requests, want 5", len(script.queries))
+	}
+}
+
+// itemsOf returns the items of a page body made by pageBody.
+func itemsOf(t *testing.T, body []byte) []string {
+	t.Helper()
+
+	var parsed struct {
+		Items []string `json:"items"`
+	}
+
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode page %s: %v", body, err)
+	}
+
+	return parsed.Items
+}
+
+// Intent: a restart after page two is announced exactly once, before page one is delivered again, so a caller that
+// accumulates can reset and still ends with the totals of the one complete pass.
+func TestListAnnouncesRestartBeforeRedeliveringPageOne(t *testing.T) {
+	script := &listServer{steps: []listStep{
+		{body: pageBody("t1", "a")},
+		{body: pageBody("t2", "b"), wantTok: "t1"},
+		{status: http.StatusGone, reason: "Expired", wantTok: "t2"},
+		{body: pageBody("n1", "a")},
+		{body: pageBody("n2", "b"), wantTok: "n1"},
+		{body: pageBody("", "c"), wantTok: "n2"},
+	}}
+
+	client := newTestClient(t, configFor(newTLSServer(t, script)))
+
+	var accumulated, events []string
+
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1,
+		func(body []byte) error {
+			accumulated = append(accumulated, itemsOf(t, body)...)
+			events = append(events, "page")
+
+			return nil
+		},
+		func() {
+			accumulated = nil
+			events = append(events, "restart")
+		})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if want := []string{"page", "page", "restart", "page", "page", "page"}; reflect.DeepEqual(events, want) == false {
+		t.Errorf("events = %v, want %v", events, want)
+	}
+
+	if want := []string{"a", "b", "c"}; reflect.DeepEqual(accumulated, want) == false {
+		t.Errorf("accumulated = %v, want %v with no repeats from the abandoned pass", accumulated, want)
+	}
+}
+
+// Intent: onRestart is optional, and it is not called when nothing was restarted.
+func TestListDoesNotCallOnRestartWithoutRestart(t *testing.T) {
+	script := &listServer{steps: []listStep{{body: pageBody("t1", "a")}, {body: pageBody("", "b"), wantTok: "t1"}}}
+	client := newTestClient(t, configFor(newTLSServer(t, script)))
+
+	var restarts int
+
+	if err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil }, func() { restarts++ }); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if restarts != 0 {
+		t.Errorf("onRestart calls = %d, want 0", restarts)
+	}
+}
+
+// Intent: a list is bounded in pages as well as by the caller's context: a server that never ends the list is cut
+// off, and a list of exactly the maximum still succeeds.
+func TestListStopsAfterMaximumPages(t *testing.T) {
+	var requests atomic.Int32
+
+	endless := newTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(pageBody("token-" + strconv.Itoa(int(requests.Add(1))))))
+	}))
+
+	client := newTestClient(t, configFor(endless))
+	client.maxPages = 3
+
+	var pages int
+
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil }, nil)
+	if err == nil {
+		t.Fatalf("an endless list must be cut off")
+	}
+
+	if apiErrorOf(err) != nil {
+		t.Errorf("err = %v, want a local error, not an API error", err)
+	}
+
+	if (pages != 3) || (requests.Load() != 3) {
+		t.Errorf("pages = %d, requests = %d, want 3 and 3", pages, requests.Load())
+	}
+
+	exact := &listServer{steps: []listStep{{body: pageBody("t1")}, {body: pageBody("t2"), wantTok: "t1"}, {body: pageBody(""), wantTok: "t2"}}}
+	client = newTestClient(t, configFor(newTLSServer(t, exact)))
+	client.maxPages = 3
+
+	if err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil }, nil); err != nil {
+		t.Errorf("a list of exactly the maximum pages failed: %v", err)
+	}
+
+	if newTestClient(t, configFor(endless)).maxPages != 10_000 {
+		t.Errorf("the default page limit is not 10,000")
+	}
+}
+
+// Intent: restarts do not reset the page budget, so a server that keeps expiring tokens cannot extend the work.
+func TestListPageBudgetSpansRestarts(t *testing.T) {
+	script := &listServer{steps: []listStep{
+		{body: pageBody("t1")},
+		{body: pageBody("t2"), wantTok: "t1"},
+		{status: http.StatusGone, reason: "Expired", wantTok: "t2"},
+		{body: pageBody("n1")},
+		{body: pageBody("n2"), wantTok: "n1"},
+		{body: pageBody(""), wantTok: "n2"},
+	}}
+
+	client := newTestClient(t, configFor(newTLSServer(t, script)))
+	client.maxPages = 3
+
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil }, nil)
+	if err == nil {
+		t.Errorf("pages of an abandoned pass must count against the budget")
+	}
+
+	if len(script.queries) != 4 {
+		t.Errorf("server saw %d requests, want 4 (two pages, the 410, then one page before the budget ran out)", len(script.queries))
 	}
 }
 
@@ -302,13 +463,17 @@ func TestListGivesUpAfterThreeRestarts(t *testing.T) {
 	script := &listServer{steps: steps}
 	client := newTestClient(t, configFor(newTLSServer(t, script)))
 
-	var pages int
+	var pages, restarts int
 
-	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil })
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil }, func() { restarts++ })
 
 	apiError := apiErrorOf(err)
 	if (apiError == nil) || (apiError.Code != http.StatusGone) {
 		t.Errorf("err = %v, want the 410", err)
+	}
+
+	if restarts != 3 {
+		t.Errorf("onRestart calls = %d, want 3", restarts)
 	}
 
 	if pages != 4 {
@@ -325,7 +490,7 @@ func TestListDoesNotRestartOnFirstPage(t *testing.T) {
 	script := &listServer{steps: []listStep{{status: http.StatusGone, reason: "Expired"}, {body: pageBody("")}}}
 	client := newTestClient(t, configFor(newTLSServer(t, script)))
 
-	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil })
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil }, nil)
 	if apiErrorOf(err) == nil {
 		t.Errorf("err = %v, want the 410", err)
 	}
@@ -341,7 +506,7 @@ func TestListStopsOnCallbackError(t *testing.T) {
 
 	stop := errors.New("stop here")
 
-	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return stop })
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return stop }, nil)
 	if errors.Is(err, stop) == false {
 		t.Errorf("err = %v, want the callback's error", err)
 	}
@@ -355,7 +520,7 @@ func TestListSurfacesOtherErrors(t *testing.T) {
 	script := &listServer{steps: []listStep{{body: pageBody("t1")}, {status: http.StatusForbidden, reason: "Forbidden", wantTok: "t1"}}}
 	client := newTestClient(t, configFor(newTLSServer(t, script)))
 
-	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil })
+	err := client.List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil }, nil)
 	if IsAuthRejected(err) == false {
 		t.Errorf("err = %v, want the 403", err)
 	}
@@ -369,7 +534,7 @@ func TestListStopsWhenContinueTokenDoesNotAdvance(t *testing.T) {
 
 	var pages int
 
-	err := newTestClient(t, configFor(server)).List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil })
+	err := newTestClient(t, configFor(server)).List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { pages++; return nil }, nil)
 	if err == nil {
 		t.Errorf("a continue token that never changes must be an error")
 	}
@@ -379,13 +544,22 @@ func TestListStopsWhenContinueTokenDoesNotAdvance(t *testing.T) {
 	}
 }
 
-func TestListRejectsUndecodablePage(t *testing.T) {
-	server := newTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("not json"))
-	}))
+// Intent: a page that is not valid JSON is rejected before the callback sees it.
+func TestListRejectsUndecodablePageBeforeDeliveringIt(t *testing.T) {
+	for _, body := range []string{"not json", "[1]", `{"metadata":`, `"text"`} {
+		server := newTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
 
-	err := newTestClient(t, configFor(server)).List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { return nil })
-	if err == nil {
-		t.Errorf("a page that is not JSON must be an error")
+		var delivered int
+
+		err := newTestClient(t, configFor(server)).List(context.Background(), "/api/v1/pods", nil, 1, func([]byte) error { delivered++; return nil }, nil)
+		if err == nil {
+			t.Errorf("body %q: a page that is not JSON must be an error", body)
+		}
+
+		if delivered != 0 {
+			t.Errorf("body %q: the callback received the undecodable page %d times", body, delivered)
+		}
 	}
 }

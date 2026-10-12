@@ -7,6 +7,7 @@ package kube
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -317,7 +318,8 @@ users:
 	})
 }
 
-// Intent: current-context picks its context; with none, or one that does not exist, the first context is used.
+// Intent: current-context picks its context; with none the first context is used, and one that does not exist is
+// an error, because falling back would send credentials to a cluster nobody chose.
 func TestLoadKubeconfigContextSelection(t *testing.T) {
 	template := fmt.Sprintf(`%%s
 clusters:
@@ -338,16 +340,15 @@ users:
 `, b64("CA"))
 
 	cases := []struct {
-		name        string
-		header      string
-		wantServer  string
-		wantToken   string
-		wantSuccess bool
+		name       string
+		header     string
+		wantServer string
+		wantToken  string
 	}{
-		{"current-context names the second", "current-context: second", "https://two:6443", "token-two", true},
-		{"current-context names the first", "current-context: first", "https://one:6443", "token-one", true},
-		{"no current-context", "kind: Config", "https://one:6443", "token-one", true},
-		{"current-context names a missing context", "current-context: nowhere", "https://one:6443", "token-one", true},
+		{"current-context names the second", "current-context: second", "https://two:6443", "token-two"},
+		{"current-context names the first", "current-context: first", "https://one:6443", "token-one"},
+		{"no current-context", "kind: Config", "https://one:6443", "token-one"},
+		{"empty current-context", `current-context: ""`, "https://one:6443", "token-one"},
 	}
 
 	for _, tc := range cases {
@@ -356,6 +357,19 @@ users:
 
 			if cfg.Server != tc.wantServer || cfg.Token != tc.wantToken {
 				t.Errorf("got server %q and a different token, want %q", cfg.Server, tc.wantServer)
+			}
+		})
+	}
+
+	for _, header := range []string{"current-context: nowhere", "current-context: First", "current-context: ' '"} {
+		t.Run("missing "+header, func(t *testing.T) {
+			cfg, _, err := loadFrom(t, fmt.Sprintf(template, header), nil)
+			if err == nil {
+				t.Errorf("a current-context naming no context fell back to another one: %v", cfg)
+			}
+
+			if (cfg.Token != "") || (cfg.Server != "") {
+				t.Errorf("a credential was returned with the error: %v", cfg)
 			}
 		})
 	}
@@ -669,6 +683,68 @@ func TestConfigFormattingRedactsCredentials(t *testing.T) {
 	if strings.Contains(fmt.Sprintf("%v", cfg), "k:6443") == false {
 		t.Errorf("the redacted form should still name the server host: %v", cfg)
 	}
+}
+
+// Intent: a Config that reaches a JSON encoder is redacted, whether encoded directly, by value or by pointer, or
+// nested in another value, and the server's own credentials are removed too.
+func TestConfigMarshalJSONRedactsCredentials(t *testing.T) {
+	cfg := Config{
+		Server:        "https://admin:urlpassword@k:6443",
+		CAData:        []byte("CA-BYTES"),
+		TLSServerName: "kubernetes.internal",
+		ClientCert:    []byte("CERT-BYTES"),
+		ClientKey:     []byte("KEY-BYTES-SECRET"),
+		Token:         "TOKEN-SECRET",
+	}
+
+	wrapper := struct {
+		Cluster Config
+		Pointer *Config
+	}{cfg, &cfg}
+
+	for name, value := range map[string]any{"value": cfg, "pointer": &cfg, "nested": wrapper} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("%s: Marshal: %v", name, err)
+		}
+
+		text := string(encoded)
+
+		for _, secret := range []string{"TOKEN-SECRET", "KEY-BYTES-SECRET", "urlpassword", "CERT-BYTES", "CA-BYTES", "Q0EtQllURVM"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s: JSON leaks %q: %s", name, secret, text)
+			}
+		}
+
+		if strings.Contains(text, "k:6443") == false || strings.Contains(text, "kubernetes.internal") == false {
+			t.Errorf("%s: JSON should still name the server and TLS server name: %s", name, text)
+		}
+	}
+
+	var decoded map[string]string
+	if err := json.Unmarshal(mustMarshal(t, cfg), &decoded); err != nil {
+		t.Fatalf("the redacted form is not a flat object: %v", err)
+	}
+
+	if decoded["Token"] != "[redacted]" || decoded["ClientKey"] != "[redacted]" || decoded["ClientCert"] != "[redacted]" {
+		t.Errorf("redacted fields = %v", decoded)
+	}
+
+	empty := mustMarshal(t, Config{Server: "https://k:6443"})
+	if strings.Contains(string(empty), "[redacted]") {
+		t.Errorf("an empty credential must not be reported as present: %s", empty)
+	}
+}
+
+func mustMarshal(t *testing.T, value any) []byte {
+	t.Helper()
+
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	return encoded
 }
 
 // Intent: structured logging redacts a Config too; the JSON handler would otherwise encode every exported field.

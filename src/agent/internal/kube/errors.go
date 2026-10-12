@@ -32,12 +32,29 @@ var ErrNoCA = errors.New("kubeconfig cluster has no certificate authority")
 // maxErrorTextBytes bounds the server-supplied text kept in an APIError.
 const maxErrorTextBytes = 512
 
+// maxStatusCauses bounds how many causes of a Status object an APIError keeps.
+const maxStatusCauses = 16
+
+// causeNamespaceTerminating is the cause type the API server gives to a write refused because its namespace is
+// being deleted.
+const causeNamespaceTerminating = "NamespaceTerminating"
+
+// StatusCause is one entry of a Status object's details.causes: a machine-readable type, a message and the field
+// it concerns.
+type StatusCause struct {
+	Type    string `json:"reason"`
+	Message string `json:"message"`
+	Field   string `json:"field"`
+}
+
 // APIError is a non-success response from the Kubernetes API server. Reason is the machine-readable reason of the
-// Status object the server sent, and is empty when the body held no Status.
+// Status object the server sent, and is empty when the body held no Status. Causes holds the Status details, if
+// any, with at most 16 entries.
 type APIError struct {
 	Code    int
 	Reason  string
 	Message string
+	Causes  []StatusCause
 }
 
 // Error describes the response. It carries only what the server said, never a request header or body.
@@ -63,6 +80,9 @@ func (e *APIError) Error() string {
 type statusObject struct {
 	Message string `json:"message"`
 	Reason  string `json:"reason"`
+	Details struct {
+		Causes []StatusCause `json:"causes"`
+	} `json:"details"`
 }
 
 // newAPIError builds the error for a non-success response. The HTTP status code is authoritative. A body that is
@@ -71,9 +91,18 @@ func newAPIError(code int, body []byte) *APIError {
 	apiError := &APIError{Code: code}
 
 	var status statusObject
-	if json.Unmarshal(body, &status) == nil && ((status.Reason != "") || (status.Message != "")) {
+	if json.Unmarshal(body, &status) == nil && ((status.Reason != "") || (status.Message != "") || (len(status.Details.Causes) > 0)) {
 		apiError.Reason = sanitizeText(status.Reason)
 		apiError.Message = sanitizeText(status.Message)
+
+		for i := 0; (i < len(status.Details.Causes)) && (i < maxStatusCauses); i++ {
+			cause := status.Details.Causes[i]
+			apiError.Causes = append(apiError.Causes, StatusCause{
+				Type:    sanitizeText(cause.Type),
+				Message: sanitizeText(cause.Message),
+				Field:   sanitizeText(cause.Field),
+			})
+		}
 
 		return apiError
 	}
@@ -145,11 +174,38 @@ func IsNotFound(err error) bool {
 	return (apiError != nil) && (apiError.Code == http.StatusNotFound)
 }
 
-// IsAuthRejected reports whether err is a 401 or 403: the credentials were refused or lack the permission.
+// IsAuthRejected reports whether err is a 401 or 403: the credentials were refused or lack the permission. A 403
+// that only says the namespace is being deleted is not a rejection of the credentials.
 func IsAuthRejected(err error) bool {
 	apiError := apiErrorOf(err)
+	if apiError == nil {
+		return false
+	}
 
-	return (apiError != nil) && ((apiError.Code == http.StatusUnauthorized) || (apiError.Code == http.StatusForbidden))
+	return ((apiError.Code == http.StatusUnauthorized) || (apiError.Code == http.StatusForbidden)) && (IsNamespaceTerminating(err) == false)
+}
+
+// IsNamespaceTerminating reports whether err is a 403 or 409 that refuses a write because its namespace is being
+// deleted: a NamespaceTerminating cause or reason, or the API server's "being terminated" message.
+func IsNamespaceTerminating(err error) bool {
+	apiError := apiErrorOf(err)
+	if (apiError == nil) || ((apiError.Code != http.StatusForbidden) && (apiError.Code != http.StatusConflict)) {
+		return false
+	}
+
+	if apiError.Reason == causeNamespaceTerminating {
+		return true
+	}
+
+	for _, cause := range apiError.Causes {
+		if cause.Type == causeNamespaceTerminating {
+			return true
+		}
+	}
+
+	message := strings.ToLower(apiError.Message)
+
+	return strings.Contains(message, "namespace") && (strings.Contains(message, "being terminated") || strings.Contains(message, "is terminating"))
 }
 
 // IsTLSVerify reports whether err is a failure to verify the server certificate: an unknown authority, an

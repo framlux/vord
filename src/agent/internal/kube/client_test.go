@@ -630,38 +630,53 @@ func (d *deadlineRecorder) RoundTrip(req *http.Request) (*http.Response, error) 
 	}, nil
 }
 
-// Intent: every request carries a 30 second deadline set through its context, and an earlier caller deadline is
-// kept.
+// Intent: every request is bound by a 30 second timeout applied through its context, and a caller deadline that is
+// earlier is kept as it is. The test checks the configured value and the deadlines the requests carry, never the
+// wall clock.
 func TestDoAppliesRequestTimeout(t *testing.T) {
 	server := newTLSServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	client := newTestClient(t, configFor(server))
 
+	if client.timeout != 30*time.Second {
+		t.Errorf("timeout = %v, want 30s", client.timeout)
+	}
+
 	recorder := &deadlineRecorder{}
 	client.http.Transport = recorder
-
-	before := time.Now()
 
 	if err := client.Do(context.Background(), http.MethodGet, "/x", nil, nil, nil); err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 
 	if len(recorder.deadlines) != 1 || recorder.deadlines[0].IsZero() {
-		t.Fatalf("the request carried no deadline: %v", recorder.deadlines)
+		t.Fatalf("a request with no caller deadline carried none: %v", recorder.deadlines)
 	}
 
-	if span := recorder.deadlines[0].Sub(before); (span < 30*time.Second) || (span > 40*time.Second) {
-		t.Errorf("deadline is %v after the call began, want 30s", span)
-	}
+	callerDeadline := time.Now().Add(5 * time.Second)
 
-	soon, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	soon, cancel := context.WithDeadline(context.Background(), callerDeadline)
 	defer cancel()
 
 	if err := client.Do(soon, http.MethodGet, "/x", nil, nil, nil); err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 
-	if span := recorder.deadlines[1].Sub(before); span > 10*time.Second {
-		t.Errorf("an earlier caller deadline was extended to %v", span)
+	if recorder.deadlines[1].Equal(callerDeadline) == false {
+		t.Errorf("request deadline = %v, want the caller's earlier %v", recorder.deadlines[1], callerDeadline)
+	}
+
+	client.timeout = time.Hour
+	farOff := time.Now().Add(100 * time.Hour)
+
+	later, cancelLater := context.WithDeadline(context.Background(), farOff)
+	defer cancelLater()
+
+	if err := client.Do(later, http.MethodGet, "/x", nil, nil, nil); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	if recorder.deadlines[2].Equal(farOff) {
+		t.Errorf("the client timeout did not shorten a caller deadline that was further away")
 	}
 }
 

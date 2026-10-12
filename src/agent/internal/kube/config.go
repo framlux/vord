@@ -6,6 +6,7 @@ package kube
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +25,8 @@ import (
 const maxKubeconfigFileBytes = 1 << 20
 
 // Config is what the client needs to reach one cluster and prove who it is. Credentials are held in memory only.
-// Formatting a Config with any fmt verb, or logging it with slog, prints a redacted summary, so it is safe to log.
+// Formatting a Config with any fmt verb, logging it with slog or encoding it as JSON gives a redacted summary, so
+// it is safe to log.
 type Config struct {
 	Server        string
 	CAData        []byte
@@ -50,6 +53,26 @@ func (c Config) GoString() string {
 // which would otherwise encode every exported field.
 func (c Config) LogValue() slog.Value {
 	return slog.StringValue(c.String())
+}
+
+// MarshalJSON encodes the Config with its secrets redacted, under the same keys as the fields, so a Config that
+// reaches a JSON encoder (a structured logger, a debug dump) cannot leak. The result is not meant to be decoded.
+func (c Config) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Server        string
+		CAData        string
+		TLSServerName string
+		ClientCert    string
+		ClientKey     string
+		Token         string
+	}{
+		Server:        redactedServer(c.Server),
+		CAData:        presence(len(c.CAData) > 0),
+		TLSServerName: c.TLSServerName,
+		ClientCert:    presence(len(c.ClientCert) > 0),
+		ClientKey:     presence(len(c.ClientKey) > 0),
+		Token:         presence(c.Token != ""),
+	})
 }
 
 // presence names whether a value is set without revealing it.
@@ -116,13 +139,14 @@ type kubeconfigDocument struct {
 }
 
 // LoadKubeconfig reads the kubeconfig at path and returns the cluster and user of its current-context. When
-// current-context is absent, or names a context the file does not hold, the first context is used. A context
-// whose cluster or user the file does not define is an error, because using another entry would send credentials
-// to the wrong cluster.
+// current-context is empty the first context is used; when it names a context the file does not hold, that is an
+// error, because quietly using another context could send credentials to a cluster nobody chose. A context whose
+// cluster or user the file does not define is an error for the same reason.
 //
 // Inline *-data values win over the matching path, and relative paths resolve against the kubeconfig's directory.
 // A tokenFile is read once and its surrounding whitespace removed; an inline token wins over it. readFile reads
-// the kubeconfig and every file it names, and nil means a size-capped read of the real filesystem.
+// the kubeconfig and every file it names, and nil means a size-capped read of regular files on the real
+// filesystem.
 //
 // The kubeconfig is refused, before any credential file is opened, when:
 //   - its cluster sets insecure-skip-tls-verify in any way other than false: ErrInsecureKubeconfig;
@@ -197,8 +221,9 @@ func LoadKubeconfig(path string, readFile func(string) ([]byte, error)) (Config,
 	return cfg, nil
 }
 
-// selectContext follows current-context to its cluster and user, falling back to the first context. The returned
-// user is nil when the context names none.
+// selectContext follows current-context to its cluster and user. An empty current-context selects the first
+// context; a current-context that names no context is an error. The returned user is nil when the context names
+// none.
 func selectContext(doc *kubeconfigDocument) (*kubeconfigCluster, *kubeconfigUser, error) {
 	contextIndex := -1
 
@@ -210,9 +235,11 @@ func selectContext(doc *kubeconfigDocument) (*kubeconfigCluster, *kubeconfigUser
 				break
 			}
 		}
-	}
 
-	if (contextIndex < 0) && (len(doc.Contexts) > 0) {
+		if contextIndex < 0 {
+			return nil, nil, errors.New("kubeconfig current-context names a context the file does not define")
+		}
+	} else if len(doc.Contexts) > 0 {
 		contextIndex = 0
 	}
 
@@ -334,21 +361,32 @@ func (l fileLoader) token(inline string, path string) (string, error) {
 }
 
 // readBoundedFile reads at most maxKubeconfigFileBytes from a regular file. A larger file is refused rather than
-// truncated, so a half-read certificate is never used.
+// truncated, so a half-read certificate is never used. Anything that is not a regular file, a FIFO above all,
+// is refused before it is opened, because opening a FIFO with no writer blocks forever. The open is also
+// non-blocking and the opened file is checked again, so a FIFO swapped in after the first check cannot hang it.
 func readBoundedFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if info.Mode().IsRegular() == false {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 
 	defer func() { _ = file.Close() }()
 
-	info, err := file.Stat()
+	opened, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
 
-	if info.Mode().IsRegular() == false {
+	if opened.Mode().IsRegular() == false {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
 

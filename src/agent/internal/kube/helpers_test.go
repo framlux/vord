@@ -12,6 +12,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
+	"log"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +26,14 @@ func serverCAPEM(server *httptest.Server) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 }
 
-// newTLSServer starts a TLS test server that closes with the test.
+// newTLSServer starts a TLS test server that closes with the test. Its error log is discarded, so handshakes the
+// tests refuse on purpose leave no noise.
 func newTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewTLSServer(handler)
+	server := httptest.NewUnstartedServer(handler)
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
 	t.Cleanup(server.Close)
 
 	return server
