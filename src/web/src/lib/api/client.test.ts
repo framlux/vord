@@ -687,7 +687,7 @@ describe('ApiClient', () => {
         });
 
         it('should GET /api/v1/clusters and return the cluster list', async () => {
-            const clusters = [{ id: 4, name: 'k3s cp-1', displayName: null, distro: 'k3s', nodeCount: 3, managedNodeCount: 2, unmanagedNodeCount: 1, kubeletVersions: ['v1.31.4+k3s1'], reportingState: 'identity_only', firstSeenAt: '2026-10-01T00:00:00Z', lastSeenAt: '2026-10-11T00:00:00Z' }];
+            const clusters = [{ id: 4, name: 'k3s cp-1', displayName: null, distro: 'k3s', nodeCount: 3, managedNodeCount: 2, unmanagedNodeCount: 1, kubeletVersions: ['v1.31.4+k3s1'], reportingState: 'off', firstSeenAt: '2026-10-01T00:00:00Z', lastSeenAt: '2026-10-11T00:00:00Z' }];
             mockSuccess(clusters);
             const result = await client.getClusters();
             expect(result).toEqual(clusters);
@@ -917,6 +917,30 @@ describe('ApiClient', () => {
                 'http://localhost:12233/api/v1/machines/7/authorized-keys/5',
                 expect.objectContaining({ method: 'DELETE' })
             );
+        });
+
+        it('should POST /api/v1/commands with a null Params as JSON null, not an empty string', async () => {
+            const command = { id: 1, commandId: 'c', machineId: 7, commandType: 'k8s_reporter_enrol', status: 'Pending' };
+            mockSuccess(command);
+            const request = {
+                commandId: 'c',
+                machineId: 7,
+                signingKeyId: 41,
+                commandType: 'k8s_reporter_enrol',
+                params: null,
+                nonce: 'n',
+                signature: 's',
+                canonicalPayload: '{"params":{}}',
+                timestamp: '2026-10-12T09:30:00.000Z',
+                expiresAt: '2026-10-12T09:40:00.000Z'
+            };
+            const result = await client.sendCommand(request);
+            expect(result).toEqual(command);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/commands',
+                expect.objectContaining({ method: 'POST', body: JSON.stringify(request) })
+            );
+            expect(JSON.parse(fetchFn.mock.calls[0][1].body).params).toBeNull();
         });
 
         it('should POST to /api/v1/auth/email-lookup and return the opaque sso result', async () => {

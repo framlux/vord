@@ -33,12 +33,8 @@
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import { hasProFeatures, hasTeamFeatures } from '$lib/utils/tier';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
-	import {
-		generateNonce,
-		buildCanonicalPayload,
-		signPayload,
-		getLocalKeys
-	} from '$lib/crypto/signing';
+	import { getLocalKeys } from '$lib/crypto/signing';
+	import { sendSignedCommand } from '$lib/commands/signedCommand';
 
 	let { data } = $props();
 
@@ -289,71 +285,20 @@
 		}
 	}
 
-	function findMatchingServerKey(localPublicKeyBase64: string): SigningKeyDto | undefined {
-		return serverSigningKeys.find((sk) => sk.publicKey === localPublicKeyBase64);
-	}
-
 	async function sendCommand() {
 		commandError = '';
 		commandSuccess = '';
-
-		if (selectedLocalKeyId === null) {
-			commandError = 'No signing key selected. Generate one in Settings > Signing Keys.';
-
-			return;
-		}
-
-		const localKey = localKeys.find((k) => k.id === selectedLocalKeyId);
-		if (localKey === undefined) {
-			commandError = 'Selected key not found.';
-
-			return;
-		}
-
-		const serverKey = findMatchingServerKey(localKey.publicKeyBase64);
-		if (serverKey === undefined) {
-			commandError = 'This key is not registered on the server. Re-register it in Settings > Signing Keys.';
-
-			return;
-		}
-
 		sendingCommand = true;
 		try {
 			const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
-			const cmdId = crypto.randomUUID();
-			const nonce = generateNonce();
-			const now = new Date();
-			const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
-			const timestamp = now.toISOString();
-			const expiresAtStr = expiresAt.toISOString();
-
-			const userId = data.user?.id ?? 0;
-			const tenantId = data.user?.activeTenantId ?? 0;
-
-			const canonical = buildCanonicalPayload({
-				command_id: cmdId,
-				command_type: commandType,
-				expires_at: expiresAtStr,
-				machine_id: machine.id,
-				nonce,
-				params: null,
-				tenant_id: tenantId,
-				timestamp,
-				user_id: userId
-			});
-
-			const signature = await signPayload(selectedLocalKeyId, canonical);
-
-			await api.sendCommand({
-				commandId: cmdId,
+			await sendSignedCommand(api, {
 				machineId: machine.id,
-				signingKeyId: serverKey.id,
 				commandType,
-				nonce,
-				signature,
-				canonicalPayload: canonical,
-				timestamp,
-				expiresAt: expiresAtStr
+				localKeyId: selectedLocalKeyId,
+				localKeys,
+				serverKeys: serverSigningKeys,
+				userId: data.user?.id ?? 0,
+				tenantId: data.user?.activeTenantId ?? 0
 			});
 
 			commandSuccess = `${commandType} command sent successfully.`;
@@ -919,7 +864,12 @@
 		{/if}
 
 		{#if canAdminMachines(data.user)}
-			<RemoveMachineControl machineId={machine.id} machineName={machine.name} csrfToken={data.user?.csrfToken ?? undefined} />
+			<RemoveMachineControl
+				machineId={machine.id}
+				machineName={machine.name}
+				csrfToken={data.user?.csrfToken ?? undefined}
+				reporterClusterId={machineDetail?.kubernetes?.candidate?.clusterId ?? null}
+			/>
 		{/if}
 
 	{:else if activeTab === 'hardware'}

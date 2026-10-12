@@ -2,12 +2,13 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import KubernetesSection from './KubernetesSection.svelte';
 import type {
 	KubernetesNodeDto,
+	MachineKubernetesCandidateDto,
 	MachineKubernetesDto,
 	MachineKubernetesLocalDto
 } from '$lib/api/types';
@@ -36,6 +37,27 @@ function makeNode(overrides: Partial<KubernetesNodeDto> = {}): KubernetesNodeDto
 		machineName: 'web-01',
 		fingerprintMismatch: false,
 		lastLocalReportAt: '2026-10-11T11:30:00Z',
+		roles: [],
+		readyStatus: null,
+		readySince: null,
+		conditions: [],
+		unschedulable: false,
+		unschedulableSince: null,
+		containerRuntimeVersion: null,
+		podCount: null,
+		podCapacity: null,
+		lastReporterSeenAt: null,
+		kubeletSkew: false,
+		...overrides
+	};
+}
+
+function makeCandidate(overrides: Partial<MachineKubernetesCandidateDto> = {}): MachineKubernetesCandidateDto {
+	return {
+		clusterId: 12,
+		isHolder: false,
+		reporterError: null,
+		lastReportAt: '2026-10-11T11:30:00Z',
 		...overrides
 	};
 }
@@ -47,6 +69,7 @@ function makeKubernetes(overrides: Partial<MachineKubernetesDto> = {}): MachineK
 		clusterId: 12,
 		clusterName: 'Production',
 		grouping: 'grouped',
+		candidate: null,
 		...overrides
 	};
 }
@@ -225,6 +248,84 @@ describe('KubernetesSection', () => {
 			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ node: null }) } });
 
 			expect(screen.queryByTestId('kubernetes-mismatch')).not.toBeInTheDocument();
+		});
+	});
+
+	describe('reporter state', () => {
+		beforeEach(() => {
+			vi.useFakeTimers({ toFake: ['Date'] });
+			vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it('shows no reporter line for a machine that is not a candidate', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: null }) } });
+
+			expect(screen.queryByTestId('kubernetes-reporter')).not.toBeInTheDocument();
+			expect(screen.queryByTestId('kubernetes-reporter-error')).not.toBeInTheDocument();
+		});
+
+		it('says a candidate that holds the Lease is the holder', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isHolder: true }) }) } });
+
+			expect(text('kubernetes-reporter')).toBe('Holder');
+		});
+
+		it('says a candidate that does not hold the Lease is on standby', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isHolder: false }) }) } });
+
+			expect(text('kubernetes-reporter')).toBe('Candidate');
+		});
+
+		it('shows when the candidate last reported', () => {
+			render(KubernetesSection, {
+				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ lastReportAt: '2026-10-11T11:30:00Z' }) }) }
+			});
+
+			expect(text('kubernetes-reporter-last-report')).toBe('30m ago');
+		});
+
+		it('shows no error line for a healthy candidate', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate() }) } });
+
+			expect(screen.queryByTestId('kubernetes-reporter-error')).not.toBeInTheDocument();
+		});
+
+		it('words the error a candidate reports', () => {
+			render(KubernetesSection, {
+				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'credentials_rejected' }) }) }
+			});
+
+			expect(text('kubernetes-reporter-error')).toBe('Credentials rejected');
+		});
+
+		it('keeps the detail of a reported error', () => {
+			render(KubernetesSection, {
+				props: {
+					kubernetes: makeKubernetes({
+						candidate: makeCandidate({ reporterError: 'api_unreachable: dial tcp 10.0.0.1:6443: timeout' })
+					})
+				}
+			});
+
+			expect(text('kubernetes-reporter-error')).toBe('API server unreachable dial tcp 10.0.0.1:6443: timeout');
+		});
+
+		it('shows the reporter line for a candidate that is no node', () => {
+			render(KubernetesSection, {
+				props: {
+					kubernetes: makeKubernetes({
+						local: makeLocal({ nodeName: null, nodeNameSource: null, hasKubelet: false, reporterEnrolled: true }),
+						node: null,
+						candidate: makeCandidate({ isHolder: true })
+					})
+				}
+			});
+
+			expect(text('kubernetes-reporter')).toBe('Holder');
 		});
 	});
 });

@@ -6,7 +6,18 @@
 	import { goto } from '$app/navigation';
 	import { ApiClient, ApiError } from '$lib/api/client';
 
-	let { machineId, machineName, csrfToken }: { machineId: number; machineName: string; csrfToken: string | undefined } = $props();
+	let {
+		machineId,
+		machineName,
+		csrfToken,
+		reporterClusterId = null
+	}: {
+		machineId: number;
+		machineName: string;
+		csrfToken: string | undefined;
+		/** The cluster this machine is enrolled as a reporter of, or null when it is not one. */
+		reporterClusterId?: number | null;
+	} = $props();
 
 	const uninstallGuide = 'https://vordfleet.dev/support/fleet-management/agent-troubleshooting';
 	// The API client reports every 403 as a bare "Forbidden" without reading the response body, so the
@@ -60,6 +71,15 @@
 		<p class="mt-2 text-sm text-surface-700 dark:text-surface-300">
 			Removing a host deletes it from your fleet. It no longer appears in your machine list or dashboard.
 		</p>
+		{#if reporterClusterId !== null}
+			<p
+				data-testid="reporter-warning"
+				class="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+			>
+				This machine is a cluster reporter. Its token and the cluster objects remain until you disable reporting on the
+				<a href="/clusters/{reporterClusterId}" class="font-medium underline">cluster page</a>.
+			</p>
+		{/if}
 		<div class="mt-3 flex items-center gap-2">
 			<button
 				onclick={remove}

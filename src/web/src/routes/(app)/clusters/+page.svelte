@@ -5,7 +5,7 @@
 <script lang="ts">
 	import type { KubernetesClusterSummaryDto } from '$lib/api/types';
 	import { formatRelativeTime } from '$lib/utils/format';
-	import { distroLabel } from '$lib/utils/kubernetes';
+	import { distroLabel, reportingBadge, type BadgeTone } from '$lib/utils/kubernetes';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
@@ -13,12 +13,12 @@
 
 	const clusters: KubernetesClusterSummaryDto[] = $derived(data.clusters);
 
-	// Every cluster is built only from what its machines report about themselves, so the one
-	// state there is today reads "Identity only". Any state this page has no label for is shown
-	// as the server sent it rather than hidden.
-	function reportingLabel(state: string): string {
-		return state === 'identity_only' ? 'Identity only' : state;
-	}
+	const toneClasses: Record<BadgeTone, string> = {
+		ok: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+		bad: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+		warn: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+		neutral: 'bg-surface-100 text-surface-600 dark:bg-surface-700 dark:text-surface-300'
+	};
 
 	const headerClass =
 		'px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400';
@@ -54,6 +54,7 @@
 					</thead>
 					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
 						{#each clusters as cluster (cluster.id)}
+							{@const badge = reportingBadge(cluster.reportingState, cluster.activeReporterMachineName)}
 							<tr class="transition hover:bg-surface-100/60 dark:hover:bg-surface-700/50">
 								<td class="px-6 py-4">
 									<a
@@ -78,9 +79,10 @@
 								</td>
 								<td class="px-6 py-4">
 									<span
-										class="inline-flex items-center rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-600 dark:bg-surface-700 dark:text-surface-300"
+										data-testid="reporting-badge"
+										class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {toneClasses[badge.tone]}"
 									>
-										{reportingLabel(cluster.reportingState)}
+										{badge.label}
 									</span>
 								</td>
 								<td class="px-6 py-4 text-surface-500 dark:text-surface-400">

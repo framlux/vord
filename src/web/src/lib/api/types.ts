@@ -698,7 +698,8 @@ export interface SendCommandRequest {
 	machineId: number;
 	signingKeyId: number;
 	commandType: string;
-	params?: string;
+	/** JSON-encoded parameters, or null for a command that takes none. Never an empty string. */
+	params?: string | null;
 	nonce: string;
 	signature: string;
 	canonicalPayload: string;
@@ -810,6 +811,14 @@ export interface SshHistoryResponse {
 /** How a machine relates to the Kubernetes clusters of its tenant. */
 export type KubernetesGrouping = 'grouped' | 'ambiguous' | 'unknown' | 'ungrouped';
 
+/**
+ * How much of a cluster Vord can see through its cluster reporter: off while no machine is enrolled,
+ * error while the reporter reports one of the failures in KubernetesClusterSummaryDto.reporterError,
+ * role_outdated while the reporter's permissions predate what Vord needs, stale once the latest
+ * snapshot is older than the staleness threshold, and active otherwise.
+ */
+export type KubernetesReportingState = 'off' | 'error' | 'role_outdated' | 'stale' | 'active';
+
 export interface KubernetesClusterSummaryDto {
 	id: number;
 	/** The name to show: the operator-chosen name when there is one, else the derived default. */
@@ -822,10 +831,36 @@ export interface KubernetesClusterSummaryDto {
 	managedNodeCount: number;
 	unmanagedNodeCount: number;
 	kubeletVersions: string[];
-	/** How much of the cluster Vord can see. Always identity_only for now. */
-	reportingState: string;
+	readyCount: number;
+	notReadyCount: number;
+	unknownCount: number;
+	reportingState: KubernetesReportingState;
+	/** The machine holding the cluster's reporter Lease that sent the latest snapshot, or null when none has. */
+	activeReporterMachineId: number | null;
+	activeReporterMachineName: string | null;
+	/** The Kubernetes server version the latest snapshot reported, or null when there has been none. */
+	clusterVersion: string | null;
+	/**
+	 * The code that puts the cluster in the error state: credentials_rejected, tls_ca_changed,
+	 * api_unreachable or namespace_terminating. Null in every other state.
+	 */
+	reporterError: string | null;
+	/** True when the latest snapshot listed only some of the cluster's nodes to fit its size cap. */
+	truncated: boolean;
+	lastSnapshotReceivedAt: string | null;
+	/** When the node values date from, once they are stale. Null otherwise. */
+	staleSince: string | null;
 	firstSeenAt: string;
 	lastSeenAt: string;
+}
+
+/** A node condition that is not in its healthy state, such as MemoryPressure being True. */
+export interface KubernetesNodeConditionDto {
+	/** MemoryPressure, DiskPressure, PIDPressure or NetworkUnavailable. */
+	type: string;
+	/** True or Unknown: a condition that is False is not reported. */
+	status: string;
+	lastTransitionTime: string;
 }
 
 export interface KubernetesNodeDto {
@@ -840,13 +875,61 @@ export interface KubernetesNodeDto {
 	fingerprintMismatch: boolean;
 	/** When the node's own machine last reported it, or null if only another source has. */
 	lastLocalReportAt: string | null;
+	/** The roles the cluster reporter lists for the node; empty when it has not listed the node. */
+	roles: string[];
+	/** The Ready condition's status (True, False or Unknown), or null when no snapshot has listed the node. */
+	readyStatus: string | null;
+	readySince: string | null;
+	/** The pressure and network conditions whose status is not False. */
+	conditions: KubernetesNodeConditionDto[];
+	/** True while the node is cordoned and takes no new pods. */
+	unschedulable: boolean;
+	unschedulableSince: string | null;
+	containerRuntimeVersion: string | null;
+	/** The pods scheduled on the node, or null when the snapshot did not count them. */
+	podCount: number | null;
+	podCapacity: number | null;
+	/** When a cluster snapshot last listed the node, or null if only local reports have. */
+	lastReporterSeenAt: string | null;
+	/** True when the kubelet is more than three minor versions behind the cluster, or newer than it. */
+	kubeletSkew: boolean;
+}
+
+/** A machine enrolled as a reporter candidate of a cluster. */
+export interface KubernetesCandidateDto {
+	machineId: number;
+	machineName: string;
+	/** True while the machine holds the cluster's reporter Lease. */
+	isHolder: boolean;
+	/** The error the machine's own reporter last reported, as a bare code, or null when it reported none. */
+	reporterError: string | null;
+	lastReportAt: string;
+	online: boolean;
+}
+
+/** A machine that can be enrolled as a reporter, with what decides whether a command can be sent to it. */
+export interface KubernetesEligibleMachineDto {
+	machineId: number;
+	machineName: string;
+	online: boolean;
+	/** True while the machine is paused, which makes the server refuse its commands with a conflict. */
+	isPaused: boolean;
+	/** Whether the agent reported the remote commands capability. Null when its capabilities could not be read. */
+	remoteCommandsEnabled: boolean | null;
+	/** True when the machine's latest report says it is already enrolled as a reporter. */
+	enrolled: boolean;
+	/** The ids of the signing keys authorized to send commands to the machine. */
+	authorizedSigningKeyIds: number[];
 }
 
 export interface KubernetesClusterDetailDto extends KubernetesClusterSummaryDto {
 	caFingerprint: string;
 	/** True when any node reports a CA fingerprint different from the cluster's. */
 	hasFingerprintMismatch: boolean;
+	kubeSystemUid: string | null;
 	nodes: KubernetesNodeDto[];
+	candidates: KubernetesCandidateDto[];
+	eligibleMachines: KubernetesEligibleMachineDto[];
 }
 
 export interface MachineKubernetesLocalDto {
@@ -863,6 +946,14 @@ export interface MachineKubernetesLocalDto {
 	reporterEnrolled: boolean;
 }
 
+/** A machine's state as a reporter candidate. */
+export interface MachineKubernetesCandidateDto {
+	clusterId: number;
+	isHolder: boolean;
+	reporterError: string | null;
+	lastReportAt: string;
+}
+
 export interface MachineKubernetesDto {
 	/** The machine's latest local report from the past seven days, or null when there is none. */
 	local: MachineKubernetesLocalDto | null;
@@ -872,4 +963,6 @@ export interface MachineKubernetesDto {
 	clusterId: number | null;
 	clusterName: string | null;
 	grouping: KubernetesGrouping;
+	/** The machine's state as a reporter candidate, or null when it is not enrolled as one. */
+	candidate: MachineKubernetesCandidateDto | null;
 }

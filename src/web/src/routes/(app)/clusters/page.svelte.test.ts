@@ -19,7 +19,17 @@ function makeCluster(overrides: Partial<KubernetesClusterSummaryDto> = {}): Kube
 		managedNodeCount: 2,
 		unmanagedNodeCount: 1,
 		kubeletVersions: ['v1.31.4+k3s1'],
-		reportingState: 'identity_only',
+		readyCount: 0,
+		notReadyCount: 0,
+		unknownCount: 3,
+		reportingState: 'off',
+		activeReporterMachineId: null,
+		activeReporterMachineName: null,
+		clusterVersion: null,
+		reporterError: null,
+		truncated: false,
+		lastSnapshotReceivedAt: null,
+		staleSince: null,
 		firstSeenAt: '2026-10-01T00:00:00Z',
 		lastSeenAt: '2026-10-11T11:30:00Z',
 		...overrides
@@ -90,9 +100,43 @@ describe('clusters list', () => {
 			'2',
 			'1',
 			'v1.30.1, v1.31.0',
-			'Identity only',
+			'Off',
 			'30m ago'
 		]);
+	});
+
+	it.each([
+		['off', 'Off'],
+		['active', 'Active'],
+		['stale', 'Stale'],
+		['error', 'Error'],
+		['role_outdated', 'Role outdated']
+	] as const)('shows the %s reporting state as %s', (reportingState, label) => {
+		render(ClustersPage, { props: { data: makeData([makeCluster({ reportingState })]) } });
+
+		const cells = within(screen.getByRole('row', { name: /k3s cp-1/ })).getAllByRole('cell');
+
+		expect(cells[6]).toHaveTextContent(new RegExp(`^${label}$`));
+	});
+
+	it('names the machine that reports an active cluster', () => {
+		render(ClustersPage, {
+			props: {
+				data: makeData([
+					makeCluster({ reportingState: 'active', activeReporterMachineId: 7, activeReporterMachineName: 'cp-1' })
+				])
+			}
+		});
+
+		const cells = within(screen.getByRole('row', { name: /k3s cp-1/ })).getAllByRole('cell');
+
+		expect(cells[6]).toHaveTextContent('Active (cp-1)');
+	});
+
+	it('no longer calls any cluster identity only', () => {
+		render(ClustersPage, { props: { data: makeData([makeCluster()]) } });
+
+		expect(screen.queryByText(/identity only/i)).not.toBeInTheDocument();
 	});
 
 	it('labels the columns, with managed and unmanaged nodes counted apart', () => {
