@@ -622,19 +622,16 @@ describe('cluster detail', () => {
 			expect(row.getByText('30m ago')).toBeInTheDocument();
 		});
 
-		it('shows the detail of a reported error after the worded code', () => {
+		it('makes a readable label of an error code it has no wording for, and keeps the code as its title', () => {
 			renderPage(
 				makeCluster({
-					candidates: [
-						makeCandidate({ machineName: 'web-01', reporterError: 'api_unreachable: dial tcp 10.0.0.1:6443: timeout' })
-					]
+					candidates: [makeCandidate({ machineName: 'web-01', reporterError: 'disk_full' })]
 				})
 			);
 
 			const row = reporterRow(/web-01/);
 
-			expect(row.getByText('API server unreachable')).toBeInTheDocument();
-			expect(row.getByText('dial tcp 10.0.0.1:6443: timeout')).toBeInTheDocument();
+			expect(row.getByText('Disk full')).toHaveAttribute('title', 'disk_full');
 		});
 
 		it('shows a placeholder for a candidate that reports no error', () => {
@@ -985,7 +982,7 @@ describe('cluster detail', () => {
 			expect(screen.queryByRole('button', { name: 'Disable reporting' })).not.toBeInTheDocument();
 		});
 
-		it('is disabled, with the reason, when no eligible machine is online', () => {
+		it('is disabled, with a reason for each machine, when no eligible machine is online', () => {
 			renderPage(
 				activeCluster({
 					eligibleMachines: [
@@ -995,8 +992,76 @@ describe('cluster detail', () => {
 				})
 			);
 
+			const reasons = screen.getByTestId('disable-blocked-machines');
+
 			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
-			expect(screen.getByTestId('reporting-status')).toHaveTextContent('none is online right now');
+			expect(screen.getByTestId('reporting-status')).toHaveTextContent('none can take the uninstall command right now');
+			expect(within(reasons).getAllByRole('listitem').map((item) => item.textContent?.trim())).toEqual([
+				'web-01: Offline',
+				'web-02: Offline'
+			]);
+		});
+
+		it('is disabled, and says why, when the only online machine is paused', () => {
+			renderPage(
+				activeCluster({
+					eligibleMachines: [
+						makeEligible({ machineId: 7, enrolled: true, isPaused: true }),
+						makeEligible({ machineId: 8, machineName: 'web-02', enrolled: true, online: false })
+					]
+				})
+			);
+
+			const reasons = within(screen.getByTestId('disable-blocked-machines'));
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
+			expect(reasons.getByText('web-01: This host is paused')).toBeInTheDocument();
+			expect(reasons.getByText('web-02: Offline')).toBeInTheDocument();
+		});
+
+		it('is disabled, and says why, when the only online machine has remote commands disabled', () => {
+			renderPage(
+				activeCluster({
+					eligibleMachines: [makeEligible({ machineId: 7, enrolled: true, remoteCommandsEnabled: false })]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
+			expect(
+				within(screen.getByTestId('disable-blocked-machines')).getByText(
+					'web-01: Remote commands are disabled on this host (allow_remote_commands in the agent config)'
+				)
+			).toBeInTheDocument();
+		});
+
+		it('is disabled, and says why, once the keys load and none is authorised on the only online machine', async () => {
+			renderPage(
+				activeCluster({
+					eligibleMachines: [makeEligible({ machineId: 7, enrolled: true, authorizedSigningKeyIds: [99] })]
+				})
+			);
+
+			await waitFor(() => expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled());
+
+			expect(
+				within(screen.getByTestId('disable-blocked-machines')).getByText(
+					'web-01: Your signing key is not authorised on this machine'
+				)
+			).toBeInTheDocument();
+		});
+
+		it('stays available when one online machine can take the uninstall, whatever keeps the others from it', () => {
+			renderPage(
+				activeCluster({
+					eligibleMachines: [
+						makeEligible({ machineId: 7, enrolled: true, isPaused: true }),
+						makeEligible({ machineId: 8, machineName: 'web-02', enrolled: true })
+					]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeEnabled();
+			expect(screen.queryByTestId('disable-blocked-machines')).not.toBeInTheDocument();
 		});
 
 		it('uninstalls through the holder and unenrols every other online candidate', async () => {
@@ -1287,7 +1352,7 @@ describe('cluster detail', () => {
 			expect(screen.queryByTestId('command-results')).not.toBeInTheDocument();
 		});
 
-		it('says an offline host will only get the command if it returns in time', async () => {
+		it('says an offline host must receive the command within five minutes', async () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'off',
@@ -1297,7 +1362,10 @@ describe('cluster detail', () => {
 
 			await fireEvent.click(within(screen.getByRole('row', { name: /web-02/ })).getByRole('button', { name: 'Enrol' }));
 
-			expect(await screen.findByTestId('command-results')).toHaveTextContent('expires after 10 minutes');
+			const results = await screen.findByTestId('command-results');
+
+			expect(results).toHaveTextContent('it will refuse the command unless it receives it within 5 minutes');
+			expect(results).not.toHaveTextContent('10 minutes');
 		});
 	});
 

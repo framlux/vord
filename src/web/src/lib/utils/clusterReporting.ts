@@ -81,6 +81,26 @@ export function assessMachine(machine: KubernetesEligibleMachineDto, keys: Usabl
 	return { key };
 }
 
+/**
+ * Why a machine cannot be sent a command, or null when it can, for the places that explain it before
+ * anything is planned. Without keys to check (null while they load, empty when the user has none) the
+ * authorisation is not judged, because the notice about the missing key says so once; a pause and a
+ * disabled capability are facts about the machine and always count.
+ */
+export function sendBlock(machine: KubernetesEligibleMachineDto, keys: UsableSigningKey[] | null): SkipReason | null {
+	if (keys === null || keys.length === 0) {
+		if (machine.isPaused) {
+			return 'paused';
+		}
+
+		return machine.remoteCommandsEnabled === false ? 'remote_commands_disabled' : null;
+	}
+
+	const assessment = assessMachine(machine, keys);
+
+	return 'skip' in assessment ? assessment.skip : null;
+}
+
 function command(
 	machineId: number,
 	machineName: string,
@@ -137,13 +157,32 @@ function addEnrol(plan: ReportingPlan, machine: KubernetesEligibleMachineDto, ke
 	}
 }
 
-/** Why reporting cannot be disabled at all right now, or null when it can be tried. */
-export function disableBlock(context: ReportingContext): string | null {
-	if (context.eligibleMachines.some((m) => m.online)) {
-		return null;
+/** Why reporting cannot be disabled right now: what is needed, and what keeps each eligible machine from providing it. */
+export interface DisableBlock {
+	summary: string;
+	machines: SkippedMachine[];
+}
+
+const disableBlockSummary =
+	'Reporting can only be disabled through an online control-plane machine with an admin credential, and none can take the uninstall command right now.';
+
+/**
+ * Explains why reporting cannot be disabled, or returns null when an online eligible machine can be
+ * sent the uninstall. The reasons follow the order the command is refused in (key, pause, capability)
+ * and offline comes last, so a machine reads as unavailable for the first thing that has to change.
+ */
+export function disableBlock(context: ReportingContext, keys: UsableSigningKey[] | null): DisableBlock | null {
+	const machines: SkippedMachine[] = [];
+	for (const machine of context.eligibleMachines) {
+		const reason = sendBlock(machine, keys) ?? (machine.online ? null : 'offline');
+		if (reason === null) {
+			return null;
+		}
+
+		machines.push({ machineId: machine.machineId, machineName: machine.machineName, reason });
 	}
 
-	return 'Reporting can only be disabled through a control-plane machine with an admin credential, and none is online right now.';
+	return { summary: disableBlockSummary, machines };
 }
 
 /**
@@ -245,7 +284,10 @@ export function planReenrol(context: ReportingContext, keys: UsableSigningKey[])
 	return plan;
 }
 
-/** Enrols once, through the holder if it can be sent the command and otherwise through another eligible candidate. */
+/**
+ * Enrols once, through an online candidate if one can be sent the command, preferring the holder among
+ * those, and otherwise through an offline one, again preferring the holder.
+ */
 export function planUpdatePermissions(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
 	const holder = holderId(context);
@@ -257,7 +299,7 @@ export function planUpdatePermissions(context: ReportingContext, keys: UsableSig
 			entry.machine !== undefined
 		);
 	const rank = (candidate: KubernetesCandidateDto): number =>
-		(candidate.machineId === holder ? 0 : 2) + (candidate.online ? 0 : 1);
+		(candidate.online ? 0 : 2) + (candidate.machineId === holder ? 0 : 1);
 	considered.sort((a, b) => rank(a.candidate) - rank(b.candidate));
 
 	for (const { candidate, machine } of considered) {
@@ -297,34 +339,30 @@ export function describeSkip(reason: SkipReason): string {
 	return skipWording[reason];
 }
 
-const agentCodeWording: Record<string, string> = {
+/** Words the reason a machine is listed as unable to take a command, as a state rather than as something skipped. */
+export function describeBlockReason(reason: SkipReason): string {
+	return reason === 'offline' ? 'Offline' : skipWording[reason];
+}
+
+/** How long an offline host has to receive a command: the agent refuses one signed longer ago than this. */
+const AGENT_COMMAND_WINDOW_MINUTES = 5;
+
+export const OFFLINE_HOST_NOTE = `Offline. The host must receive the command within ${AGENT_COMMAND_WINDOW_MINUTES} minutes, or it will refuse it.`;
+
+export const OFFLINE_HOST_ACCEPTED = `Accepted. The host is offline, and it will refuse the command unless it receives it within ${AGENT_COMMAND_WINDOW_MINUTES} minutes.`;
+
+const reporterErrorWording: Record<string, string> = {
 	credentials_rejected: 'Credentials rejected',
 	tls_ca_changed: 'Cluster CA changed',
 	api_unreachable: 'API server unreachable',
 	namespace_terminating: 'The vord-system namespace is terminating'
 };
 
-export interface AgentMessage {
-	code: string;
-	label: string;
-	detail: string | null;
-}
-
-/**
- * Words a message the agent reported, which is a bare code or "code: detail". Only the first colon
- * splits, since the detail may hold addresses and other colons of its own.
- */
-export function describeAgentMessage(message: string): AgentMessage {
-	const colon = message.indexOf(':');
-	const code = (colon === -1 ? message : message.slice(0, colon)).trim();
-	const detail = colon === -1 ? '' : message.slice(colon + 1).trim();
+/** Words an error code a reporter reported, or makes a readable label of a code it has no wording for. */
+export function describeReporterError(code: string): string {
 	const readable = code.replaceAll('_', ' ');
 
-	return {
-		code,
-		label: agentCodeWording[code] ?? readable.charAt(0).toUpperCase() + readable.slice(1),
-		detail: detail === '' ? null : detail
-	};
+	return reporterErrorWording[code] ?? readable.charAt(0).toUpperCase() + readable.slice(1);
 }
 
 // The API client reports every 403 as a bare "Forbidden" without reading the response body, so the

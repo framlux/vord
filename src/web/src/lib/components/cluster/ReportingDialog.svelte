@@ -6,6 +6,7 @@
 	import {
 		commandVerb,
 		describeSkip,
+		OFFLINE_HOST_NOTE,
 		type CommandResult,
 		type ReportingPlan
 	} from '$lib/utils/clusterReporting';
@@ -127,7 +128,7 @@
 							</span>
 							{#if planned.online === false}
 								<span class="text-xs text-amber-700 dark:text-amber-400">
-									Offline. The command expires after 10 minutes if the host does not return.
+									{OFFLINE_HOST_NOTE}
 								</span>
 							{/if}
 						</li>

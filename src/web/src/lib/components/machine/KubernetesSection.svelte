@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { MachineKubernetesDto } from '$lib/api/types';
-	import { describeAgentMessage } from '$lib/utils/clusterReporting';
+	import { describeReporterError } from '$lib/utils/clusterReporting';
 	import { formatRelativeTime } from '$lib/utils/format';
 	import { distroLabel } from '$lib/utils/kubernetes';
 
@@ -126,15 +126,11 @@
 				</span>
 			</div>
 			{#if candidate.reporterError !== null}
-				{@const reported = describeAgentMessage(candidate.reporterError)}
 				<p
 					data-testid="kubernetes-reporter-error"
 					class="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200"
 				>
-					{reported.label}
-					{#if reported.detail !== null}
-						<span class="block text-red-700 dark:text-red-300">{reported.detail}</span>
-					{/if}
+					{describeReporterError(candidate.reporterError)}
 				</p>
 			{/if}
 		{/if}

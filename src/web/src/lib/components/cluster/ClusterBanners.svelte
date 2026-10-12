@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { KubernetesClusterDetailDto } from '$lib/api/types';
-	import { describeAgentMessage } from '$lib/utils/clusterReporting';
+	import { describeReporterError } from '$lib/utils/clusterReporting';
 	import { formatDateTime } from '$lib/utils/format';
 	import { TriangleAlert } from 'lucide-svelte';
 
@@ -59,7 +59,7 @@
 					text: 'The vord-system namespace is being deleted, so reporting cannot continue until the deletion finishes. Enable reporting again afterwards if it should stay on.'
 				};
 			default:
-				return { id: 'reporter-error', tone: 'bad', text: `The reporter reports an error: ${describeAgentMessage(code).label}.` };
+				return { id: 'reporter-error', tone: 'bad', text: `The reporter reports an error: ${describeReporterError(code)}.` };
 		}
 	}
 

@@ -12,10 +12,13 @@ import {
 	AGENT_UNINSTALL,
 	assessMachine,
 	commandVerb,
-	describeAgentMessage,
+	describeBlockReason,
+	describeReporterError,
 	describeSendError,
 	describeSkip,
 	disableBlock,
+	OFFLINE_HOST_ACCEPTED,
+	OFFLINE_HOST_NOTE,
 	planDisable,
 	planEnable,
 	planEnrolOne,
@@ -325,18 +328,141 @@ describe('planDisable', () => {
 });
 
 describe('disableBlock', () => {
-	it('is clear when an eligible machine is online', () => {
-		expect(disableBlock(context({ eligibleMachines: [machine({ online: true })] }))).toBeNull();
+	it('is clear when an eligible machine is online and can be sent the command', () => {
+		expect(disableBlock(context({ eligibleMachines: [machine({ online: true })] }), [KEY])).toBeNull();
 	});
 
-	it('explains why when no eligible machine is online', () => {
-		expect(disableBlock(context({ eligibleMachines: [machine({ online: false })] }))).toBe(
-			'Reporting can only be disabled through a control-plane machine with an admin credential, and none is online right now.'
+	it('does not judge the key before the keys are known, or when the user has none', () => {
+		const unauthorised = context({ eligibleMachines: [machine({ authorizedSigningKeyIds: [99] })] });
+
+		expect(disableBlock(unauthorised, null)).toBeNull();
+		expect(disableBlock(unauthorised, [])).toBeNull();
+	});
+
+	it('is clear when one machine can take the uninstall, whatever keeps the others from it', () => {
+		const block = disableBlock(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'cp-1', isPaused: true }),
+					machine({ machineId: 2, machineName: 'cp-2', online: false }),
+					machine({ machineId: 3, machineName: 'cp-3' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(block).toBeNull();
+	});
+
+	it('names an offline machine as the reason when none is online', () => {
+		const block = disableBlock(context({ eligibleMachines: [machine({ online: false })] }), [KEY]);
+
+		expect(block?.summary).toBe(
+			'Reporting can only be disabled through an online control-plane machine with an admin credential, and none can take the uninstall command right now.'
+		);
+		expect(block?.machines).toEqual([{ machineId: 1, machineName: 'cp-1', reason: 'offline' }]);
+	});
+
+	it('explains an online machine that cannot take the command instead of calling it available', () => {
+		const block = disableBlock(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'cp-1', isPaused: true }),
+					machine({ machineId: 2, machineName: 'cp-2', remoteCommandsEnabled: false }),
+					machine({ machineId: 3, machineName: 'cp-3', authorizedSigningKeyIds: [99] }),
+					machine({ machineId: 4, machineName: 'cp-4', online: false })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(block?.machines).toEqual([
+			{ machineId: 1, machineName: 'cp-1', reason: 'paused' },
+			{ machineId: 2, machineName: 'cp-2', reason: 'remote_commands_disabled' },
+			{ machineId: 3, machineName: 'cp-3', reason: 'key_not_authorised' },
+			{ machineId: 4, machineName: 'cp-4', reason: 'offline' }
+		]);
+	});
+
+	it('still explains a paused or remote-disabled machine before the keys are known', () => {
+		const block = disableBlock(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'cp-1', isPaused: true }),
+					machine({ machineId: 2, machineName: 'cp-2', remoteCommandsEnabled: false })
+				]
+			}),
+			null
+		);
+
+		expect(block?.machines.map((m) => m.reason)).toEqual(['paused', 'remote_commands_disabled']);
+	});
+
+	it('gives the reason the command would be refused for first, and offline last', () => {
+		const block = disableBlock(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'cp-1', authorizedSigningKeyIds: [], isPaused: true }),
+					machine({ machineId: 2, machineName: 'cp-2', isPaused: true, online: false })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(block?.machines.map((m) => m.reason)).toEqual(['key_not_authorised', 'paused']);
+	});
+
+	it('explains with no machines to list when there is no eligible machine at all', () => {
+		const block = disableBlock(context(), [KEY]);
+
+		expect(block?.summary).toContain('none can take the uninstall command right now');
+		expect(block?.machines).toEqual([]);
+	});
+
+	it('agrees with the disable plan: it blocks exactly when the plan would send nothing', () => {
+		const cases: Array<Partial<KubernetesEligibleMachineDto>> = [
+			{},
+			{ online: false },
+			{ isPaused: true },
+			{ remoteCommandsEnabled: false },
+			{ authorizedSigningKeyIds: [99] }
+		];
+
+		for (const overrides of cases) {
+			const ctx = context({
+				eligibleMachines: [machine(overrides)],
+				candidates: [candidate({ online: overrides.online ?? true })]
+			});
+			const sendsNothing = planDisable(ctx, [KEY]).commands.length === 0;
+
+			expect(disableBlock(ctx, [KEY]) !== null, JSON.stringify(overrides)).toBe(sendsNothing);
+		}
+	});
+});
+
+describe('describeBlockReason', () => {
+	it('words a paused, remote-disabled and unauthorised machine as the rows do', () => {
+		expect(describeBlockReason('paused')).toBe(describeSkip('paused'));
+		expect(describeBlockReason('remote_commands_disabled')).toBe(describeSkip('remote_commands_disabled'));
+		expect(describeBlockReason('key_not_authorised')).toBe(describeSkip('key_not_authorised'));
+	});
+
+	it('words an offline machine as a state, since nothing was about to be sent to it', () => {
+		expect(describeBlockReason('offline')).toBe('Offline');
+	});
+});
+
+describe('the offline host wording', () => {
+	it('says the command must reach the host within the five minutes the agent accepts it for', () => {
+		expect(OFFLINE_HOST_NOTE).toBe('Offline. The host must receive the command within 5 minutes, or it will refuse it.');
+		expect(OFFLINE_HOST_ACCEPTED).toBe(
+			'Accepted. The host is offline, and it will refuse the command unless it receives it within 5 minutes.'
 		);
 	});
 
-	it('explains the same when there is no eligible machine at all', () => {
-		expect(disableBlock(context())).toContain('none is online right now');
+	it('does not promise the ten minutes the command is signed to be valid for', () => {
+		expect(OFFLINE_HOST_NOTE).not.toContain('10 minutes');
+		expect(OFFLINE_HOST_ACCEPTED).not.toContain('10 minutes');
 	});
 });
 
@@ -491,6 +617,43 @@ describe('planUpdatePermissions', () => {
 		expect(plan.commands.map((c) => c.machineId)).toEqual([2]);
 	});
 
+	it('prefers an online candidate to an offline holder', () => {
+		const plan = planUpdatePermissions(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'cp-1', online: false }),
+					machine({ machineId: 2, machineName: 'cp-2' })
+				],
+				candidates: [
+					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true, online: false }),
+					candidate({ machineId: 2, machineName: 'cp-2' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.machineId, c.online])).toEqual([[2, true]]);
+	});
+
+	it('still prefers the holder among online candidates, and among offline ones when none is online', () => {
+		const eligibleMachines = [
+			machine({ machineId: 1, machineName: 'cp-1', online: false }),
+			machine({ machineId: 2, machineName: 'cp-2', online: false })
+		];
+		const plan = planUpdatePermissions(
+			context({
+				eligibleMachines,
+				candidates: [
+					candidate({ machineId: 1, machineName: 'cp-1', online: false }),
+					candidate({ machineId: 2, machineName: 'cp-2', isHolder: true, online: false })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.machineId, c.online])).toEqual([[2, false]]);
+	});
+
 	it('plans nothing, and says why, when no holder or candidate can be sent a command', () => {
 		const plan = planUpdatePermissions(
 			context({
@@ -537,38 +700,16 @@ describe('describeSkip', () => {
 	});
 });
 
-describe('describeAgentMessage', () => {
-	it('words a bare code', () => {
-		expect(describeAgentMessage('credentials_rejected')).toEqual({
-			code: 'credentials_rejected',
-			label: 'Credentials rejected',
-			detail: null
-		});
+describe('describeReporterError', () => {
+	it('words the four codes a reporter reports', () => {
+		expect(describeReporterError('credentials_rejected')).toBe('Credentials rejected');
+		expect(describeReporterError('tls_ca_changed')).toBe('Cluster CA changed');
+		expect(describeReporterError('api_unreachable')).toBe('API server unreachable');
+		expect(describeReporterError('namespace_terminating')).toBe('The vord-system namespace is terminating');
 	});
 
-	it('splits a code from its detail at the first colon only', () => {
-		expect(describeAgentMessage('api_unreachable: dial tcp 10.0.0.1:6443: i/o timeout')).toEqual({
-			code: 'api_unreachable',
-			label: 'API server unreachable',
-			detail: 'dial tcp 10.0.0.1:6443: i/o timeout'
-		});
-	});
-
-	it('words the four reporter errors', () => {
-		expect(describeAgentMessage('tls_ca_changed').label).toBe('Cluster CA changed');
-		expect(describeAgentMessage('namespace_terminating').label).toBe('The vord-system namespace is terminating');
-	});
-
-	it('makes a readable label of a code it has no wording for, and keeps the code', () => {
-		expect(describeAgentMessage('kubeconfig_unreadable: permission denied')).toEqual({
-			code: 'kubeconfig_unreadable',
-			label: 'Kubeconfig unreadable',
-			detail: 'permission denied'
-		});
-	});
-
-	it('treats an empty detail as none', () => {
-		expect(describeAgentMessage('credentials_rejected:  ').detail).toBeNull();
+	it('makes a readable label of a code it has no wording for', () => {
+		expect(describeReporterError('kubeconfig_unreadable')).toBe('Kubeconfig unreadable');
 	});
 });
 

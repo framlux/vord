@@ -302,16 +302,12 @@ describe('KubernetesSection', () => {
 			expect(text('kubernetes-reporter-error')).toBe('Credentials rejected');
 		});
 
-		it('keeps the detail of a reported error', () => {
+		it('makes a readable label of an error code it has no wording for', () => {
 			render(KubernetesSection, {
-				props: {
-					kubernetes: makeKubernetes({
-						candidate: makeCandidate({ reporterError: 'api_unreachable: dial tcp 10.0.0.1:6443: timeout' })
-					})
-				}
+				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'disk_full' }) }) }
 			});
 
-			expect(text('kubernetes-reporter-error')).toBe('API server unreachable dial tcp 10.0.0.1:6443: timeout');
+			expect(text('kubernetes-reporter-error')).toBe('Disk full');
 		});
 
 		it('shows the reporter line for a candidate that is no node', () => {

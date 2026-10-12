@@ -80,7 +80,7 @@ describe('ReportingDialog', () => {
 		expect(items[1]).toHaveTextContent('Unenrol');
 	});
 
-	it('warns that a command to an offline host expires if the host does not return', () => {
+	it('warns that an offline host must receive the command within five minutes', () => {
 		renderDialog({
 			plan: plan({
 				commands: [{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: false }]
@@ -88,7 +88,10 @@ describe('ReportingDialog', () => {
 		});
 
 		expect(screen.getByTestId('planned-commands')).toHaveTextContent('Offline');
-		expect(screen.getByTestId('planned-commands')).toHaveTextContent('expires after 10 minutes');
+		expect(screen.getByTestId('planned-commands')).toHaveTextContent(
+			'The host must receive the command within 5 minutes, or it will refuse it.'
+		);
+		expect(screen.getByTestId('planned-commands')).not.toHaveTextContent('10 minutes');
 	});
 
 	describe('machines it will not send to', () => {

@@ -17,11 +17,12 @@
 	import {
 		AGENT_ENROL,
 		AGENT_UNENROL,
-		assessMachine,
-		describeAgentMessage,
+		describeBlockReason,
+		describeReporterError,
 		describeSendError,
 		describeSkip,
 		disableBlock,
+		OFFLINE_HOST_ACCEPTED,
 		planDisable,
 		planEnable,
 		planEnrolOne,
@@ -31,6 +32,7 @@
 		type CommandResult,
 		type ReporterCommandType,
 		type ReportingPlan,
+		sendBlock,
 		type SkipReason
 	} from '$lib/utils/clusterReporting';
 	import { formatDateTime, formatRelativeTime } from '$lib/utils/format';
@@ -78,7 +80,6 @@
 	];
 	const noKeyNotice =
 		'No signing key from this browser is registered with the server, so commands cannot be signed here.';
-	const offlineAccepted = 'Accepted. The host is offline, so the command expires after 10 minutes unless it returns.';
 
 	// The keys are read once, when something first needs them, so a page nobody acts on costs neither
 	// an IndexedDB read nor a request.
@@ -134,7 +135,7 @@
 
 	const busy = $derived(sendingOne || dialog?.phase === 'sending');
 	const reportingStatus = $derived(reportingBadge(cluster.reportingState, cluster.activeReporterMachineName));
-	const disableReason = $derived(disableBlock(cluster));
+	const disableReason = $derived(disableBlock(cluster, keysLoaded ? usableKeys : null));
 	const eligibleToEnrol = $derived(
 		cluster.eligibleMachines.filter(
 			(m) => m.enrolled === false && cluster.candidates.some((c) => c.machineId === m.machineId) === false
@@ -155,17 +156,7 @@
 	// the tables says so once instead of every row saying it. A pause and a disabled capability are
 	// facts about the machine, so they show without waiting for the keys.
 	function rowBlock(machine: KubernetesEligibleMachineDto): SkipReason | null {
-		if (keysLoaded === false || usableKeys.length === 0) {
-			if (machine.isPaused) {
-				return 'paused';
-			}
-
-			return machine.remoteCommandsEnabled === false ? 'remote_commands_disabled' : null;
-		}
-
-		const assessment = assessMachine(machine, usableKeys);
-
-		return 'skip' in assessment ? assessment.skip : null;
+		return sendBlock(machine, keysLoaded ? usableKeys : null);
 	}
 
 	function candidateBlock(candidate: KubernetesCandidateDto): SkipReason | null {
@@ -194,7 +185,7 @@
 					userId: data.user?.id ?? 0,
 					tenantId: data.user?.activeTenantId ?? 0
 				});
-				results.push({ ...result, accepted: true, message: planned.online ? 'Accepted' : offlineAccepted });
+				results.push({ ...result, accepted: true, message: planned.online ? 'Accepted' : OFFLINE_HOST_ACCEPTED });
 			} catch (error) {
 				results.push({ ...result, accepted: false, message: describeSendError(error) });
 			}
@@ -348,7 +339,16 @@
 					Disable reporting
 				</button>
 				{#if disableReason !== null}
-					<p class="text-xs text-surface-500 dark:text-surface-400">{disableReason}</p>
+					<div class="space-y-1 text-xs text-surface-500 dark:text-surface-400">
+						<p>{disableReason.summary}</p>
+						{#if disableReason.machines.length > 0}
+							<ul data-testid="disable-blocked-machines" class="list-disc pl-5">
+								{#each disableReason.machines as blocked (blocked.machineId)}
+									<li>{blocked.machineName}: {describeBlockReason(blocked.reason)}</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
 				{/if}
 			</div>
 		{/if}
@@ -570,11 +570,9 @@
 									{#if candidate.reporterError === null}
 										<span class="text-surface-500 dark:text-surface-400">---</span>
 									{:else}
-										{@const reported = describeAgentMessage(candidate.reporterError)}
-										<span title={reported.code} class="text-red-700 dark:text-red-400">{reported.label}</span>
-										{#if reported.detail !== null}
-											<span class="block text-xs text-surface-500 dark:text-surface-400">{reported.detail}</span>
-										{/if}
+										<span title={candidate.reporterError} class="text-red-700 dark:text-red-400">
+											{describeReporterError(candidate.reporterError)}
+										</span>
 									{/if}
 								</td>
 								<td class="px-6 py-4 text-surface-500 dark:text-surface-400">
