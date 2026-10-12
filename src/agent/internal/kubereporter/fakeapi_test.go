@@ -677,6 +677,15 @@ func (a *fakeAPI) handlePut(r *http.Request, body map[string]any, reply replyFun
 
 	current, found := a.objects[path]
 	if found == false {
+		// The real API answers a write of an object that has since been deleted with a Conflict, not a not
+		// found, as long as the body names the uid or resourceVersion it was read at, which an object read
+		// and written back always does.
+		if (stringAt(body, "metadata", "uid") != "") || (stringAt(body, "metadata", "resourceVersion") != "") {
+			fail(http.StatusConflict, "Conflict", "the object has been deleted; please apply your changes to the latest version and try again")
+
+			return
+		}
+
 		fail(http.StatusNotFound, "NotFound", "not found")
 
 		return

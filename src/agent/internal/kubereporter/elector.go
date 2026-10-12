@@ -374,9 +374,17 @@ func (e *Elector) write(ctx context.Context, client *kube.Client, lease map[stri
 // The Lease is read again to learn who holds it. An agent that was leading and still finds itself the holder
 // (typically after an enrol changed an annotation) renews once more with the new resourceVersion; an agent that
 // finds another holder is no longer leading; an agent that was only trying to take the Lease does not hold it.
+//
+// A Lease deleted between the read and the write also arrives here: the write carries the uid and resourceVersion
+// of an object that is gone, which the API answers with a Conflict and not a not found. The re-read then finds the
+// Lease missing, and a holder stops leading at once, as it does when the Lease is missing at the start of a tick.
 func (e *Elector) afterConflict(ctx context.Context, client *kube.Client, renewing bool) {
 	lease, err := e.readLease(ctx, client)
 	if err != nil {
+		if kube.IsNotFound(err) && e.loseHolding("the lease no longer exists") {
+			return
+		}
+
 		e.logFailure("read the lease again", err)
 
 		return

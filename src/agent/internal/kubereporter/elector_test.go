@@ -1390,6 +1390,34 @@ func TestElector_MissingLease(t *testing.T) {
 		}
 	})
 
+	// The Lease can disappear between the holder's read and its renew. The renew then carries the uid and
+	// resourceVersion of an object that no longer exists, which the real API answers with a Conflict and not a
+	// not found, and the re-read that follows is what finds the Lease gone.
+	t.Run("holder steps down when the Lease is deleted before its renew lands", func(t *testing.T) {
+		rig := newElectorRig(t)
+		a := rig.newCandidate("aaaa")
+		a.tick()
+
+		rig.api.inject(fault{
+			method: http.MethodPut,
+			path:   leasePath,
+			onFire: func(api *fakeAPI) { api.deleteLocked(leasePath) },
+		})
+
+		rig.advance(electionInterval)
+		a.tick()
+
+		a.requireNotLeader()
+
+		if a.lost != 1 {
+			t.Errorf("onLost ran %d times, want 1", a.lost)
+		}
+
+		if got := a.elector.ReporterError(); got != "" {
+			t.Errorf("ReporterError = %q, want none for a Lease that was deleted", got)
+		}
+	})
+
 	t.Run("standby waits quietly", func(t *testing.T) {
 		rig := newElectorRig(t)
 		rig.api.mu.Lock()
