@@ -24,6 +24,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
 using System.Threading.Channels;
+using TUnit.Assertions.Enums;
 
 namespace Framlux.FleetManagement.Test.Services.Kubernetes;
 
@@ -297,7 +298,7 @@ public class KubernetesInventoryProjectionServiceTests
         await rig.StartAsync();
         await rig.Clock.NextDelayAsync();
 
-        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { rowA, rowB });
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { rowA, rowB }, CollectionOrdering.Matching);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(rowC);
         await Assert.That(await rig.Db.Context.KubernetesClusters.CountAsync()).IsEqualTo(1);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(2);
@@ -311,7 +312,7 @@ public class KubernetesInventoryProjectionServiceTests
         int tenantId = await rig.SeedTenantAsync();
         long first = await rig.SeedMachineAsync(tenantId);
         long second = await rig.SeedMachineAsync(tenantId);
-        long invalidRow = await rig.SeedRowAsync(first, tenantId, """{"has_kubelet":true,"node_name":""}""");
+        long invalidRow = await rig.SeedRowAsync(first, tenantId, "{}");
         long validRow = await rig.SeedRowAsync(second, tenantId, NodePayload("node-b"));
 
         await rig.StartAsync();
@@ -319,7 +320,7 @@ public class KubernetesInventoryProjectionServiceTests
 
         await Assert.That(rig.FailureCount("invalid_payload")).IsEqualTo(1L);
         await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(1);
-        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { validRow });
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { validRow }, CollectionOrdering.Matching);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(validRow);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(1);
 
@@ -329,12 +330,31 @@ public class KubernetesInventoryProjectionServiceTests
     }
 
     [Test]
+    public async Task Projector_KubeletNodeWithoutAName_IsSkippedAsInvalid()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long machineId = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(machineId, tenantId, NodePayload(nodeName: "", hasKubelet: true));
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.FailureCount("invalid_payload")).IsEqualTo(1L);
+        await Assert.That(rig.ApplyAttempts.Length).IsEqualTo(0);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+    }
+
+    [Test]
     [Arguments("")]
+    [Arguments("{}")]
     [Arguments("not json")]
     [Arguments("null")]
     [Arguments("[]")]
-    [Arguments("""{"has_kubelet":"yes"}""")]
-    [Arguments("""{"has_kubelet":true,"node_name":"Node_1"}""")]
+    [Arguments("""{"distro":"k3s","has_kubelet":"yes"}""")]
+    [Arguments("""{"distro":"k3s","has_kubelet":true,"node_name":"Node_1"}""")]
+    [Arguments("""{"distro":"k3s","has_kubelet":false,"node_name":"Node_1"}""")]
+    [Arguments("""{"has_kubelet":true,"node_name":"node-1"}""")]
     public async Task Projector_UnusableStoredPayload_IsSkippedAsInvalid(string payload)
     {
         await using Rig rig = new();
@@ -364,7 +384,7 @@ public class KubernetesInventoryProjectionServiceTests
         await rig.Clock.NextDelayAsync();
 
         await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
-        await Assert.That(rig.Outcomes).IsEquivalentTo(new[] { (row, LocalReportOutcome.NotANode) });
+        await Assert.That(rig.Outcomes).IsEquivalentTo(new[] { (row, LocalReportOutcome.NotANode) }, CollectionOrdering.Matching);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(0);
         await Assert.That(await rig.Db.Context.KubernetesClusters.CountAsync()).IsEqualTo(0);
@@ -410,12 +430,16 @@ public class KubernetesInventoryProjectionServiceTests
 
         await rig.StartAsync();
 
-        // Four failures each leave the row in place and wait; the fifth gives up on it.
+        // Four failures each leave the row in place and wait; the fifth gives up on it. The database is
+        // read only while the service is parked in a delay, since it shares one connection with the test.
         for (int attempt = 1; attempt <= 4; attempt++)
         {
+            ParkedDelay parked = await rig.Clock.NextDelayAsync();
+            await Assert.That(parked.Delay).IsEqualTo(PollInterval);
             await Assert.That(await rig.CursorAsync()).IsNull();
             await Assert.That(rig.FailureCount("retries_exhausted")).IsEqualTo(0L);
-            await rig.Clock.ReleaseNextAsync(PollInterval);
+
+            rig.Clock.Advance(parked.Delay);
         }
 
         await rig.Clock.NextDelayAsync();
@@ -442,7 +466,7 @@ public class KubernetesInventoryProjectionServiceTests
         await rig.StartAsync();
         await rig.Clock.NextDelayAsync();
 
-        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { brokenRow, laterRow });
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { brokenRow, laterRow }, CollectionOrdering.Matching);
         await Assert.That(rig.FailureCount("apply_failed")).IsEqualTo(1L);
         await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(1);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(laterRow);
@@ -469,7 +493,7 @@ public class KubernetesInventoryProjectionServiceTests
         rig.Clock.Advance(idle.Delay);
         await rig.Clock.NextDelayAsync();
 
-        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { row });
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { row }, CollectionOrdering.Matching);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
     }
 
@@ -515,7 +539,7 @@ public class KubernetesInventoryProjectionServiceTests
         await rig.StartAsync();
         await rig.Clock.NextDelayAsync();
 
-        await Assert.That(rig.Outcomes).IsEquivalentTo(new[] { (row, LocalReportOutcome.MachineDeleted) });
+        await Assert.That(rig.Outcomes).IsEquivalentTo(new[] { (row, LocalReportOutcome.MachineDeleted) }, CollectionOrdering.Matching);
         await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(0);
         await Assert.That(await rig.Db.Context.KubernetesClusters.CountAsync()).IsEqualTo(0);
@@ -592,8 +616,59 @@ public class KubernetesInventoryProjectionServiceTests
             await rig.Clock.ReleaseNextAsync(PollInterval);
         }
 
+        await rig.Clock.NextDelayAsync();
+
         await Assert.That(rig.Service.ExecuteTask!.IsCompleted).IsFalse();
         await Assert.That(await rig.CursorAsync()).IsNull();
+    }
+
+    [Test]
+    [Arguments("invalid_payload", 1)]
+    [Arguments("apply_failed", 1)]
+    [Arguments("retries_exhausted", 5)]
+    public async Task Projector_SkippedRowIsCountedOnlyOnceItsCursorWriteSucceeds(string reason, int pollsBeforeTheWriteSucceeds)
+    {
+        // The skip's cursor write fails once. The row is then read and skipped again, and the counter
+        // must record the one row once, not once per attempt to move the cursor past it.
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long machineId = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(machineId, tenantId, reason == "invalid_payload" ? "not json" : NodePayload("node-a"));
+        if (reason == "apply_failed")
+        {
+            rig.ApplyFault = (_, _) => new InvalidOperationException("constraint violated");
+        }
+
+        if (reason == "retries_exhausted")
+        {
+            rig.ApplyFault = (_, _) => new TimeoutException("connection reset");
+        }
+
+        int cursorWrites = 0;
+        rig.Repository.SetProjectionCursorAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Interlocked.Increment(ref cursorWrites) == 1
+                ? Task.FromException(new InvalidOperationException("database unavailable"))
+                : rig.Real.SetProjectionCursorAsync(ci.ArgAt<long>(0), ci.ArgAt<DateTimeOffset>(1), ci.ArgAt<CancellationToken>(2)));
+
+        await rig.StartAsync();
+        for (int poll = 0; poll < pollsBeforeTheWriteSucceeds; poll++)
+        {
+            ParkedDelay parked = await rig.Clock.NextDelayAsync();
+            await Assert.That(parked.Delay).IsEqualTo(PollInterval);
+            await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+            await Assert.That(await rig.CursorAsync()).IsNull();
+
+            rig.Clock.Advance(parked.Delay);
+        }
+
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(cursorWrites).IsEqualTo(2);
+        await Assert.That(rig.FailureCount(reason)).IsEqualTo(1L);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(1);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+        await Assert.That(rig.Logger.Collector.GetSnapshot().Count(r => (r.Level == LogLevel.Error) && r.Message.Contains("was skipped")))
+            .IsEqualTo(1);
     }
 
     [Test]
@@ -803,16 +878,34 @@ public class KubernetesInventoryProjectionServiceTests
     [Arguments("docker")]
     [Arguments("K3S")]
     [Arguments("k3s ")]
-    [Arguments("")]
-    [Arguments(null)]
-    public async Task NormalisePayload_UnknownDistro_BecomesUnknown(string? distro)
+    [Arguments(" ")]
+    public async Task NormalisePayload_UnknownDistro_BecomesUnknown(string distro)
     {
         KubernetesNodePayload payload = ValidPayload();
-        payload.Distro = distro!;
+        payload.Distro = distro;
 
         LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
 
         await Assert.That(report!.Distro).IsEqualTo("unknown");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments(null)]
+    public async Task NormalisePayload_EmptyDistro_IsRejected(string? distro)
+    {
+        // An empty distro is how a payload the server failed to serialise reads back, as "{}", so it
+        // is counted as malformed rather than recorded as a host that is not a node.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.Distro = distro!;
+
+        await Assert.That(KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow())).IsNull();
+    }
+
+    [Test]
+    public async Task NormalisePayload_EmptyPayload_IsRejected()
+    {
+        await Assert.That(KubernetesInventoryProjectionService.NormalisePayload(new KubernetesNodePayload(), TelemetryRow())).IsNull();
     }
 
     [Test]
@@ -948,5 +1041,42 @@ public class KubernetesInventoryProjectionServiceTests
         await Assert.That(report).IsNotNull();
         await Assert.That(report!.HasKubelet).IsFalse();
         await Assert.That(report.NodeName).IsEqualTo("");
+    }
+
+    [Test]
+    [Arguments("Node_1")]
+    [Arguments("-node")]
+    [Arguments("node name")]
+    public async Task NormalisePayload_InvalidNodeNameWithoutKubelet_IsRejected(string nodeName)
+    {
+        // Only an empty name is excused for a host without a kubelet; a name that is present has to be
+        // a real one.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.HasKubelet = false;
+        payload.NodeName = nodeName;
+
+        await Assert.That(KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow())).IsNull();
+    }
+
+    [Test]
+    public async Task NormalisePayload_OverLongNodeNameWithoutKubelet_IsRejected()
+    {
+        KubernetesNodePayload payload = ValidPayload();
+        payload.HasKubelet = false;
+        payload.NodeName = new string('a', 254);
+
+        await Assert.That(KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow())).IsNull();
+    }
+
+    [Test]
+    public async Task NormalisePayload_ValidNodeNameWithoutKubelet_IsKept()
+    {
+        KubernetesNodePayload payload = ValidPayload();
+        payload.HasKubelet = false;
+
+        LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
+
+        await Assert.That(report!.HasKubelet).IsFalse();
+        await Assert.That(report.NodeName).IsEqualTo("node-1");
     }
 }

@@ -39,7 +39,7 @@ public static class LockNames
     public const string HealthSweepTenantPrefix = "health-sweep:tenant:";
 
     /// <summary>
-    /// Kubernetes inventory projection singleton lock (one projector per cluster). The projection
+    /// Kubernetes inventory projection singleton lock (one projector per deployment). The projection
     /// reads a single global stream, so one replica at a time applies it.
     /// </summary>
     public const string KubernetesInventoryProjection = "kubernetes-inventory-projection";

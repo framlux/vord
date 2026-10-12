@@ -177,19 +177,37 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
 
     /// <summary>
     /// Validates and normalises a stored node report so that no value can exceed the column it will be
-    /// written to. The node name is checked only for a machine that runs a kubelet: a control-plane
-    /// host without one reports no usable name, and the repository records it as not being a node.
+    /// written to. A report must name a distro: an empty one is what a payload the server failed to
+    /// serialise looks like, not something an agent sends. The node name must be a valid Kubernetes
+    /// node name, except that a host without a kubelet may report an empty one, because a control-plane
+    /// host with no kubelet and an unusable hostname has no name to give and the repository records it
+    /// as not being a node.
     /// </summary>
     /// <param name="payload">The deserialized payload.</param>
     /// <param name="row">The telemetry row the payload came from.</param>
-    /// <returns>The report to apply, or null when the payload names a kubelet node with no valid name.</returns>
+    /// <returns>The report to apply, or null when the payload names no distro or has an unusable node name.</returns>
     internal static LocalNodeReport? NormalisePayload(KubernetesNodePayload payload, MachineTelemetry row)
     {
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(row);
 
+        if (string.IsNullOrEmpty(payload.Distro))
+        {
+            return null;
+        }
+
         string nodeName = payload.NodeName ?? string.Empty;
-        if ((payload.HasKubelet == true) && (IsValidNodeName(nodeName) == false))
+        bool nameIsUsable;
+        if (nodeName.Length == 0)
+        {
+            nameIsUsable = payload.HasKubelet == false;
+        }
+        else
+        {
+            nameIsUsable = IsValidNodeName(nodeName);
+        }
+
+        if (nameIsUsable == false)
         {
             return null;
         }
@@ -417,7 +435,7 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         LocalNodeReport? report = NormalisePayload(payload, row);
         if (report is null)
         {
-            await SkipInvalidPayloadAsync(row, "the node name is not a valid Kubernetes node name", null, ct);
+            await SkipInvalidPayloadAsync(row, "the payload names no distro or its node name is not a valid Kubernetes node name", null, ct);
 
             return false;
         }
@@ -440,10 +458,12 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
                 return await HandleTransientFailureAsync(row, ex, ct);
             }
 
+            // The row only counts as skipped once the cursor has moved past it. If that write fails the
+            // row is read again, and counting it first would count the same row on every poll.
+            await SkipRowAsync(row.Id, ct);
             ClearRetryState();
             _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.ApplyFailed);
             _logger.LogError(ex, "Kubernetes node report {TelemetryId} could not be applied and was skipped", row.Id);
-            await SkipRowAsync(row.Id, ct);
 
             return false;
         }
@@ -469,23 +489,25 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
             return true;
         }
 
+        // Counted only once the cursor has moved: a failed write leaves the attempt count spent, so the
+        // next poll tries the row once more and gives up on it again.
+        await SkipRowAsync(row.Id, ct);
         ClearRetryState();
         _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.RetriesExhausted);
         _logger.LogError(
             exception,
             "Kubernetes node report {TelemetryId} still failed after {MaxAttempts} attempts and was skipped",
             row.Id, MaxTransientAttempts);
-        await SkipRowAsync(row.Id, ct);
 
         return false;
     }
 
     private async Task SkipInvalidPayloadAsync(MachineTelemetry row, string reason, Exception? exception, CancellationToken ct)
     {
+        await SkipRowAsync(row.Id, ct);
         ClearRetryState();
         _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.InvalidPayload);
         _logger.LogError(exception, "Kubernetes node report {TelemetryId} was skipped: {Reason}", row.Id, reason);
-        await SkipRowAsync(row.Id, ct);
     }
 
     /// <summary>
