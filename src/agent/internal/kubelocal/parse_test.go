@@ -2,7 +2,7 @@
 // Licensed under the MIT License
 // See LICENSE for details.
 
-package collector
+package kubelocal
 
 import (
 	"bytes"
@@ -21,6 +21,32 @@ import (
 	"testing"
 	"time"
 )
+
+// commonBadInputs are inputs no parser may panic on. The files read here come from arbitrary hosts, so they can
+// hold truncated data, binary garbage, NUL bytes or oversized lines.
+var commonBadInputs = []string{
+	"",                         // empty
+	"\x00\x01\x02\xff\xfe",     // binary garbage
+	"\x00\x00\x00\x00",         // NUL-filled
+	strings.Repeat("a", 1<<20), // extremely long single line (1MB)
+	"   \n\t\n  ",              // only whitespace
+	"\n\n\n\n",                 // only newlines
+	"\r\n\r\n",                 // Windows line endings
+	"\t\t\t\t",                 // tab-heavy
+	"cpu \xf0\x9f\x94\xa5 100", // Unicode/emoji
+	"-1",                       // negative number
+	"99999999999999999999",     // overflow number
+}
+
+// truncatedInput returns the first line of a format with more data after it.
+func truncatedInput(fullInput string) string {
+	idx := strings.Index(fullInput, "\n")
+	if idx < 0 {
+		return fullInput
+	}
+
+	return fullInput[:idx]
+}
 
 // testCert is a self-signed certificate built in the test, with the key material needed to
 // write it as the PEM blocks a Kubernetes node keeps on disk.
@@ -76,7 +102,7 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// --- caFingerprint ---
+// --- CAFingerprint ---
 
 // Intent: the fingerprint is the lowercase hex SHA-256 of the DER bytes of the first certificate,
 // so two nodes of one cluster agree on it however many certificates follow in the bundle.
@@ -86,22 +112,22 @@ func TestCaFingerprintUsesFirstCertificateOfBundle(t *testing.T) {
 
 	bundle := append(append([]byte{}, first.certPEM...), second.certPEM...)
 
-	got, err := caFingerprint(bundle)
+	got, err := CAFingerprint(bundle)
 	if err != nil {
-		t.Fatalf("caFingerprint returned error: %v", err)
+		t.Fatalf("CAFingerprint returned error: %v", err)
 	}
 
 	want := sha256Hex(first.cert.Raw)
 	if got != want {
-		t.Errorf("caFingerprint = %q, want %q", got, want)
+		t.Errorf("CAFingerprint = %q, want %q", got, want)
 	}
 
 	if got != strings.ToLower(got) {
-		t.Errorf("caFingerprint = %q, want lowercase hex", got)
+		t.Errorf("CAFingerprint = %q, want lowercase hex", got)
 	}
 
 	if got == sha256Hex(second.cert.Raw) {
-		t.Errorf("caFingerprint matched the second certificate of the bundle")
+		t.Errorf("CAFingerprint matched the second certificate of the bundle")
 	}
 }
 
@@ -110,13 +136,13 @@ func TestCaFingerprintUsesFirstCertificateOfBundle(t *testing.T) {
 func TestCaFingerprintRejectsFileWithOnlyPrivateKey(t *testing.T) {
 	c := newTestCert(t, "kubernetes-ca", 1)
 
-	got, err := caFingerprint(c.keyPEM)
+	got, err := CAFingerprint(c.keyPEM)
 	if err == nil {
-		t.Errorf("caFingerprint accepted a key-only file and returned %q", got)
+		t.Errorf("CAFingerprint accepted a key-only file and returned %q", got)
 	}
 
 	if got != "" {
-		t.Errorf("caFingerprint = %q on error, want empty", got)
+		t.Errorf("CAFingerprint = %q on error, want empty", got)
 	}
 }
 
@@ -128,13 +154,13 @@ func TestCaFingerprintSkipsPrivateKeyBlockBeforeCertificate(t *testing.T) {
 	garbageKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not a der structure")})
 	input := append(append([]byte{}, garbageKey...), c.certPEM...)
 
-	got, err := caFingerprint(input)
+	got, err := CAFingerprint(input)
 	if err != nil {
-		t.Fatalf("caFingerprint returned error: %v", err)
+		t.Fatalf("CAFingerprint returned error: %v", err)
 	}
 
 	if want := sha256Hex(c.cert.Raw); got != want {
-		t.Errorf("caFingerprint = %q, want %q", got, want)
+		t.Errorf("CAFingerprint = %q, want %q", got, want)
 	}
 }
 
@@ -143,9 +169,9 @@ func TestCaFingerprintSkipsPrivateKeyBlockBeforeCertificate(t *testing.T) {
 func TestCaFingerprintRejectsInvalidCertificateBlock(t *testing.T) {
 	input := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a der structure")})
 
-	got, err := caFingerprint(input)
+	got, err := CAFingerprint(input)
 	if err == nil {
-		t.Errorf("caFingerprint accepted an invalid certificate and returned %q", got)
+		t.Errorf("CAFingerprint accepted an invalid certificate and returned %q", got)
 	}
 }
 
@@ -167,32 +193,32 @@ func TestCaFingerprintNoPanic(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("caFingerprint panicked on input %q: %v", input[:min(len(input), 50)], r)
+					t.Errorf("CAFingerprint panicked on input %q: %v", input[:min(len(input), 50)], r)
 				}
 			}()
 
-			got, err := caFingerprint([]byte(input))
+			got, err := CAFingerprint([]byte(input))
 			if (err == nil) && (got != "") {
-				t.Errorf("caFingerprint returned %q without an error for input %q", got, input[:min(len(input), 50)])
+				t.Errorf("CAFingerprint returned %q without an error for input %q", got, input[:min(len(input), 50)])
 			}
 		})
 	}
 }
 
-// --- nodeNameFromCert ---
+// --- NodeNameFromCert ---
 
 // Intent: the kubelet client certificate identifies the node by its CN system:node:<name>, and
 // that name is what the collector reports as the node name.
 func TestNodeNameFromCertReadsNodeCommonName(t *testing.T) {
 	c := newTestCert(t, "system:node:node-1", 1)
 
-	got, err := nodeNameFromCert(c.certPEM)
+	got, err := NodeNameFromCert(c.certPEM)
 	if err != nil {
-		t.Fatalf("nodeNameFromCert returned error: %v", err)
+		t.Fatalf("NodeNameFromCert returned error: %v", err)
 	}
 
 	if got != "node-1" {
-		t.Errorf("nodeNameFromCert = %q, want %q", got, "node-1")
+		t.Errorf("NodeNameFromCert = %q, want %q", got, "node-1")
 	}
 }
 
@@ -208,13 +234,13 @@ func TestNodeNameFromCertReadsCombinedFileWithKeyBeforeAndAfter(t *testing.T) {
 
 	for name, input := range layouts {
 		t.Run(name, func(t *testing.T) {
-			got, err := nodeNameFromCert(input)
+			got, err := NodeNameFromCert(input)
 			if err != nil {
-				t.Fatalf("nodeNameFromCert returned error: %v", err)
+				t.Fatalf("NodeNameFromCert returned error: %v", err)
 			}
 
 			if got != "worker-7" {
-				t.Errorf("nodeNameFromCert = %q, want %q", got, "worker-7")
+				t.Errorf("NodeNameFromCert = %q, want %q", got, "worker-7")
 			}
 		})
 	}
@@ -228,13 +254,13 @@ func TestNodeNameFromCertSkipsKeyBlocksWithoutDecodingThem(t *testing.T) {
 	garbageKey := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("not a der structure")})
 	input := append(append([]byte{}, garbageKey...), c.certPEM...)
 
-	got, err := nodeNameFromCert(input)
+	got, err := NodeNameFromCert(input)
 	if err != nil {
-		t.Fatalf("nodeNameFromCert returned error: %v", err)
+		t.Fatalf("NodeNameFromCert returned error: %v", err)
 	}
 
 	if got != "node-1" {
-		t.Errorf("nodeNameFromCert = %q, want %q", got, "node-1")
+		t.Errorf("NodeNameFromCert = %q, want %q", got, "node-1")
 	}
 }
 
@@ -245,13 +271,13 @@ func TestNodeNameFromCertRejectsNonNodeCommonName(t *testing.T) {
 		t.Run(commonName, func(t *testing.T) {
 			c := newTestCert(t, commonName, 1)
 
-			got, err := nodeNameFromCert(c.certPEM)
+			got, err := NodeNameFromCert(c.certPEM)
 			if err == nil {
-				t.Errorf("nodeNameFromCert accepted CN %q and returned %q", commonName, got)
+				t.Errorf("NodeNameFromCert accepted CN %q and returned %q", commonName, got)
 			}
 
 			if got != "" {
-				t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+				t.Errorf("NodeNameFromCert = %q on error, want empty", got)
 			}
 		})
 	}
@@ -262,13 +288,13 @@ func TestNodeNameFromCertRejectsNonNodeCommonName(t *testing.T) {
 func TestNodeNameFromCertRejectsFileWithOnlyKeyBlock(t *testing.T) {
 	c := newTestCert(t, "system:node:node-1", 1)
 
-	got, err := nodeNameFromCert(c.keyPEM)
+	got, err := NodeNameFromCert(c.keyPEM)
 	if err == nil {
-		t.Errorf("nodeNameFromCert accepted a key-only file and returned %q", got)
+		t.Errorf("NodeNameFromCert accepted a key-only file and returned %q", got)
 	}
 
 	if got != "" {
-		t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+		t.Errorf("NodeNameFromCert = %q on error, want empty", got)
 	}
 }
 
@@ -281,13 +307,13 @@ func TestNodeNameFromCertUsesFirstCertificateOnly(t *testing.T) {
 
 	input := append(append([]byte{}, admin.certPEM...), node.certPEM...)
 
-	got, err := nodeNameFromCert(input)
+	got, err := NodeNameFromCert(input)
 	if err == nil {
-		t.Errorf("nodeNameFromCert read a later certificate and returned %q", got)
+		t.Errorf("NodeNameFromCert read a later certificate and returned %q", got)
 	}
 
 	if got != "" {
-		t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+		t.Errorf("NodeNameFromCert = %q on error, want empty", got)
 	}
 }
 
@@ -320,13 +346,13 @@ func TestNodeNameFromCertRejectsInvalidNodeNames(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
 
-			got, err := nodeNameFromCert(c.certPEM)
+			got, err := NodeNameFromCert(c.certPEM)
 			if err == nil {
-				t.Errorf("nodeNameFromCert accepted node name %q and returned %q", nodeName, got)
+				t.Errorf("NodeNameFromCert accepted node name %q and returned %q", nodeName, got)
 			}
 
 			if got != "" {
-				t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+				t.Errorf("NodeNameFromCert = %q on error, want empty", got)
 			}
 		})
 	}
@@ -341,13 +367,13 @@ func TestNodeNameFromCertAcceptsValidNodeNames(t *testing.T) {
 		t.Run(nodeName[:min(len(nodeName), 20)], func(t *testing.T) {
 			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
 
-			got, err := nodeNameFromCert(c.certPEM)
+			got, err := NodeNameFromCert(c.certPEM)
 			if err != nil {
-				t.Fatalf("nodeNameFromCert returned error for %q: %v", nodeName, err)
+				t.Fatalf("NodeNameFromCert returned error for %q: %v", nodeName, err)
 			}
 
 			if got != nodeName {
-				t.Errorf("nodeNameFromCert = %q, want %q", got, nodeName)
+				t.Errorf("NodeNameFromCert = %q, want %q", got, nodeName)
 			}
 		})
 	}
@@ -371,19 +397,19 @@ func TestNodeNameFromCertNoPanic(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("nodeNameFromCert panicked on input %q: %v", input[:min(len(input), 50)], r)
+					t.Errorf("NodeNameFromCert panicked on input %q: %v", input[:min(len(input), 50)], r)
 				}
 			}()
 
-			got, err := nodeNameFromCert([]byte(input))
+			got, err := NodeNameFromCert([]byte(input))
 			if (err == nil) && (got != "") {
-				t.Errorf("nodeNameFromCert returned %q without an error for input %q", got, input[:min(len(input), 50)])
+				t.Errorf("NodeNameFromCert returned %q without an error for input %q", got, input[:min(len(input), 50)])
 			}
 		})
 	}
 }
 
-// --- parseKubeconfig ---
+// --- ParseKubeconfig ---
 
 const kubeconfigEmbeddedTemplate = `apiVersion: v1
 kind: Config
@@ -405,8 +431,8 @@ users:
     client-key-data: %s
 `
 
-func refsAreEmpty(refs kubeconfigRefs) bool {
-	return (refs.caData == nil) && (refs.caPath == "") && (refs.certData == nil) && (refs.certPath == "")
+func refsAreEmpty(refs KubeconfigRefs) bool {
+	return (refs.CAData == nil) && (refs.CAPath == "") && (refs.CertData == nil) && (refs.CertPath == "")
 }
 
 // Intent: certificates embedded in the kubeconfig are base64 on disk and must come back as the
@@ -420,21 +446,21 @@ func TestParseKubeconfigDecodesEmbeddedData(t *testing.T) {
 		base64.StdEncoding.EncodeToString(client.certPEM),
 		base64.StdEncoding.EncodeToString(client.keyPEM))
 
-	refs, err := parseKubeconfig([]byte(data))
+	refs, err := ParseKubeconfig([]byte(data))
 	if err != nil {
-		t.Fatalf("parseKubeconfig returned error: %v", err)
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
 	}
 
-	if bytes.Equal(refs.caData, ca.certPEM) == false {
-		t.Errorf("caData did not decode to the original certificate bytes")
+	if bytes.Equal(refs.CAData, ca.certPEM) == false {
+		t.Errorf("CAData did not decode to the original certificate bytes")
 	}
 
-	if bytes.Equal(refs.certData, client.certPEM) == false {
-		t.Errorf("certData did not decode to the original certificate bytes")
+	if bytes.Equal(refs.CertData, client.certPEM) == false {
+		t.Errorf("CertData did not decode to the original certificate bytes")
 	}
 
-	if (refs.caPath != "") || (refs.certPath != "") {
-		t.Errorf("paths = (%q, %q), want both empty for an embedded kubeconfig", refs.caPath, refs.certPath)
+	if (refs.CAPath != "") || (refs.CertPath != "") {
+		t.Errorf("paths = (%q, %q), want both empty for an embedded kubeconfig", refs.CAPath, refs.CertPath)
 	}
 }
 
@@ -461,21 +487,21 @@ users:
     client-key: /var/lib/kubelet/pki/kubelet-client-current.pem
 `
 
-	refs, err := parseKubeconfig([]byte(data))
+	refs, err := ParseKubeconfig([]byte(data))
 	if err != nil {
-		t.Fatalf("parseKubeconfig returned error: %v", err)
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
 	}
 
-	if refs.caPath != "/etc/kubernetes/pki/ca.crt" {
-		t.Errorf("caPath = %q, want %q", refs.caPath, "/etc/kubernetes/pki/ca.crt")
+	if refs.CAPath != "/etc/kubernetes/pki/ca.crt" {
+		t.Errorf("CAPath = %q, want %q", refs.CAPath, "/etc/kubernetes/pki/ca.crt")
 	}
 
-	if refs.certPath != "pki/../kubelet-client-current.pem" {
-		t.Errorf("certPath = %q, want it returned verbatim", refs.certPath)
+	if refs.CertPath != "pki/../kubelet-client-current.pem" {
+		t.Errorf("CertPath = %q, want it returned verbatim", refs.CertPath)
 	}
 
-	if (refs.caData != nil) || (refs.certData != nil) {
-		t.Errorf("embedded data present for a path-based kubeconfig: caData=%v certData=%v", refs.caData, refs.certData)
+	if (refs.CAData != nil) || (refs.CertData != nil) {
+		t.Errorf("embedded data present for a path-based kubeconfig: CAData=%v CertData=%v", refs.CAData, refs.CertData)
 	}
 }
 
@@ -497,17 +523,17 @@ func TestParseKubeconfigTokenAndPasswordUsersHaveNoCertificate(t *testing.T) {
 				"contexts:\n- name: default\n  context:\n    cluster: kubernetes\n    user: admin\n" +
 				"users:\n- name: admin\n  user:\n" + userBody
 
-			refs, err := parseKubeconfig([]byte(data))
+			refs, err := ParseKubeconfig([]byte(data))
 			if err != nil {
-				t.Fatalf("parseKubeconfig returned error: %v", err)
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
 			}
 
-			if (refs.certData != nil) || (refs.certPath != "") {
-				t.Errorf("certificate reference = (%v, %q), want none for a %s user", refs.certData, refs.certPath, name)
+			if (refs.CertData != nil) || (refs.CertPath != "") {
+				t.Errorf("certificate reference = (%v, %q), want none for a %s user", refs.CertData, refs.CertPath, name)
 			}
 
-			if bytes.Equal(refs.caData, ca.certPEM) == false {
-				t.Errorf("caData lost for a %s user", name)
+			if bytes.Equal(refs.CAData, ca.certPEM) == false {
+				t.Errorf("CAData lost for a %s user", name)
 			}
 		})
 	}
@@ -525,9 +551,9 @@ func TestParseKubeconfigRejectsInvalidBase64(t *testing.T) {
 
 	for field, data := range cases {
 		t.Run(field, func(t *testing.T) {
-			_, err := parseKubeconfig([]byte(data))
+			_, err := ParseKubeconfig([]byte(data))
 			if err == nil {
-				t.Errorf("parseKubeconfig accepted invalid base64 in %s", field)
+				t.Errorf("ParseKubeconfig accepted invalid base64 in %s", field)
 			}
 		})
 	}
@@ -545,9 +571,9 @@ func TestParseKubeconfigRejectsMalformedYaml(t *testing.T) {
 
 	for _, data := range cases {
 		t.Run("", func(t *testing.T) {
-			_, err := parseKubeconfig([]byte(data))
+			_, err := ParseKubeconfig([]byte(data))
 			if err == nil {
-				t.Errorf("parseKubeconfig accepted malformed YAML %q", data)
+				t.Errorf("ParseKubeconfig accepted malformed YAML %q", data)
 			}
 		})
 	}
@@ -567,9 +593,9 @@ func TestParseKubeconfigErrorDoesNotEchoFileContent(t *testing.T) {
 
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := parseKubeconfig([]byte(data))
+			_, err := ParseKubeconfig([]byte(data))
 			if err == nil {
-				t.Fatalf("parseKubeconfig accepted %q", data)
+				t.Fatalf("ParseKubeconfig accepted %q", data)
 			}
 
 			if strings.Contains(err.Error(), "SUPERSE") {
@@ -610,17 +636,17 @@ users:
 // Intent: current-context decides which cluster and user the node really uses, so a kubeconfig
 // that lists several contexts yields the selected pair and not merely the first entries.
 func TestParseKubeconfigFollowsCurrentContext(t *testing.T) {
-	refs, err := parseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, "current-context: second")))
+	refs, err := ParseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, "current-context: second")))
 	if err != nil {
-		t.Fatalf("parseKubeconfig returned error: %v", err)
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
 	}
 
-	if refs.caPath != "/pki/second-ca.crt" {
-		t.Errorf("caPath = %q, want the cluster of the current context", refs.caPath)
+	if refs.CAPath != "/pki/second-ca.crt" {
+		t.Errorf("CAPath = %q, want the cluster of the current context", refs.CAPath)
 	}
 
-	if refs.certPath != "/pki/second-client.pem" {
-		t.Errorf("certPath = %q, want the user of the current context", refs.certPath)
+	if refs.CertPath != "/pki/second-client.pem" {
+		t.Errorf("CertPath = %q, want the user of the current context", refs.CertPath)
 	}
 }
 
@@ -635,17 +661,17 @@ func TestParseKubeconfigFallsBackToFirstClusterAndUser(t *testing.T) {
 
 	for name, line := range cases {
 		t.Run(name, func(t *testing.T) {
-			refs, err := parseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, line)))
+			refs, err := ParseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, line)))
 			if err != nil {
-				t.Fatalf("parseKubeconfig returned error: %v", err)
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
 			}
 
-			if refs.caPath != "/pki/first-ca.crt" {
-				t.Errorf("caPath = %q, want the first cluster", refs.caPath)
+			if refs.CAPath != "/pki/first-ca.crt" {
+				t.Errorf("CAPath = %q, want the first cluster", refs.CAPath)
 			}
 
-			if refs.certPath != "/pki/first-client.pem" {
-				t.Errorf("certPath = %q, want the first user", refs.certPath)
+			if refs.CertPath != "/pki/first-client.pem" {
+				t.Errorf("CertPath = %q, want the first user", refs.CertPath)
 			}
 		})
 	}
@@ -670,13 +696,13 @@ users:
     client-certificate: /pki/first-client.pem
 `
 
-	refs, err := parseKubeconfig([]byte(data))
+	refs, err := ParseKubeconfig([]byte(data))
 	if err != nil {
-		t.Fatalf("parseKubeconfig returned error: %v", err)
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
 	}
 
 	if refsAreEmpty(refs) == false {
-		t.Errorf("parseKubeconfig guessed references for a context with undefined targets: %+v", refs)
+		t.Errorf("ParseKubeconfig guessed references for a context with undefined targets: %+v", refs)
 	}
 }
 
@@ -698,13 +724,13 @@ func TestParseKubeconfigIgnoresClientKeyWithoutCertificate(t *testing.T) {
 				"contexts:\n- name: default\n  context:\n    cluster: kubernetes\n    user: kubelet\n" +
 				"users:\n- name: kubelet\n  user:\n" + userBody
 
-			refs, err := parseKubeconfig([]byte(data))
+			refs, err := ParseKubeconfig([]byte(data))
 			if err != nil {
-				t.Fatalf("parseKubeconfig returned error: %v", err)
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
 			}
 
 			if refsAreEmpty(refs) == false {
-				t.Errorf("parseKubeconfig returned references %+v for a user with only %s", refs, name)
+				t.Errorf("ParseKubeconfig returned references %+v for a user with only %s", refs, name)
 			}
 		})
 	}
@@ -734,13 +760,13 @@ func TestParseKubeconfigNoPanic(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("parseKubeconfig panicked on input %q: %v", input[:min(len(input), 50)], r)
+					t.Errorf("ParseKubeconfig panicked on input %q: %v", input[:min(len(input), 50)], r)
 				}
 			}()
 
-			refs, err := parseKubeconfig([]byte(input))
+			refs, err := ParseKubeconfig([]byte(input))
 			if (err == nil) && (refsAreEmpty(refs) == false) {
-				t.Errorf("parseKubeconfig returned references %+v without an error for input %q", refs, input[:min(len(input), 50)])
+				t.Errorf("ParseKubeconfig returned references %+v without an error for input %q", refs, input[:min(len(input), 50)])
 			}
 		})
 	}

@@ -2,7 +2,7 @@
 // Licensed under the MIT License
 // See LICENSE for details.
 
-package collector
+package kubelocal
 
 import (
 	"crypto/sha256"
@@ -32,16 +32,16 @@ const maxVersionLength = 64
 // hold hyphens but neither starts nor ends with one.
 var nodeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
-// kubeconfigRefs is what the collector needs from a kubeconfig: where the cluster CA and the client
+// KubeconfigRefs is what local detection needs from a kubeconfig: where the cluster CA and the client
 // certificate are, either embedded or as a path. Paths are returned exactly as written in the file.
-type kubeconfigRefs struct {
-	caData   []byte // decoded certificate-authority-data, nil when absent
-	caPath   string // certificate-authority, "" when absent
-	certData []byte // decoded client-certificate-data, nil when absent
-	certPath string // client-certificate, "" when absent
+type KubeconfigRefs struct {
+	CAData   []byte // decoded certificate-authority-data, nil when absent
+	CAPath   string // certificate-authority, "" when absent
+	CertData []byte // decoded client-certificate-data, nil when absent
+	CertPath string // client-certificate, "" when absent
 }
 
-// kubeconfigDocument declares only the fields the collector reads. Credentials such as tokens,
+// kubeconfigDocument declares only the fields detection reads. Credentials such as tokens,
 // passwords and client keys have no field, so they are never decoded into a value the agent holds.
 type kubeconfigDocument struct {
 	CurrentContext string `yaml:"current-context"`
@@ -68,17 +68,17 @@ type kubeconfigDocument struct {
 	} `yaml:"users"`
 }
 
-// parseKubeconfig follows current-context to its cluster and user. When current-context is absent or names a
+// ParseKubeconfig follows current-context to its cluster and user. When current-context is absent or names a
 // missing context, it falls back to the first cluster and the first user. A context that exists but names a
 // cluster or user the file does not define yields no reference for that side, because picking another entry
 // would fingerprint the wrong CA.
 // A user authenticated by token or password yields no certificate reference. Malformed YAML or base64
 // returns an error. The YAML error is replaced by fixed text, because the decoder quotes the start of the
 // scalar it failed on and a kubeconfig scalar can be a credential.
-func parseKubeconfig(data []byte) (kubeconfigRefs, error) {
+func ParseKubeconfig(data []byte) (KubeconfigRefs, error) {
 	var doc kubeconfigDocument
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return kubeconfigRefs{}, errors.New("parse kubeconfig: malformed YAML")
+		return KubeconfigRefs{}, errors.New("parse kubeconfig: malformed YAML")
 	}
 
 	clusterIndex, userIndex := -1, -1
@@ -105,30 +105,30 @@ func parseKubeconfig(data []byte) (kubeconfigRefs, error) {
 		}
 	}
 
-	var refs kubeconfigRefs
+	var refs KubeconfigRefs
 
 	if clusterIndex >= 0 {
 		cluster := doc.Clusters[clusterIndex].Cluster
-		refs.caPath = cluster.CertificateAuthority
+		refs.CAPath = cluster.CertificateAuthority
 
 		decoded, err := decodeKubeconfigData(cluster.CertificateAuthorityData)
 		if err != nil {
-			return kubeconfigRefs{}, fmt.Errorf("certificate-authority-data: %w", err)
+			return KubeconfigRefs{}, fmt.Errorf("certificate-authority-data: %w", err)
 		}
 
-		refs.caData = decoded
+		refs.CAData = decoded
 	}
 
 	if userIndex >= 0 {
 		user := doc.Users[userIndex].User
-		refs.certPath = user.ClientCertificate
+		refs.CertPath = user.ClientCertificate
 
 		decoded, err := decodeKubeconfigData(user.ClientCertificateData)
 		if err != nil {
-			return kubeconfigRefs{}, fmt.Errorf("client-certificate-data: %w", err)
+			return KubeconfigRefs{}, fmt.Errorf("client-certificate-data: %w", err)
 		}
 
-		refs.certData = decoded
+		refs.CertData = decoded
 	}
 
 	return refs, nil
@@ -183,9 +183,9 @@ func firstCertificate(pemData []byte) *pem.Block {
 	}
 }
 
-// caFingerprint returns the lowercase hex SHA-256 of the DER bytes of the first CERTIFICATE block, or an error
+// CAFingerprint returns the lowercase hex SHA-256 of the DER bytes of the first CERTIFICATE block, or an error
 // when the input holds no CERTIFICATE block or that block is not a valid certificate.
-func caFingerprint(pemData []byte) (string, error) {
+func CAFingerprint(pemData []byte) (string, error) {
 	block := firstCertificate(pemData)
 	if block == nil {
 		return "", errors.New("no certificate block found")
@@ -201,10 +201,10 @@ func caFingerprint(pemData []byte) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// nodeNameFromCert returns <name> from the CN "system:node:<name>" of the first CERTIFICATE block. It skips
+// NodeNameFromCert returns <name> from the CN "system:node:<name>" of the first CERTIFICATE block. It skips
 // every other block type, including private keys, without decoding them. It returns an error when that block
 // is not a valid certificate with that CN form, or when <name> is not a valid node name.
-func nodeNameFromCert(pemData []byte) (string, error) {
+func NodeNameFromCert(pemData []byte) (string, error) {
 	block := firstCertificate(pemData)
 	if block == nil {
 		return "", errors.New("no certificate block found")
