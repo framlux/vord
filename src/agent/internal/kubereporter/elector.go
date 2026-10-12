@@ -378,29 +378,11 @@ func (e *Elector) write(ctx context.Context, client *kube.Client, lease map[stri
 // A Lease deleted between the read and the write also arrives here: the write carries the uid and resourceVersion
 // of an object that is gone, which the API answers with a Conflict and not a not found. The re-read then finds the
 // Lease missing, and a holder stops leading at once, as it does when the Lease is missing at the start of a tick.
+// The retry can meet the same fate, so a retry that conflicts is followed by one more re-read to tell a Lease
+// that was touched again, which the next tick reads afresh, from one that is gone or now held by another agent.
 func (e *Elector) afterConflict(ctx context.Context, client *kube.Client, renewing bool) {
-	lease, err := e.readLease(ctx, client)
-	if err != nil {
-		if kube.IsNotFound(err) && e.loseHolding("the lease no longer exists") {
-			return
-		}
-
-		e.logFailure("read the lease again", err)
-
-		return
-	}
-
-	e.observe(lease)
-
-	if stringAt(lease, "spec", "holderIdentity") != e.identity {
-		if renewing {
-			e.loseHolding("another agent took the lease")
-		}
-
-		return
-	}
-
-	if renewing == false {
+	lease, stillHolder := e.rereadAfterConflict(ctx, client, renewing, "read the lease again")
+	if (stillHolder == false) || (renewing == false) {
 		return
 	}
 
@@ -413,13 +395,47 @@ func (e *Elector) afterConflict(ctx context.Context, client *kube.Client, renewi
 	sentAt := e.clock.Now()
 
 	stored, err := e.putLease(ctx, client, next)
-	if err != nil {
+	if err == nil {
+		e.won(stored, sentAt, intAt(spec, "leaseTransitions"))
+
+		return
+	}
+
+	if kube.IsConflict(err) == false {
 		e.logFailure("renew the lease again", err)
 
 		return
 	}
 
-	e.won(stored, sentAt, intAt(spec, "leaseTransitions"))
+	e.rereadAfterConflict(ctx, client, true, "read the lease after the renewal conflicted again")
+}
+
+// rereadAfterConflict reads the Lease after a write lost its compare-and-swap, notes it, and reports it together
+// with whether this agent is still its holder. A leading agent (renewing) that finds the Lease missing or held by
+// another agent stops leading at once; an agent that was only trying to take the Lease has nothing to give up.
+func (e *Elector) rereadAfterConflict(ctx context.Context, client *kube.Client, renewing bool, what string) (map[string]any, bool) {
+	lease, err := e.readLease(ctx, client)
+	if err != nil {
+		if kube.IsNotFound(err) && e.loseHolding("the lease no longer exists") {
+			return nil, false
+		}
+
+		e.logFailure(what, err)
+
+		return nil, false
+	}
+
+	e.observe(lease)
+
+	if stringAt(lease, "spec", "holderIdentity") != e.identity {
+		if renewing {
+			e.loseHolding("another agent took the lease")
+		}
+
+		return lease, false
+	}
+
+	return lease, true
 }
 
 // won records a successful write: this agent holds the Lease, as of sentAt. The count and the epoch of the

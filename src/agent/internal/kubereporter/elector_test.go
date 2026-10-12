@@ -419,6 +419,85 @@ func TestElector_RenewConflictsTwice_KeepsLeadershipWithoutAThirdAttempt(t *test
 	}
 }
 
+// Intent: the retry of a renew can meet the same vanished Lease as the first attempt: the Lease is deleted after
+// the re-read found it still ours, so the retry carries the uid and resourceVersion of an object that is gone and
+// the API answers it with a Conflict. The next re-read finds the Lease missing, and the holder steps down at once
+// instead of leading on a Lease that no longer exists until the renew deadline passes.
+func TestElector_RenewRetryHitsADeletedLease_StepsDown(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	rig.advance(electionInterval)
+
+	rig.api.inject(conflictOnce(func(api *fakeAPI) {
+		mutateLeaseLocked(api, func(obj map[string]any) {
+			obj["metadata"].(map[string]any)["labels"].(map[string]any)["touched"] = "yes"
+		})
+	}))
+	rig.api.inject(fault{
+		method: http.MethodPut,
+		path:   leasePath,
+		onFire: func(api *fakeAPI) { api.deleteLocked(leasePath) },
+	})
+
+	putsBefore := rig.putCount()
+	a.tick()
+
+	a.requireNotLeader()
+
+	if a.lost != 1 {
+		t.Errorf("onLost ran %d times, want 1", a.lost)
+	}
+
+	if got := rig.putCount() - putsBefore; got != 2 {
+		t.Errorf("PUTs = %d, want 2 (the renew and its single retry)", got)
+	}
+
+	if got := a.elector.ReporterError(); got != "" {
+		t.Errorf("ReporterError = %q, want none for a Lease that was deleted", got)
+	}
+}
+
+// Intent: a retry that conflicts because another agent took the Lease in between is evidence of losing it, unlike
+// one that conflicts because the Lease was merely touched again: the re-read names the other holder, and this
+// agent stops leading at once without writing a third time.
+func TestElector_RenewRetryConflictsWhileAnotherAgentTakesTheLease_StepsDown(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	rig.advance(electionInterval)
+
+	rig.api.inject(conflictOnce(func(api *fakeAPI) {
+		mutateLeaseLocked(api, func(obj map[string]any) {
+			obj["metadata"].(map[string]any)["labels"].(map[string]any)["touched"] = "yes"
+		})
+	}))
+	rig.api.inject(conflictOnce(func(api *fakeAPI) {
+		mutateLeaseLocked(api, func(obj map[string]any) {
+			specOf(obj)["holderIdentity"] = "vord-bbbb"
+		})
+	}))
+
+	putsBefore := rig.putCount()
+	a.tick()
+
+	a.requireNotLeader()
+
+	if a.lost != 1 {
+		t.Errorf("onLost ran %d times, want 1", a.lost)
+	}
+
+	if got := rig.putCount() - putsBefore; got != 2 {
+		t.Errorf("PUTs = %d, want 2 (the renew and its single retry)", got)
+	}
+
+	if got := rig.holder(); got != "vord-bbbb" {
+		t.Errorf("holder = %q, want the other agent's claim left alone", got)
+	}
+}
+
 // Intent: a holder that reads the Lease and finds another agent named on it (for instance after a stall long
 // enough for a standby to take over) is no longer the holder. It stops leading at once and writes nothing, rather
 // than overwriting the new holder's claim.
