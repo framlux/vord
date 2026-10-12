@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"time"
@@ -40,12 +41,14 @@ func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 		return fail.result()
 	}
 
+	hadState := stateFileExists(r.dataDir)
+
 	instanceID, err := r.instanceID()
 	if err != nil {
-		return newFailure(reasonStateWriteFailed, err.Error(), err).result()
+		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 
-	run := &enrolRun{reporter: r, session: session, instanceID: instanceID}
+	run := &enrolRun{reporter: r, session: session, instanceID: instanceID, hadState: hadState}
 
 	if fail := run.execute(ctx); fail != nil {
 		if run.secretTouched {
@@ -58,6 +61,13 @@ func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 	r.stateChanged(ctx)
 
 	return commands.Result{Success: true, Message: messageEnrolled}
+}
+
+// stateFileExists reports whether the state file is there, usable or not.
+func stateFileExists(dataDir string) bool {
+	_, err := os.Stat(statePath(dataDir))
+
+	return err == nil
 }
 
 // instanceID returns the id this host enrolled with before, or makes a new one. A state file that cannot be used
@@ -76,17 +86,23 @@ func (r *Reporter) instanceID() (string, error) {
 }
 
 // enrolRun is the part of an enrol that starts with this host's Secret: what it has changed, so a failure can
-// undo exactly that.
+// undo exactly that and no more.
 type enrolRun struct {
 	reporter   *Reporter
 	session    *adminSession
 	instanceID string
 
-	// secretTouched is set once the run has deleted the old Secret or tried to create the new one.
+	// hadState is whether a state file existed before the run, which is what the server last heard about.
+	hadState bool
+	// secretTouched is set once the old Secret is confirmed gone (or there was none), from which point an earlier
+	// state file names a dead token and a new Secret may exist. Until then a failure changes nothing, and the
+	// state file, the only record of the instance id, must stay.
 	secretTouched bool
-	// secretCreated and secretUID identify the Secret this run created, which is the only one it may delete.
+	// secretCreated and secretUID identify the Secret this run created.
 	secretCreated bool
 	secretUID     string
+	// secretMaybeCreated is set when a create failed in a way that may still have written the Secret.
+	secretMaybeCreated bool
 }
 
 // execute runs steps 4 to 7: the Secret, the wait for its token, the shared objects again, the state file and
@@ -115,14 +131,16 @@ func (run *enrolRun) execute(ctx context.Context) *failure {
 	}
 
 	if err := SaveState(run.reporter.dataDir, state); err != nil {
-		return newFailure(reasonStateWriteFailed, err.Error(), err)
+		return newFailure(reasonStateWriteFailed, "", err)
 	}
 
 	return run.reporter.verify(ctx, state)
 }
 
 // replaceSecret deletes this host's old token Secret, when it has one that is ours, and creates a fresh one, so
-// a re-enrol always mints a new token. An unlabelled Secret of that name is never touched.
+// a re-enrol always mints a new token. An unlabelled Secret of that name is never touched. The run only counts
+// as having touched the Secret once the old one is confirmed gone: if its delete fails the old token may be
+// live, and nothing may be undone.
 func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 	client := run.session.client
 	secret := secretPath(run.instanceID)
@@ -134,8 +152,6 @@ func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 		if isManaged(existing) == false {
 			return run.session.classify(&conflictError{kind: "Secret", name: path.Base(secret)})
 		}
-
-		run.secretTouched = true
 
 		outcome, err := deleteManaged(ctx, client, secret)
 		if err != nil {
@@ -159,6 +175,8 @@ func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 			return run.session.classify(&conflictError{kind: "Secret", name: path.Base(secret)})
 		}
 
+		run.secretMaybeCreated = mayHaveCreated(err)
+
 		return run.session.classify(err)
 	}
 
@@ -166,6 +184,18 @@ func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 	run.secretUID = stringAt(created, "metadata", "uid")
 
 	return nil
+}
+
+// mayHaveCreated reports whether a create that returned err may nevertheless have created the object: the
+// request can reach the server before a connection fails, and a server can fail after it has written. Only an
+// answer below 500 says for certain that nothing was written.
+func mayHaveCreated(err error) bool {
+	var apiError *kube.APIError
+	if errors.As(err, &apiError) {
+		return apiError.Code >= http.StatusInternalServerError
+	}
+
+	return true
 }
 
 // awaitToken waits for the cluster to fill in the Secret's token and CA, and returns them decoded.
@@ -191,7 +221,7 @@ func (run *enrolRun) awaitToken(ctx context.Context) (string, string, *failure) 
 	case err == nil:
 		return token, caPEM, nil
 	case errors.Is(err, errPollExpired) || kube.IsNotFound(err):
-		return "", "", newFailure(reasonTokenNotPopulated, "the cluster did not fill in the service account token", err)
+		return "", "", newFailure(reasonTokenNotPopulated, "", err)
 	}
 
 	return "", "", run.session.classify(err)
@@ -215,22 +245,55 @@ func decodeSecretField(obj map[string]any, key string) string {
 	return string(decoded)
 }
 
-// rollback removes the Secret this run created and the state file, on a context of its own so that a cancelled
-// command still cleans up. It never touches a shared object, nor a Secret it did not create.
+// rollback removes the Secret this run created, or may have created, and then the state file, on a context of
+// its own so that a cancelled command still cleans up. It never touches a shared object, nor a Secret this run
+// did not create.
+//
+// When the Secret's fate is unknown because deleting it failed, the state file stays: it is the only record of
+// the instance id, so a later unenrol or re-enrol can still find and revoke the Secret. The hook runs when the
+// state file's presence ended up different from what it was before the run.
 func (run *enrolRun) rollback(ctx context.Context) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 
-	if run.secretCreated {
-		err := run.session.client.Do(cleanup, http.MethodDelete, secretPath(run.instanceID), nil, deleteOptions(run.secretUID), nil)
+	if run.removeOwnSecret(cleanup) {
+		if err := DeleteState(run.reporter.dataDir); err != nil {
+			slog.Warn("could not remove the reporter state file while rolling back an enrol", "error", err)
+		}
+	} else {
+		slog.Warn("the reporter token Secret could not be removed, keeping the state file so that it can still be unenrolled")
+	}
+
+	if stateFileExists(run.reporter.dataDir) != run.hadState {
+		run.reporter.stateChanged(ctx)
+	}
+}
+
+// removeOwnSecret deletes the Secret this run created, by the uid it was given, or, when a create failed
+// ambiguously, whichever labelled Secret has this host's name. It reports false when the Secret may still exist.
+func (run *enrolRun) removeOwnSecret(ctx context.Context) bool {
+	client := run.session.client
+	secret := secretPath(run.instanceID)
+
+	switch {
+	case run.secretCreated:
+		err := client.Do(ctx, http.MethodDelete, secret, nil, deleteOptions(run.secretUID), nil)
+
+		// A missing Secret is gone, and one that no longer has our uid is not ours to delete.
 		if (err != nil) && (kube.IsNotFound(err) == false) && (kube.IsConflict(err) == false) {
 			slog.Warn("could not remove the reporter token Secret while rolling back an enrol", "error", err)
+
+			return false
+		}
+	case run.secretMaybeCreated:
+		if _, err := deleteManaged(ctx, client, secret); err != nil {
+			slog.Warn("could not remove the reporter token Secret while rolling back an enrol", "error", err)
+
+			return false
 		}
 	}
 
-	if err := DeleteState(run.reporter.dataDir); err != nil {
-		slog.Warn("could not remove the reporter state file while rolling back an enrol", "error", err)
-	}
+	return true
 }
 
 // verify proves the new token works by listing one node with it. An apiserver behind a load balancer can lag a
@@ -243,7 +306,7 @@ func (r *Reporter) verify(ctx context.Context, state State) *failure {
 		Token:         state.Token,
 	})
 	if err != nil {
-		return newFailure(reasonTokenNotPopulated, "the service account token or CA is not usable: "+err.Error(), err)
+		return newFailure(reasonTokenNotPopulated, "", err)
 	}
 
 	server := redactedServer(state.Server)
@@ -281,9 +344,9 @@ func (r *Reporter) verify(ctx context.Context, state State) *failure {
 func classifyReporterError(err error, server string) *failure {
 	switch {
 	case kube.IsAuthRejected(err):
-		return newFailure(reasonCredentialsRejected, "the cluster refused the new service account token: "+err.Error(), err)
+		return newFailure(reasonCredentialsRejected, "", err)
 	case kube.IsTLSVerify(err):
-		return newFailure(reasonTLSCAChanged, "the cluster certificate is not signed by the CA in the token Secret", err)
+		return newFailure(reasonTLSCAChanged, "", err)
 	}
 
 	return newFailure(reasonAPIUnreachable, unreachableDetail(server, err), err)
@@ -305,7 +368,8 @@ func (r *Reporter) ensureShared(ctx context.Context, session *adminSession) *fai
 		}
 
 		if err := r.waitNamespaceGone(ctx, session.client, deadline); err != nil {
-			if errors.Is(err, errPollExpired) {
+			// A command that runs out of time while waiting was still waiting on a terminating namespace.
+			if errors.Is(err, errPollExpired) || (ctx.Err() != nil) {
 				return session.classify(errNamespaceTerminating)
 			}
 
@@ -436,10 +500,22 @@ func reconcileRoles(ctx context.Context, client *kube.Client, lease map[string]a
 }
 
 // replaceRules sets the rules of a labelled role with a compare-and-swap, reading it again after each Conflict.
+// Before every attempt it reads the Lease's role version again: the version that decided to update may be stale
+// by now, and a Lease that has reached the compiled version, or passed it, means another agent installed
+// roles that must not be overwritten, so the update ends without writing.
 func replaceRules(ctx context.Context, client *kube.Client, kind string, objectPath string, rules []map[string]any) error {
 	var last error
 
 	for attempt := 0; attempt < updateAttempts; attempt++ {
+		lease, err := client.GetRaw(ctx, leasePath)
+		if err != nil {
+			return err
+		}
+
+		if roleVersionOf(lease) >= CompiledRoleVersion {
+			return nil
+		}
+
 		obj, err := client.GetRaw(ctx, objectPath)
 		if err != nil {
 			return err

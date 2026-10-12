@@ -7,6 +7,8 @@ package kubereporter
 import (
 	"context"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -193,23 +195,69 @@ func TestUnenrol_ApiUnreachable_KeepsFile(t *testing.T) {
 	}
 }
 
-// Intent: An unreadable kubeconfig is the same as no admin credential: the file goes and the Secret is left for
-// uninstall.
-func TestUnenrol_UnusableKubeconfig_TreatedAsNoAdminCredential(t *testing.T) {
-	h := newHarness(t)
-	h.enrol()
-
-	h.facts.AdminKubeconfigPath = h.kubeconfig + ".missing"
-
-	result := h.reporter.Unenrol(context.Background())
-
-	requireSuccess(t, result)
-
-	if result.Message != "secret_left_for_uninstall" {
-		t.Errorf("message = %q", result.Message)
+// Intent: A credential that is present but unusable is not an absent one. The command cannot tell whether the
+// Secret is gone, so it fails with a readable reason, keeps the state file, and has not stopped the runtime or
+// touched the cluster.
+func TestUnenrol_UnusableKubeconfig_FailsAndKeepsState(t *testing.T) {
+	cases := map[string]func(h *harness){
+		"unreadable": func(h *harness) { h.facts.AdminKubeconfigPath = h.kubeconfig + ".missing" },
+		"exec auth": func(h *harness) {
+			config := "apiVersion: v1\nkind: Config\ncurrent-context: c\nclusters:\n- name: t\n  cluster: {server: " + h.api.url() +
+				", certificate-authority-data: Zm9v}\nusers:\n- name: a\n  user:\n    exec: {command: aws}\n" +
+				"contexts:\n- name: c\n  context: {cluster: t, user: a}\n"
+			if err := os.WriteFile(h.kubeconfig, []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"malformed": func(h *harness) {
+			if err := os.WriteFile(h.kubeconfig, []byte("not: [valid"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
 
-	if h.hasState() {
-		t.Error("the state file was not deleted")
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.enrol()
+
+			own := h.secretPath()
+			arrange(h)
+
+			before := len(h.api.requestLog())
+			state := h.state()
+
+			result := h.reporter.Unenrol(context.Background())
+
+			requireFailure(t, result, reasonNoAdminCredential)
+
+			if strings.Contains(result.Message, ":") == false {
+				t.Errorf("message %q gives no reason", result.Message)
+			}
+
+			if h.hasState() == false {
+				t.Fatal("the state file was removed although the Secret could not be")
+			}
+
+			if h.state() != state {
+				t.Error("the state file changed")
+			}
+
+			if h.api.has(own) == false {
+				t.Error("the Secret was deleted")
+			}
+
+			if got := len(h.api.requestLog()); got != before {
+				t.Errorf("made %d API requests", got-before)
+			}
+
+			if h.releaser.calls != 0 {
+				t.Error("the runtime was stopped by a command that changed nothing")
+			}
+
+			if h.changed != 1 {
+				t.Errorf("state-changed hook ran %d times, want only the enrol's", h.changed)
+			}
+		})
 	}
 }

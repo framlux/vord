@@ -95,9 +95,9 @@ func NewHandler(deps HandlerDeps) *Handler {
 	h.executors[CommandKillSession] = &KillSessionExecutor{}
 	h.executors[CommandCheckUpdate] = &CheckUpdateExecutor{}
 	h.executors[CommandInstallUpdate] = &InstallUpdateExecutor{}
-	h.executors[CommandK8sReporterEnrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterEnrolTimeout, KubeReporter.Enrol)
-	h.executors[CommandK8sReporterUnenrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUnenrolTimeout, KubeReporter.Unenrol)
-	h.executors[CommandK8sReporterUninstall] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUninstallTimeout, KubeReporter.Uninstall)
+	h.executors[CommandK8sReporterEnrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterEnrolTimeout, runEnrol)
+	h.executors[CommandK8sReporterUnenrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUnenrolTimeout, runUnenrol)
+	h.executors[CommandK8sReporterUninstall] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUninstallTimeout, runUninstall)
 
 	return h
 }

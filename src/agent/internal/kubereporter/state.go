@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
 )
 
 // StateFileName is the file, in the agent data directory, that marks a host as an enrolled reporter candidate.
@@ -20,6 +22,16 @@ const StateFileName = "k8s-reporter.json"
 
 // maxStateFileBytes caps how much of the state file is read. A token, a CA and a URL are a few KB.
 const maxStateFileBytes = 1 << 20
+
+// tempFilePrefix and tempFileSuffix bracket the name of the temporary file a save writes before it renames.
+const (
+	tempFilePrefix = ".k8s-reporter-"
+	tempFileSuffix = ".tmp"
+)
+
+// staleTempFileAge is how old a temporary file must be before a sweep removes it. A save takes milliseconds, so
+// a file this old was left by a crash; younger ones may belong to a save in progress.
+const staleTempFileAge = 10 * time.Minute
 
 // instanceIDPattern is what an instance id looks like: 16 lowercase hex characters. It is checked on load
 // because the id becomes part of a Secret name and of a request path.
@@ -58,6 +70,8 @@ func statePath(dataDir string) string {
 // A file that cannot be read, is not valid or is missing a field answers an error that never quotes its
 // content, because the content is a credential.
 func LoadState(dataDir string) (State, bool, error) {
+	sweepStaleTempFiles(dataDir, time.Now())
+
 	file, err := os.Open(statePath(dataDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -100,12 +114,14 @@ func LoadState(dataDir string) (State, bool, error) {
 // SaveState writes the state file with mode 0600. It writes a temporary file in the same directory, syncs it
 // and renames it over the real one, so a reader sees the old file or the new one and never part of either.
 func SaveState(dataDir string, s State) error {
+	sweepStaleTempFiles(dataDir, time.Now())
+
 	data, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", StateFileName, err)
 	}
 
-	temp, err := os.CreateTemp(dataDir, ".k8s-reporter-*.tmp")
+	temp, err := os.CreateTemp(dataDir, tempFilePrefix+"*"+tempFileSuffix)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", StateFileName, err)
 	}
@@ -145,6 +161,33 @@ func SaveState(dataDir string, s State) error {
 	syncDirectory(dataDir)
 
 	return nil
+}
+
+// sweepStaleTempFiles removes the temporary files that a save which crashed left behind, since each holds a
+// token. It removes only files named like ours that are older than staleTempFileAge, and it is best effort: a
+// failure to read the directory or to remove a file is ignored.
+func sweepStaleTempFiles(dataDir string, now time.Time) {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+
+		if (entry.Type().IsRegular() == false) || (strings.HasPrefix(name, tempFilePrefix) == false) || (strings.HasSuffix(name, tempFileSuffix) == false) {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if now.Sub(info.ModTime()) > staleTempFileAge {
+			_ = os.Remove(filepath.Join(dataDir, name))
+		}
+	}
 }
 
 // syncDirectory flushes the directory entry of a rename. It is best effort: the file itself is already synced.

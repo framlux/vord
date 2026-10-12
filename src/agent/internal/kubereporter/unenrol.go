@@ -16,23 +16,27 @@ import (
 // host's own token Secret and removes the state file. It never touches a shared object or another candidate's
 // Secret, so unenrols on several hosts cannot race.
 //
-// The reporter token cannot delete Secrets, so deleting needs the admin kubeconfig. A host without a usable one
-// removes its file and leaves the Secret, and says so: uninstall revokes that token later.
+// The reporter token cannot delete Secrets, so deleting needs the admin kubeconfig. A host that has no admin
+// credential at all removes its file and leaves the Secret, and says so: uninstall revokes that token later. A
+// credential that is there but cannot be used is different, because the Secret may well still be live: the
+// command fails with the reason and keeps the file. Everything that can be checked without the cluster is
+// checked before the Lease is released, so a command that is going to fail changes nothing.
 func (r *Reporter) Unenrol(ctx context.Context) commands.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	r.releaser.ReleaseAndStop(ctx)
 
 	state, found, err := LoadState(r.dataDir)
 	if err != nil {
 		// The file cannot say which Secret is this host's, so there is nothing to delete by name.
 		slog.Warn("the reporter state file cannot be used, removing it without deleting a Secret", "error", err)
 
+		r.releaser.ReleaseAndStop(ctx)
+
 		return r.removeStateOnly(ctx)
 	}
 
 	if found == false {
+		r.releaser.ReleaseAndStop(ctx)
 		r.stateChanged(ctx)
 
 		return commands.Result{Success: true, Message: messageNotEnrolled}
@@ -40,15 +44,17 @@ func (r *Reporter) Unenrol(ctx context.Context) commands.Result {
 
 	facts, isNode := r.facts(ctx)
 	if (isNode == false) || (facts.AdminCredentialPresent == false) || (facts.AdminKubeconfigPath == "") {
+		r.releaser.ReleaseAndStop(ctx)
+
 		return r.removeStateOnly(ctx)
 	}
 
 	session, fail := r.adminFromFacts(facts)
 	if fail != nil {
-		slog.Info("the admin kubeconfig cannot be used, leaving the token Secret for uninstall", "reason", fail.detail)
-
-		return r.removeStateOnly(ctx)
+		return fail.result()
 	}
+
+	r.releaser.ReleaseAndStop(ctx)
 
 	secret := secretPath(state.InstanceID)
 
@@ -62,7 +68,7 @@ func (r *Reporter) Unenrol(ctx context.Context) commands.Result {
 	}
 
 	if err := DeleteState(r.dataDir); err != nil {
-		return newFailure(reasonStateWriteFailed, err.Error(), err).result()
+		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 
 	r.stateChanged(ctx)
@@ -73,7 +79,7 @@ func (r *Reporter) Unenrol(ctx context.Context) commands.Result {
 // removeStateOnly deletes the state file and reports that the token Secret was left in the cluster.
 func (r *Reporter) removeStateOnly(ctx context.Context) commands.Result {
 	if err := DeleteState(r.dataDir); err != nil {
-		return newFailure(reasonStateWriteFailed, err.Error(), err).result()
+		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 
 	r.stateChanged(ctx)

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -212,8 +213,27 @@ type failure struct {
 	err    error
 }
 
+// newFailure builds a failure. Only the reasons whose explanation the user needs carry one: what the explanation
+// says is built from the agent's own wording, the local kubeconfig problem or the server it tried, never from
+// text the cluster sent. Every other reason is sent as its bare code, whatever detail is passed, and the full
+// error stays in the agent's log.
 func newFailure(code string, detail string, err error) *failure {
+	if carriesDetail(code) == false {
+		detail = ""
+	}
+
 	return &failure{code: code, detail: sanitizeDetail(detail), err: err}
+}
+
+// carriesDetail reports whether a failure with this reason code sends an explanation to the server: the server
+// that could not be reached, why a credential cannot be used, and which object a name conflict is about.
+func carriesDetail(code string) bool {
+	switch code {
+	case reasonAPIUnreachable, reasonNoAdminCredential, reasonNameConflict:
+		return true
+	}
+
+	return false
 }
 
 // result turns the failure into a command result.
@@ -276,7 +296,7 @@ type adminSession struct {
 func (r *Reporter) openAdmin(ctx context.Context) (*adminSession, *failure) {
 	facts, isNode := r.facts(ctx)
 	if (isNode == false) || (facts.ControlPlane == false) {
-		return nil, newFailure(reasonNotControlPlane, "this host is not a Kubernetes control plane node", nil)
+		return nil, newFailure(reasonNotControlPlane, "", nil)
 	}
 
 	return r.adminFromFacts(facts)
@@ -314,17 +334,38 @@ func (s *adminSession) classify(err error) *failure {
 	case errors.As(err, &conflict):
 		return newFailure(reasonNameConflict, conflict.Error(), err)
 	case errors.Is(err, errNamespaceTerminating) || kube.IsNamespaceTerminating(err):
-		return newFailure(reasonNamespaceTerminating, "the vord-system namespace is being deleted", err)
+		return newFailure(reasonNamespaceTerminating, "", err)
 	case kube.IsAuthRejected(err):
-		return newFailure(reasonRBACDenied, "the admin credential is not allowed to do this: "+err.Error(), err)
+		return newFailure(reasonRBACDenied, "", err)
 	}
 
 	return newFailure(reasonAPIUnreachable, unreachableDetail(s.server, err), err)
 }
 
-// unreachableDetail explains a failed call to the cluster, naming the server that was tried.
+// unreachableDetail explains a failed call to the cluster: the server that was tried and a coarse cause worked
+// out here. It never repeats what the cluster said.
 func unreachableDetail(server string, err error) string {
-	return fmt.Sprintf("cannot use the API server at %s: %v", server, err)
+	return fmt.Sprintf("cannot reach the API server at %s (%s)", server, describeUnreachable(err))
+}
+
+// describeUnreachable names the cause of a failed call in words of our own.
+func describeUnreachable(err error) string {
+	var apiError *kube.APIError
+
+	var netError net.Error
+
+	switch {
+	case errors.As(err, &apiError):
+		return fmt.Sprintf("it answered with status %d", apiError.Code)
+	case kube.IsTLSVerify(err):
+		return "its certificate could not be verified"
+	case errors.Is(err, context.Canceled):
+		return "the command was cancelled"
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netError) && netError.Timeout()):
+		return "the request timed out"
+	}
+
+	return "the connection failed"
 }
 
 // redactedServer returns server with any user information removed.

@@ -41,12 +41,15 @@ type fault struct {
 	// message is the Status message; causes are the reasons of details.causes.
 	message string
 	causes  []string
+	// skip is how many matching requests are served normally before the fault starts to fire.
+	skip int
 	// times is how many matching requests fail; -1 means every one.
 	times int
 	// raceCreate makes a matching POST store its object, as a concurrent creator would have done, and then
 	// answer AlreadyExists.
 	raceCreate bool
-	// onFire runs, with the API locked, when the fault fires.
+	// onFire runs, with the API locked, when the fault fires. A fault with no status and no raceCreate is a hook
+	// only: it runs onFire and the request is then served normally.
 	onFire func(*fakeAPI)
 }
 
@@ -68,6 +71,9 @@ type fakeAPI struct {
 
 	// issued maps a token the fake handed out to the Secret path it lives in. Deleting the Secret revokes it.
 	issued map[string]string
+
+	// everIssued is every token the fake has ever handed out, including those since revoked.
+	everIssued []string
 
 	// secretCAPEM, when set, is the ca.crt the fake puts into token Secrets instead of its own certificate.
 	secretCAPEM []byte
@@ -239,6 +245,14 @@ func (a *fakeAPI) issuedTokens() map[string]string {
 	return out
 }
 
+// allIssuedTokens returns every token ever handed out, including those since revoked.
+func (a *fakeAPI) allIssuedTokens() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return append([]string(nil), a.everIssued...)
+}
+
 // storeLocked saves obj, filling in the fields the API server owns.
 func (a *fakeAPI) storeLocked(path string, obj map[string]any) {
 	metadata, ok := obj["metadata"].(map[string]any)
@@ -325,12 +339,22 @@ func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if f.skip > 0 {
+			f.skip--
+
+			continue
+		}
+
 		if f.times > 0 {
 			f.times--
 		}
 
 		if f.onFire != nil {
 			f.onFire(a)
+		}
+
+		if (f.status == 0) && (f.raceCreate == false) {
+			continue
 		}
 
 		if f.raceCreate {
@@ -403,8 +427,8 @@ func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 		return
 	}
 
-	if strings.HasSuffix(path, "/secrets") {
-		a.listSecrets(r, path, reply)
+	if isCollectionPath(path) {
+		a.listCollection(r, path, reply)
 
 		return
 	}
@@ -412,15 +436,28 @@ func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 	fail(http.StatusNotFound, "NotFound", "the server could not find the requested resource")
 }
 
-// listSecrets answers a labelSelector list of the Secrets in a namespace.
-func (a *fakeAPI) listSecrets(r *http.Request, collection string, reply replyFunc) {
+// collectionNames are the last path segments the fake treats as listable collections.
+var collectionNames = map[string]bool{
+	"secrets": true, "configmaps": true, "serviceaccounts": true, "services": true, "persistentvolumeclaims": true,
+	"pods": true, "deployments": true, "daemonsets": true, "statefulsets": true, "jobs": true, "cronjobs": true,
+	"leases": true, "roles": true, "rolebindings": true, "ingresses": true, "networkpolicies": true,
+}
+
+// isCollectionPath reports whether path names a collection the fake lists.
+func isCollectionPath(path string) bool {
+	return collectionNames[path[strings.LastIndex(path, "/")+1:]]
+}
+
+// listCollection answers a list of the objects directly under a collection path, filtered by labelSelector. A
+// collection with no objects, or in a namespace that does not exist, lists empty, as the real API does.
+func (a *fakeAPI) listCollection(r *http.Request, collection string, reply replyFunc) {
 	selector := r.URL.Query().Get("labelSelector")
 	items := []any{}
 
 	var names []string
 
 	for path := range a.objects {
-		if strings.HasPrefix(path, collection+"/") {
+		if strings.HasPrefix(path, collection+"/") && (strings.Contains(strings.TrimPrefix(path, collection+"/"), "/") == false) {
 			names = append(names, path)
 		}
 	}
@@ -441,7 +478,7 @@ func (a *fakeAPI) listSecrets(r *http.Request, collection string, reply replyFun
 	}
 
 	reply(http.StatusOK, map[string]any{
-		"kind": "SecretList", "apiVersion": "v1", "metadata": map[string]any{"resourceVersion": "1"}, "items": items,
+		"kind": "List", "apiVersion": "v1", "metadata": map[string]any{"resourceVersion": "1"}, "items": items,
 	})
 }
 
@@ -469,6 +506,7 @@ func (a *fakeAPI) populateLocked(path string, obj map[string]any) {
 	a.nextTok++
 	token := fmt.Sprintf("reporter-token-%d-do-not-leak", a.nextTok)
 	a.issued[token] = path
+	a.everIssued = append(a.everIssued, token)
 	obj["data"] = map[string]any{
 		"token":     base64.StdEncoding.EncodeToString([]byte(token)),
 		"ca.crt":    base64.StdEncoding.EncodeToString(caPEM),

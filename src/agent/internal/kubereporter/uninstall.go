@@ -27,9 +27,10 @@ var objectNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])
 // Lease, the roles and bindings and the ServiceAccount, then the namespace, and finally this host's state file.
 //
 // Each object is deleted by its fixed name after its label has been checked, and the delete names the uid that
-// was checked. An object without the Vord label is left alone, the namespace above all: a namespace the agent
-// did not create is not the agent's to delete. If the API cannot be reached the command fails and keeps the
-// state file so that it can be run again.
+// was checked. An object without the Vord label is left alone. That includes the namespace, when the agent did
+// not create it, and when it still holds an object that is not the agent's: deleting a namespace deletes
+// everything in it, so such a namespace is kept and the command says so. If the API cannot be reached the
+// command fails and keeps the state file so that it can be run again.
 func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -48,6 +49,10 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 
 	var kept []string
 
+	// keptInNamespace is set when an object left in place lives inside the namespace, which deleting the
+	// namespace would destroy along with it.
+	keptInNamespace := false
+
 	for _, name := range names {
 		outcome, err := deleteManaged(ctx, session.client, secretsCollection+"/"+name)
 		if err != nil {
@@ -56,6 +61,7 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 
 		if outcome == outcomeUnmanaged {
 			kept = append(kept, "Secret "+name)
+			keptInNamespace = true
 		}
 	}
 
@@ -76,20 +82,24 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 
 		if outcome == outcomeUnmanaged {
 			kept = append(kept, removals[i].kind)
+
+			if strings.Contains(removals[i].path, "/namespaces/"+reporterNamespace+"/") {
+				keptInNamespace = true
+			}
 		}
 	}
 
-	outcome, err := deleteManaged(ctx, session.client, namespacePath)
+	namespaceKept, err := removeNamespace(ctx, session.client, keptInNamespace)
 	if err != nil {
 		return session.classify(err).result()
 	}
 
-	if outcome == outcomeUnmanaged {
+	if namespaceKept {
 		kept = append(kept, "Namespace")
 	}
 
 	if err := DeleteState(r.dataDir); err != nil {
-		return newFailure(reasonStateWriteFailed, err.Error(), err).result()
+		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 
 	r.stateChanged(ctx)
@@ -103,24 +113,13 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 	return commands.Result{Success: true, Message: messageUninstalled}
 }
 
-// secretList is the part of a Secret list that uninstall reads. Everything else, the token above all, is
-// dropped as the page is decoded.
-type secretList struct {
-	Items []struct {
-		Metadata struct {
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
-		} `json:"metadata"`
-	} `json:"items"`
-}
-
 // listTokenSecrets returns the names of the labelled Secrets in the namespace that are candidates' token
 // Secrets. A namespace that does not exist has none.
 func listTokenSecrets(ctx context.Context, client *kube.Client) ([]string, error) {
 	var names []string
 
 	err := client.List(ctx, secretsCollection, managedBySelector(), secretListPageSize, func(body []byte) error {
-		var page secretList
+		var page objectList
 		if err := json.Unmarshal(body, &page); err != nil {
 			return err
 		}
@@ -144,4 +143,114 @@ func listTokenSecrets(ctx context.Context, client *kube.Client) ([]string, error
 	}
 
 	return names, nil
+}
+
+// namespaceContents lists the namespaced collections that deleting the namespace would destroy.
+var namespaceContents = []struct{ kind, path string }{
+	{"ConfigMap", "/api/v1/namespaces/" + reporterNamespace + "/configmaps"},
+	{"Secret", secretsCollection},
+	{"ServiceAccount", serviceAccountsCollection},
+	{"Service", "/api/v1/namespaces/" + reporterNamespace + "/services"},
+	{"PersistentVolumeClaim", "/api/v1/namespaces/" + reporterNamespace + "/persistentvolumeclaims"},
+	{"Pod", "/api/v1/namespaces/" + reporterNamespace + "/pods"},
+	{"Deployment", "/apis/apps/v1/namespaces/" + reporterNamespace + "/deployments"},
+	{"DaemonSet", "/apis/apps/v1/namespaces/" + reporterNamespace + "/daemonsets"},
+	{"StatefulSet", "/apis/apps/v1/namespaces/" + reporterNamespace + "/statefulsets"},
+	{"Job", "/apis/batch/v1/namespaces/" + reporterNamespace + "/jobs"},
+	{"CronJob", "/apis/batch/v1/namespaces/" + reporterNamespace + "/cronjobs"},
+	{"Ingress", "/apis/networking.k8s.io/v1/namespaces/" + reporterNamespace + "/ingresses"},
+	{"NetworkPolicy", "/apis/networking.k8s.io/v1/namespaces/" + reporterNamespace + "/networkpolicies"},
+	{"Lease", leasesCollection},
+	{"Role", rolesCollection},
+	{"RoleBinding", roleBindingsCollection},
+}
+
+// objectList is the part of a list that uninstall reads: names and labels only, so the content of a Secret or
+// ConfigMap is dropped as each page is decoded.
+type objectList struct {
+	Items []struct {
+		Metadata struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
+// isPlatformObject reports whether the cluster itself puts this object in every namespace, which makes it
+// nobody's to protect.
+func isPlatformObject(kind string, name string) bool {
+	return ((kind == "ConfigMap") && (name == "kube-root-ca.crt")) || ((kind == "ServiceAccount") && (name == "default"))
+}
+
+// foreignObjects lists the objects in the namespace that do not carry the Vord label, apart from the ones the
+// cluster creates itself. A collection the cluster does not serve has none; any other failure to list one is an
+// error, because the namespace cannot then be shown to hold nothing of anyone else's.
+func foreignObjects(ctx context.Context, client *kube.Client) ([]string, error) {
+	var foreign []string
+
+	for _, collection := range namespaceContents {
+		var found []string
+
+		err := client.List(ctx, collection.path, nil, secretListPageSize, func(body []byte) error {
+			var page objectList
+			if err := json.Unmarshal(body, &page); err != nil {
+				return err
+			}
+
+			for _, item := range page.Items {
+				if (item.Metadata.Labels[managedByLabel] != managedByValue) && (isPlatformObject(collection.kind, item.Metadata.Name) == false) {
+					found = append(found, collection.kind+" "+item.Metadata.Name)
+				}
+			}
+
+			return nil
+		}, func() { found = nil })
+		if err != nil {
+			if kube.IsNotFound(err) {
+				continue
+			}
+
+			return nil, err
+		}
+
+		foreign = append(foreign, found...)
+	}
+
+	return foreign, nil
+}
+
+// removeNamespace deletes the namespace when it carries the Vord label and holds nothing that is not the
+// agent's, and reports whether it was kept. A namespace the agent did not create is kept, as is one that holds
+// an object without the label, which deleting it would destroy; the objects are logged by kind and name.
+func removeNamespace(ctx context.Context, client *kube.Client, keptInNamespace bool) (bool, error) {
+	namespace, err := client.GetRaw(ctx, namespacePath)
+	if err != nil {
+		if kube.IsNotFound(err) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	if isManaged(namespace) == false {
+		return true, nil
+	}
+
+	foreign, err := foreignObjects(ctx, client)
+	if err != nil {
+		return false, err
+	}
+
+	if (len(foreign) > 0) || keptInNamespace {
+		slog.Info("the namespace is kept because it holds objects that are not the agent's", "objects", strings.Join(foreign, ", "))
+
+		return true, nil
+	}
+
+	outcome, err := deleteManaged(ctx, client, namespacePath)
+	if err != nil {
+		return false, err
+	}
+
+	return outcome == outcomeUnmanaged, nil
 }

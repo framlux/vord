@@ -801,49 +801,372 @@ func TestEnrol_VerifyTLSFailure_IsTlsCaChanged(t *testing.T) {
 	}
 }
 
-// Intent: Neither the admin credential nor the reporter token or CA ever appears in a log line, a failure
-// message or an error returned to the command channel.
-func TestEnrol_NeverLogsOrReturnsCredentials(t *testing.T) {
+// Intent: If the host's old token Secret cannot be deleted during a re-enrol, nothing was changed: the old Secret
+// is still live, so the state file that names its instance stays, and no new Secret is created. Deleting the
+// file here would orphan a working token.
+func TestEnrol_ReEnrolCannotDeleteOldSecret_KeepsStateFileAndSecret(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	first := h.state()
+	path := secretPath(first.InstanceID)
+	posts := h.api.requestCount(http.MethodPost, secretsCollection)
+
+	h.api.inject(fault{method: http.MethodDelete, path: path, status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonAPIUnreachable)
+
+	if h.hasState() == false {
+		t.Fatal("the state file was deleted although the old Secret is still live")
+	}
+
+	if h.state() != first {
+		t.Error("the state file changed")
+	}
+
+	if h.api.has(path) == false {
+		t.Error("the old Secret is gone")
+	}
+
+	if got := h.api.requestCount(http.MethodPost, secretsCollection); got != posts {
+		t.Error("a new Secret was created although the old one could not be deleted")
+	}
+
+	if _, live := h.api.issuedTokens()[first.Token]; live == false {
+		t.Error("the old token should still be valid")
+	}
+
+	if h.changed != 1 {
+		t.Errorf("state-changed hook ran %d times, want only the first enrol's", h.changed)
+	}
+}
+
+// Intent: A Secret create that fails in a way that may still have created it (here a 500 after the write) is
+// cleaned up by name, so no live token is left behind.
+func TestEnrol_AmbiguousSecretCreate_RemovesTheSecret(t *testing.T) {
+	h := newHarness(t)
+
+	h.api.inject(fault{
+		method: http.MethodPost, path: secretsCollection, status: http.StatusInternalServerError, reason: "InternalError", message: "boom",
+		onFire: func(api *fakeAPI) {
+			api.storeLocked(secretPath(pinnedInstanceID), tokenSecretManifest(pinnedInstanceID))
+		},
+	})
+
+	h.pinInstance()
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonAPIUnreachable)
+
+	if h.api.has(secretPath(pinnedInstanceID)) {
+		t.Error("the Secret that the failed create may have written was left behind")
+	}
+}
+
+// Intent: A create that definitely did not happen (403) leaves nothing to delete, and the earlier state file,
+// whose Secret this run had already deleted, is removed.
+func TestEnrol_DefinitiveSecretCreateFailure_DeletesOnlyStaleState(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	first := h.state()
+	h.api.inject(fault{method: http.MethodPost, path: secretsCollection, status: http.StatusForbidden, reason: "Forbidden", message: "no", times: -1})
+
+	before := len(h.api.requestLog())
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonRBACDenied)
+
+	if h.hasState() {
+		t.Error("the stale state file, whose Secret was deleted, survived")
+	}
+
+	deletes := deletedPaths(h.api, before)
+	if len(deletes) != 1 || deletes[0] != secretPath(first.InstanceID) {
+		t.Errorf("DELETEs = %v, want only the old Secret, once", deletes)
+	}
+
+	if h.changed != 2 {
+		t.Errorf("state-changed hook ran %d times, want 2 (enrol, then the rollback that removed the state)", h.changed)
+	}
+}
+
+// Intent: A failed re-enrol that removes a state file that used to be valid tells the hook, because the server's
+// view of this host (reporter_enrolled) has just changed.
+func TestEnrol_ReEnrolFailure_RemovingPriorState_FiresStateChanged(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: "no", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonCredentialsRejected)
+
+	if h.hasState() {
+		t.Error("the state file survived")
+	}
+
+	if h.changed != 2 {
+		t.Errorf("state-changed hook ran %d times, want 2", h.changed)
+	}
+}
+
+// pinnedInstanceID is the instance id tests plant in a state file when they need to know the Secret's path
+// before the first enrol, such as to fault its deletion.
+const pinnedInstanceID = "0123456789abcdef"
+
+// pinInstance writes a usable state file for the pinned instance id, as an earlier enrol would have.
+func (h *harness) pinInstance() {
+	h.t.Helper()
+
+	state := State{InstanceID: pinnedInstanceID, Server: h.api.url(), CACert: string(h.api.caPEM), Token: "stale-token"}
+	if err := SaveState(h.dataDir, state); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// Intent: When the rollback cannot delete the Secret, its fate is unknown, so the state file, which is the only
+// record of the instance id, is kept and a later unenrol can still revoke the token.
+func TestEnrol_RollbackCannotDeleteSecret_KeepsStateFile(t *testing.T) {
+	h := newHarness(t)
+	h.pinInstance()
+
+	h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: "no", times: -1})
+	h.api.inject(fault{method: http.MethodDelete, path: secretPath(pinnedInstanceID), status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonCredentialsRejected)
+
+	if h.hasState() == false {
+		t.Fatal("the state file was deleted although the Secret may still be live")
+	}
+
+	if h.state().InstanceID != pinnedInstanceID {
+		t.Error("the state file no longer names the instance")
+	}
+
+	if h.api.has(secretPath(pinnedInstanceID)) == false {
+		t.Error("the Secret should still be there, since its delete failed")
+	}
+}
+
+// Intent: A newer role is never overwritten by an older agent that read the Lease a moment too early: before
+// each role update the Lease's role version is read again, and an annotation that has reached the compiled
+// version, or passed it, ends the reconcile with the roles untouched.
+func TestEnrol_RoleReconcileRace_NewerAnnotationAbortsUpdate(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	newer := []any{map[string]any{"apiGroups": []any{""}, "resources": []any{"secrets"}, "verbs": []any{"get"}}}
+
+	lease := h.api.get(leasePath)
+	lease["metadata"].(map[string]any)["annotations"] = map[string]any{roleVersionAnnotation: "0"}
+	h.api.seed(leasePath, lease)
+
+	// The first read of the Lease sees the outdated annotation. Before the next one, a newer agent installs its
+	// roles and records version 2.
+	h.api.inject(fault{
+		method: http.MethodGet, path: leasePath, skip: 1, times: 1,
+		onFire: func(api *fakeAPI) {
+			for _, path := range []string{clusterRolePath, rolePath} {
+				role := cloneObject(api.objects[path])
+				role["rules"] = newer
+				api.storeLocked(path, role)
+			}
+
+			current := cloneObject(api.objects[leasePath])
+			current["metadata"].(map[string]any)["annotations"] = map[string]any{roleVersionAnnotation: "2"}
+			api.storeLocked(leasePath, current)
+		},
+	})
+
+	h.enrol()
+
+	for _, path := range []string{clusterRolePath, rolePath} {
+		if h.api.requestCount(http.MethodPut, path) != 0 {
+			t.Errorf("%s was overwritten by an older agent", path)
+		}
+
+		rules, _ := json.Marshal(h.api.get(path)["rules"])
+		want, _ := json.Marshal(newer)
+
+		if string(rules) != string(want) {
+			t.Errorf("%s rules = %s, want the newer agent's %s", path, rules, want)
+		}
+	}
+
+	if got := stringAt(h.api.get(leasePath), "metadata", "annotations", roleVersionAnnotation); got != "2" {
+		t.Errorf("role-version = %q, want the newer agent's 2", got)
+	}
+}
+
+// Intent: A command context that ends while a terminating namespace is being waited on is still a terminating
+// namespace, not an unreachable API.
+func TestEnrol_CommandContextEndsDuringNamespaceWait_IsNamespaceTerminating(t *testing.T) {
+	h := newHarness(t)
+	h.api.seed(namespacePath, labelledNamespace(true))
+	h.api.markNamespaceTerminating(1 << 30)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sleeps := 0
+	h.clock.onSleep = func() {
+		sleeps++
+		if sleeps == 3 {
+			cancel()
+		}
+	}
+
+	requireFailure(t, h.reporter.Enrol(ctx), reasonNamespaceTerminating)
+
+	if sleeps < 3 {
+		t.Errorf("the wait ended after %d sleeps, before the context did", sleeps)
+	}
+}
+
+// Intent: Text a cluster supplies never reaches the server in a failure message. Permission failures and rejected
+// credentials send the bare reason code; an unreachable API sends the server it tried and a coarse cause, never
+// the cluster's own words.
+func TestFailures_CarryNoClusterText(t *testing.T) {
+	const marker = "CLUSTER-SUPPLIED-TEXT"
+
+	cases := []struct {
+		name    string
+		arrange func(h *harness)
+		code    string
+		bare    bool
+	}{
+		{"rbac denied", func(h *harness) {
+			h.api.inject(fault{method: http.MethodPost, path: namespacesCollection, status: http.StatusForbidden, reason: "Forbidden", message: marker, times: -1})
+		}, reasonRBACDenied, true},
+		{"credentials rejected", func(h *harness) {
+			h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: marker, times: -1})
+		}, reasonCredentialsRejected, true},
+		{"api unreachable", func(h *harness) {
+			h.api.inject(fault{method: http.MethodPost, path: namespacesCollection, status: http.StatusInternalServerError, reason: "InternalError", message: marker, times: -1})
+		}, reasonAPIUnreachable, false},
+		{"namespace terminating", func(h *harness) {
+			h.api.inject(fault{method: http.MethodPost, path: namespacesCollection, status: http.StatusForbidden, reason: "Forbidden", message: marker, causes: []string{"NamespaceTerminating"}, times: -1})
+		}, reasonNamespaceTerminating, true},
+		{"tls ca changed", func(h *harness) {
+			h.api.secretCAPEM = unrelatedCAPEM(h.t)
+		}, reasonTLSCAChanged, true},
+		{"token not populated", func(h *harness) {
+			h.api.populateAfter = -1
+		}, reasonTokenNotPopulated, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			tc.arrange(h)
+
+			result := h.reporter.Enrol(context.Background())
+
+			requireFailure(t, result, tc.code)
+
+			if strings.Contains(result.Message, marker) {
+				t.Errorf("cluster text reached the message: %q", result.Message)
+			}
+
+			if tc.bare && (result.Message != tc.code) {
+				t.Errorf("message = %q, want the bare code %q", result.Message, tc.code)
+			}
+
+			if tc.code == reasonAPIUnreachable && strings.Contains(result.Message, h.api.url()) == false {
+				t.Errorf("message %q does not name the server", result.Message)
+			}
+		})
+	}
+}
+
+// Intent: A name conflict names the object, which comes from the agent's own fixed names and never from the
+// cluster, so the user can see which object to deal with.
+func TestFailures_NameConflictNamesTheObject(t *testing.T) {
+	h := newHarness(t)
+	h.api.seed(clusterRolePath, map[string]any{"metadata": map[string]any{"name": "taken"}})
+
+	result := h.reporter.Enrol(context.Background())
+
+	requireFailure(t, result, reasonNameConflict)
+
+	if strings.Contains(result.Message, "ClusterRole vord-reporter") == false {
+		t.Errorf("message = %q", result.Message)
+	}
+}
+
+// Intent: No credential, on any path of any command, reaches a log line, a failure message or an error: not the
+// admin token, not any token the cluster ever issued (including those revoked by a rollback, which the cluster's
+// current token list no longer shows), and not a certificate.
+func TestCommands_NeverLogOrReturnCredentials(t *testing.T) {
 	logs := captureLogs(t)
 
-	scenarios := map[string]func(h *harness){
-		"success": func(h *harness) {},
-		"verify rejected": func(h *harness) {
+	scenarios := map[string]func(h *harness) []commandsResult{
+		"enrol succeeds": func(h *harness) []commandsResult { return []commandsResult{h.run("enrol")} },
+		"verify rejected": func(h *harness) []commandsResult {
 			h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: "Unauthorized", times: -1})
+
+			return []commandsResult{h.run("enrol")}
 		},
-		"role conflicts": func(h *harness) {
+		"verify tls failure": func(h *harness) []commandsResult {
+			h.api.secretCAPEM = unrelatedCAPEM(h.t)
+
+			return []commandsResult{h.run("enrol")}
+		},
+		"token never populated": func(h *harness) []commandsResult {
+			h.api.populateAfter = -1
+
+			return []commandsResult{h.run("enrol")}
+		},
+		"role create forbidden": func(h *harness) []commandsResult {
 			h.api.inject(fault{method: http.MethodPost, path: clusterRolesCollection, status: http.StatusForbidden, reason: "Forbidden", message: "denied", times: -1})
+
+			return []commandsResult{h.run("enrol")}
+		},
+		"rollback cannot delete": func(h *harness) []commandsResult {
+			h.pinInstance()
+			h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: "no", times: -1})
+			h.api.inject(fault{method: http.MethodDelete, path: secretPath(pinnedInstanceID), status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+			return []commandsResult{h.run("enrol")}
+		},
+		"re-enrol, unenrol, uninstall": func(h *harness) []commandsResult {
+			return []commandsResult{h.run("enrol"), h.run("enrol"), h.run("unenrol"), h.run("enrol"), h.run("uninstall")}
+		},
+		"uninstall unreachable": func(h *harness) []commandsResult {
+			first := h.run("enrol")
+			h.api.server.Close()
+
+			return []commandsResult{first, h.run("uninstall"), h.run("unenrol")}
 		},
 	}
 
-	for name, arrange := range scenarios {
+	for name, scenario := range scenarios {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)
-			arrange(h)
 
-			result := h.reporter.Enrol(context.Background())
-			text := result.Message
+			var texts []string
 
-			if result.Error != nil {
-				text += " " + result.Error.Error()
+			for _, result := range scenario(h) {
+				texts = append(texts, result.Message)
+
+				if result.Error != nil {
+					texts = append(texts, result.Error.Error())
+				}
 			}
 
-			tokens := []string{fakeAdminToken}
-			for token := range h.api.issuedTokens() {
-				tokens = append(tokens, token)
-			}
+			secrets := append([]string{fakeAdminToken}, h.api.allIssuedTokens()...)
 
 			if h.hasState() {
-				tokens = append(tokens, h.state().Token)
+				secrets = append(secrets, h.state().Token)
 			}
 
-			for _, secret := range tokens {
-				if strings.Contains(text, secret) || strings.Contains(logs.String(), secret) {
+			haystack := strings.Join(append(texts, logs.String()), "\n")
+
+			for _, secret := range secrets {
+				if strings.Contains(haystack, secret) {
 					t.Errorf("credential %q leaked into a result or a log", secret)
 				}
 			}
 
-			if strings.Contains(text, "BEGIN CERTIFICATE") || strings.Contains(logs.String(), "BEGIN CERTIFICATE") {
+			if strings.Contains(haystack, "BEGIN CERTIFICATE") {
 				t.Error("a certificate leaked into a result or a log")
 			}
 		})

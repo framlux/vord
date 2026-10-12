@@ -6,6 +6,7 @@ package kubereporter
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -45,5 +46,41 @@ func TestNew_DefaultsAreNoOps(t *testing.T) {
 	result := reporter.Unenrol(context.Background())
 	if result.Success == false || result.Message != messageNotEnrolled {
 		t.Errorf("unenrol of a host that was never enrolled = %+v", result)
+	}
+}
+
+// Intent: Only the reasons that need an explanation carry one. Whatever detail a caller passes, every other
+// reason is sent as its bare code, so cluster text cannot slip into a message by a new call site.
+func TestNewFailure_OnlySanctionedReasonsCarryDetail(t *testing.T) {
+	withDetail := map[string]bool{reasonAPIUnreachable: true, reasonNoAdminCredential: true, reasonNameConflict: true}
+
+	codes := []string{
+		reasonNoAdminCredential, reasonNotControlPlane, reasonAPIUnreachable, reasonRBACDenied, reasonNameConflict,
+		reasonNamespaceTerminating, reasonTokenNotPopulated, reasonCredentialsRejected, reasonTLSCAChanged, reasonStateWriteFailed,
+	}
+
+	for _, code := range codes {
+		message := newFailure(code, "some explanation", nil).result().Message
+
+		if withDetail[code] {
+			if message != code+": some explanation" {
+				t.Errorf("%s: message = %q, want the explanation kept", code, message)
+			}
+		} else if message != code {
+			t.Errorf("%s: message = %q, want the bare code", code, message)
+		}
+	}
+}
+
+// Intent: Explanations are one line of printable text, bounded in length.
+func TestNewFailure_DetailIsSanitisedAndBounded(t *testing.T) {
+	message := newFailure(reasonAPIUnreachable, "line one\nline two\x1b[31m"+strings.Repeat("x", 1000), nil).result().Message
+
+	if strings.ContainsAny(message, "\n\x1b") {
+		t.Errorf("message holds control characters: %q", message)
+	}
+
+	if len(message) > len(reasonAPIUnreachable)+2+maxDetailBytes+3 {
+		t.Errorf("message is %d bytes", len(message))
 	}
 }

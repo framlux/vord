@@ -36,8 +36,9 @@ func labelledNamespace(labelled bool) map[string]any {
 }
 
 // Intent: Uninstall revokes every candidate's token. Every labelled Secret named vord-reporter-token-* is
-// deleted, including those of hosts that are paused or gone, and a Secret without the label, or without the
-// prefix, is never touched.
+// deleted, including those of hosts that are paused or gone. A Secret without the label is never touched, and
+// because deleting the labelled namespace would destroy it, the namespace is left in place and the command says
+// something was left behind.
 func TestUninstall_DeletesEveryLabelledTokenSecret(t *testing.T) {
 	h := newHarness(t)
 	h.enrol()
@@ -51,8 +52,9 @@ func TestUninstall_DeletesEveryLabelledTokenSecret(t *testing.T) {
 	otherName := "/api/v1/namespaces/vord-system/secrets/something-else"
 	h.api.seed(otherName, map[string]any{"metadata": map[string]any{"name": "something-else", "labels": map[string]any{managedByLabel: managedByValue}}})
 
-	// Keep the namespace out of the teardown so the Secrets can be inspected afterwards.
-	h.api.seed(namespacePath, labelledNamespace(false))
+	if isManaged(h.api.get(namespacePath)) == false {
+		t.Fatal("the namespace must be the labelled one enrol created")
+	}
 
 	before := len(h.api.requestLog())
 
@@ -67,17 +69,130 @@ func TestUninstall_DeletesEveryLabelledTokenSecret(t *testing.T) {
 	}
 
 	if h.api.has(unlabelled) == false {
-		t.Error("an unlabelled Secret was deleted")
+		t.Error("an unlabelled Secret was destroyed")
 	}
 
-	if h.api.has(otherName) == false {
-		t.Error("a labelled Secret without the token prefix was deleted")
+	if h.api.has(namespacePath) == false {
+		t.Error("the namespace was deleted although it still held an unlabelled Secret")
+	}
+
+	if result.Message != messageUninstalledKeptUnmanaged {
+		t.Errorf("message = %q, want %q", result.Message, messageUninstalledKeptUnmanaged)
 	}
 
 	for _, path := range deletedPaths(h.api, before) {
-		if (path == unlabelled) || (path == otherName) {
+		if (path == unlabelled) || (path == otherName) || (path == namespacePath) {
 			t.Errorf("uninstall sent a DELETE for %s", path)
 		}
+	}
+
+	if h.hasState() {
+		t.Error("the state file was not deleted")
+	}
+}
+
+// Intent: Any other unlabelled object in the namespace is protected the same way, not only Secrets: an
+// unlabelled ConfigMap keeps the namespace.
+func TestUninstall_UnlabelledConfigMap_KeepsNamespace(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	configMap := "/api/v1/namespaces/vord-system/configmaps/theirs"
+	h.api.seed(configMap, map[string]any{"metadata": map[string]any{"name": "theirs"}, "data": map[string]any{"k": "v"}})
+
+	result := h.reporter.Uninstall(context.Background())
+
+	requireSuccess(t, result)
+
+	if h.api.has(configMap) == false {
+		t.Error("an unlabelled ConfigMap was destroyed")
+	}
+
+	if h.api.has(namespacePath) == false {
+		t.Error("the namespace was deleted although it still held an unlabelled ConfigMap")
+	}
+
+	if result.Message != messageUninstalledKeptUnmanaged {
+		t.Errorf("message = %q", result.Message)
+	}
+
+	for _, path := range sharedObjectPaths()[1:] {
+		if h.api.has(path) {
+			t.Errorf("%s survived uninstall", path)
+		}
+	}
+}
+
+// Intent: A namespaced shared object that carries our name but not our label is also protected: it keeps the
+// namespace, which would otherwise delete it.
+func TestUninstall_UnlabelledNamespacedSharedObject_KeepsNamespace(t *testing.T) {
+	for name, path := range map[string]string{"role": rolePath, "lease": leasePath, "serviceaccount": serviceAccountPath} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.enrol()
+
+			h.api.seed(path, map[string]any{"metadata": map[string]any{"name": "theirs"}})
+
+			result := h.reporter.Uninstall(context.Background())
+
+			requireSuccess(t, result)
+
+			if h.api.has(path) == false {
+				t.Error("the unlabelled object was destroyed")
+			}
+
+			if h.api.has(namespacePath) == false {
+				t.Error("the namespace was deleted although it still held an unlabelled object")
+			}
+
+			if result.Message != messageUninstalledKeptUnmanaged {
+				t.Errorf("message = %q", result.Message)
+			}
+		})
+	}
+}
+
+// Intent: The objects the cluster itself puts in every namespace are not the user's, so they do not keep the
+// namespace alive.
+func TestUninstall_PlatformObjectsDoNotBlockNamespaceDeletion(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.seed("/api/v1/namespaces/vord-system/configmaps/kube-root-ca.crt", map[string]any{"metadata": map[string]any{"name": "kube-root-ca.crt"}})
+	h.api.seed("/api/v1/namespaces/vord-system/serviceaccounts/default", map[string]any{"metadata": map[string]any{"name": "default"}})
+
+	result := h.reporter.Uninstall(context.Background())
+
+	requireSuccess(t, result)
+
+	if h.api.has(namespacePath) {
+		t.Error("the namespace survived although it held only labelled and platform objects")
+	}
+
+	if result.Message != "uninstalled" {
+		t.Errorf("message = %q", result.Message)
+	}
+}
+
+// Intent: When the namespace's contents cannot be listed, the command cannot tell whether deleting the
+// namespace is safe, so it fails and deletes nothing more, keeping the state file for a retry.
+func TestUninstall_CannotListNamespaceContents_FailsAndKeepsNamespace(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.inject(fault{
+		method: http.MethodGet, path: "/api/v1/namespaces/vord-system/configmaps", status: http.StatusForbidden,
+		reason: "Forbidden", message: "cannot list configmaps", times: -1,
+	})
+
+	requireFailure(t, h.reporter.Uninstall(context.Background()), reasonRBACDenied)
+
+	if h.api.has(namespacePath) == false {
+		t.Error("the namespace was deleted without knowing what it held")
+	}
+
+	if h.hasState() == false {
+		t.Error("the state file was deleted although uninstall failed")
 	}
 }
 

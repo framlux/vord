@@ -32,15 +32,21 @@ type KubeReporter interface {
 	Uninstall(ctx context.Context) Result
 }
 
+func runEnrol(ctx context.Context, reporter KubeReporter) Result { return reporter.Enrol(ctx) }
+
+func runUnenrol(ctx context.Context, reporter KubeReporter) Result { return reporter.Unenrol(ctx) }
+
+func runUninstall(ctx context.Context, reporter KubeReporter) Result { return reporter.Uninstall(ctx) }
+
 // kubeReporterExecutor runs one cluster reporter command. The three commands take no parameters, so a command
 // that carries any is rejected before it does anything.
 type kubeReporterExecutor struct {
 	reporter KubeReporter
 	timeout  time.Duration
-	run      func(reporter KubeReporter, ctx context.Context) Result
+	run      func(ctx context.Context, reporter KubeReporter) Result
 }
 
-func newKubeReporterExecutor(reporter KubeReporter, timeout time.Duration, run func(reporter KubeReporter, ctx context.Context) Result) *kubeReporterExecutor {
+func newKubeReporterExecutor(reporter KubeReporter, timeout time.Duration, run func(ctx context.Context, reporter KubeReporter) Result) *kubeReporterExecutor {
 	return &kubeReporterExecutor{reporter: reporter, timeout: timeout, run: run}
 }
 
@@ -62,5 +68,5 @@ func (e *kubeReporterExecutor) Execute(ctx context.Context, params map[string]st
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 
-	return e.run(e.reporter, ctx)
+	return e.run(ctx, e.reporter)
 }

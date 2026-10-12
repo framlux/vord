@@ -298,3 +298,24 @@ func unrelatedCAPEM(t *testing.T) []byte {
 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+// commandsResult is the result of a command, to keep scenario lists short.
+type commandsResult = commands.Result
+
+// run executes one of the three commands by name.
+func (h *harness) run(command string) commands.Result {
+	h.t.Helper()
+
+	switch command {
+	case "enrol":
+		return h.reporter.Enrol(context.Background())
+	case "unenrol":
+		return h.reporter.Unenrol(context.Background())
+	case "uninstall":
+		return h.reporter.Uninstall(context.Background())
+	}
+
+	h.t.Fatalf("unknown command %q", command)
+
+	return commands.Result{}
+}

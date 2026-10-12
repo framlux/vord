@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func sampleState() State {
@@ -220,4 +221,78 @@ func TestState_Formatting_RedactsSecrets(t *testing.T) {
 	if strings.Contains(fmt.Sprint(state), state.InstanceID) == false {
 		t.Error("the redacted form should still identify the instance")
 	}
+}
+
+// writeTemp creates a leftover temporary file, as a crashed save would, with the given modification time.
+func writeTemp(t *testing.T, dir string, name string, modified time.Time) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+
+	if err := os.WriteFile(path, []byte(`{"token":"leftover-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// Intent: A temporary file left by a save that crashed holds a token, so a later save or load removes it, but a
+// recent one, which may belong to a save in progress, and files that are not ours are left alone.
+func TestState_SweepsStaleTemporaryFiles(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+
+	dir := t.TempDir()
+	stale := writeTemp(t, dir, ".k8s-reporter-111.tmp", now.Add(-time.Hour))
+	boundary := writeTemp(t, dir, ".k8s-reporter-222.tmp", now.Add(-staleTempFileAge-time.Second))
+	recent := writeTemp(t, dir, ".k8s-reporter-333.tmp", now.Add(-time.Minute))
+	other := writeTemp(t, dir, "agent.db.tmp", now.Add(-time.Hour))
+
+	sweepStaleTempFiles(dir, now)
+
+	for _, path := range []string{stale, boundary} {
+		if _, err := os.Stat(path); os.IsNotExist(err) == false {
+			t.Errorf("%s survived the sweep", filepath.Base(path))
+		}
+	}
+
+	for _, path := range []string{recent, other} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+// Intent: The sweep runs from both entry points, so a host that only ever loads, or only ever saves, cleans up.
+func TestState_LoadAndSave_SweepLeftoverTemporaryFiles(t *testing.T) {
+	ancient := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("load", func(t *testing.T) {
+		dir := t.TempDir()
+		stale := writeTemp(t, dir, ".k8s-reporter-abc.tmp", ancient)
+
+		if _, _, err := LoadState(dir); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := os.Stat(stale); os.IsNotExist(err) == false {
+			t.Error("LoadState left a stale temporary file")
+		}
+	})
+
+	t.Run("save", func(t *testing.T) {
+		dir := t.TempDir()
+		stale := writeTemp(t, dir, ".k8s-reporter-abc.tmp", ancient)
+
+		if err := SaveState(dir, sampleState()); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := os.Stat(stale); os.IsNotExist(err) == false {
+			t.Error("SaveState left a stale temporary file")
+		}
+	})
 }
