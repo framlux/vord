@@ -46,7 +46,9 @@ public static class CommandParameters
 
     /// <summary>
     /// Reads command parameters from a parsed JSON value, with the same rules as <see cref="TryParse"/>
-    /// except that the value must be present: only an object of unique string values reads.
+    /// except that the value must be present: only an object of unique string values reads. A key or value
+    /// that parses as JSON but cannot be decoded into a string, such as a lone surrogate escape, is not a
+    /// string value, so it reads as a refusal instead of an exception.
     /// </summary>
     /// <param name="element">The JSON value to read.</param>
     /// <param name="parameters">The parameters keyed ordinally, or an empty map when the value does not read.</param>
@@ -56,15 +58,23 @@ public static class CommandParameters
 
         if (element.ValueKind == JsonValueKind.Object)
         {
-            foreach (JsonProperty property in element.EnumerateObject())
+            try
             {
-                string? value = ReadString(property.Value);
-                if ((value is null) || (result.TryAdd(property.Name, value) == false))
+                foreach (JsonProperty property in element.EnumerateObject())
                 {
-                    parameters = [];
+                    if ((property.Value.ValueKind != JsonValueKind.String) || (result.TryAdd(property.Name, property.Value.GetString()!) == false))
+                    {
+                        parameters = [];
 
-                    return false;
+                        return false;
+                    }
                 }
+            }
+            catch (InvalidOperationException)
+            {
+                parameters = [];
+
+                return false;
             }
 
             parameters = result;
@@ -75,26 +85,5 @@ public static class CommandParameters
         parameters = [];
 
         return false;
-    }
-
-    /// <summary>
-    /// Reads a JSON string value, or null for any other kind and for text that cannot be decoded, such as
-    /// a lone surrogate escape.
-    /// </summary>
-    private static string? ReadString(JsonElement element)
-    {
-        if (element.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        try
-        {
-            return element.GetString();
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
     }
 }

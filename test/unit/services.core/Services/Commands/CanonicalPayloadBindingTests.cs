@@ -151,6 +151,17 @@ public sealed class CanonicalPayloadBindingTests
     }
 
     [Test]
+    [Arguments("""{"\ud800":"x"}""")]
+    [Arguments("""{"a":"\ud800"}""")]
+    public async Task Matches_LoneSurrogateEscapeInSignedOrRequestedParams_IsFalseWithoutThrowing(string paramsJson)
+    {
+        string payload = TestCanonicalPayload.Build("kill_process", paramsJson);
+
+        await Assert.That(CanonicalPayloadBinding.Matches(payload, "kill_process", null)).IsFalse();
+        await Assert.That(CanonicalPayloadBinding.Matches(TestCanonicalPayload.Build("kill_process"), "kill_process", paramsJson)).IsFalse();
+    }
+
+    [Test]
     public async Task Matches_OtherKeysAreLeftToTheAgent()
     {
         // Intent: the server compares only the two fields that decide whether a command may be sent. The id,

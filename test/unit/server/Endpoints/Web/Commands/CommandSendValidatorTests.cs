@@ -252,6 +252,8 @@ public sealed class CommandSendValidatorTests
     [Arguments("{")]
     [Arguments("not json")]
     [Arguments("""{"a":"b"}{"c":"d"}""")]
+    [Arguments("""{"\ud800":"x"}""")]
+    [Arguments("""{"a":"\ud800"}""")]
     public async Task ParamsThatAreNotAnObjectOfStrings_FailValidationWithTheParamsMessage(string commandParams)
     {
         // Intent: the agent refuses a signed params value that is not a string, so the server refuses it
@@ -284,4 +286,3 @@ public sealed class CommandSendValidatorTests
         await Assert.That(result.Errors.Single().ErrorMessage).IsEqualTo("Params must be a JSON object of string values");
     }
 }
-

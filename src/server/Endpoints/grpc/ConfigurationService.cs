@@ -231,8 +231,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// Copies a stored command's parameters onto the command sent to the agent. The endpoint only stores an
     /// object of string values, but a row written any other way must not stop the machine's other pending
     /// commands being delivered, so nothing here throws. A value that is not a string goes out as its raw
-    /// JSON text, which the agent's binding check then rejects because it differs from what was signed, and
-    /// parameters that are not a JSON object go out empty. Either case logs a warning naming the command.
+    /// JSON text, which the agent's binding check then rejects because it differs from what was signed. A
+    /// param whose name cannot be decoded into a string is left out, since a protobuf map key must be one.
+    /// Parameters that are not a JSON object go out empty. Each case logs a warning naming the command.
     /// </summary>
     private void CopyParams(RemoteCommand stored, AgentCommand agentCommand)
     {
@@ -251,29 +252,72 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
                 return;
             }
 
-            bool allStrings = true;
+            bool allReadable = true;
             foreach (JsonProperty prop in paramsDoc.RootElement.EnumerateObject())
             {
-                if (prop.Value.ValueKind == JsonValueKind.String)
+                string? name = ReadParamName(prop);
+                if (name is null)
                 {
-                    agentCommand.Params[prop.Name] = prop.Value.GetString() ?? string.Empty;
+                    allReadable = false;
+
+                    continue;
                 }
-                else
+
+                string? text = ReadParamString(prop.Value);
+                if (text is null)
                 {
-                    agentCommand.Params[prop.Name] = prop.Value.GetRawText();
-                    allStrings = false;
+                    text = prop.Value.GetRawText();
+                    allReadable = false;
                 }
+
+                agentCommand.Params[name] = text;
             }
 
-            if (allStrings == false)
+            if (allReadable == false)
             {
-                _logger.LogWarning("Stored params of command {CommandId} have a value that is not a string; delivering its raw text", stored.CommandId);
+                _logger.LogWarning("Stored params of command {CommandId} have a name or value that is not a readable string; delivering raw text for values and leaving out unreadable names", stored.CommandId);
             }
         }
         catch (JsonException ex)
         {
             agentCommand.Params.Clear();
             _logger.LogWarning(ex, "Stored params of command {CommandId} are not valid JSON; delivering it with no params", stored.CommandId);
+        }
+    }
+
+    /// <summary>
+    /// Reads a param's name, or null when it cannot be decoded into a string.
+    /// </summary>
+    private static string? ReadParamName(JsonProperty property)
+    {
+        try
+        {
+            return property.Name;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads a param's value when it is a string that can be decoded, and null for any other kind of value
+    /// and for text that cannot be decoded.
+    /// </summary>
+    private static string? ReadParamString(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 

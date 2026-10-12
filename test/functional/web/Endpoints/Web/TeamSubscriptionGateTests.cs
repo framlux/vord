@@ -327,14 +327,19 @@ public sealed class TeamSubscriptionGateTests
     }
 
     [Test]
-    [Arguments("reboot")]
-    [Arguments("k8s_reporter_enrol")]
-    public async Task CommandSend_TeamTenant_PassesTheGateForEveryCommand(string commandType)
+    [Arguments(SubscriptionTier.Team, "reboot")]
+    [Arguments(SubscriptionTier.Team, "k8s_reporter_enrol")]
+    [Arguments(SubscriptionTier.Enterprise, "reboot")]
+    [Arguments(SubscriptionTier.Enterprise, "kill_process")]
+    [Arguments(SubscriptionTier.Enterprise, "k8s_reporter_enrol")]
+    public async Task CommandSend_TierWithTeamFeatures_PassesTheGateForEveryCommand(SubscriptionTier tier, string commandType)
     {
-        // Intent: without this the suite would still pass for a check that refused every tenant.
+        // Intent: without this the suite would still pass for a check that refused every tenant. Enterprise
+        // has every Team feature without being the Team tier, so it also catches a check written as a
+        // comparison with the Team tier instead of the Team-features predicate.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Team);
+        (int tenantId, int userId) = await SeedTenant(db, tier);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand(commandType));

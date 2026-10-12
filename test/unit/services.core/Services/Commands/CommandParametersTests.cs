@@ -82,6 +82,22 @@ public sealed class CommandParametersTests
     }
 
     [Test]
+    [Arguments("""{"\ud800":"x"}""")]
+    [Arguments("""{"\udc00":"x"}""")]
+    [Arguments("""{"ok":"1","\ud800":"x"}""")]
+    [Arguments("""{"a":"\ud800"}""")]
+    [Arguments("""{"a":"x\udc00y"}""")]
+    public async Task TryParse_LoneSurrogateEscapeInAKeyOrAValue_IsRefusedWithoutThrowing(string json)
+    {
+        // Intent: such text parses as JSON but cannot be decoded into a string, so it must read as "not an
+        // object of strings" instead of escaping as an exception that the caller would turn into a 500.
+        bool parsed = CommandParameters.TryParse(json, out Dictionary<string, string> parameters);
+
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(parameters.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task TryParse_NestingBeyondTheParsersDepth_IsRefusedWithoutThrowing()
     {
         string json = new string('[', 200) + new string(']', 200);

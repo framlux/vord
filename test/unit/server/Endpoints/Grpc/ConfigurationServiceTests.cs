@@ -669,6 +669,60 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task GetPendingCommands_ParamKeyWithALoneSurrogateEscape_DoesNotThrowAndTheOtherParamsAndCommandsAreDelivered()
+    {
+        // Intent: a name that cannot be decoded into a string cannot be sent to the agent, so the param is
+        // left out, but it must not cost the machine its other commands or the readable params beside it.
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        commands.GetPendingCommandsForMachineAsync(42, 1, Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.RemoteCommand>
+            {
+                BuildPendingCommand(42, "cmd-bad", """{"\ud800":"x","ok":"1"}"""),
+                BuildPendingCommand(42, "cmd-good", """{"delay_minutes":"5"}"""),
+            });
+        FakeLogger<ConfigurationService> logger = new();
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, logger: logger);
+
+        GetPendingCommandsResponse response = await service.GetPendingCommands(
+            new GetPendingCommandsRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Commands.Count).IsEqualTo(2);
+        await Assert.That(response.Commands[0].Id).IsEqualTo("cmd-bad");
+        await Assert.That(response.Commands[0].Params.Count).IsEqualTo(1);
+        await Assert.That(response.Commands[0].Params["ok"]).IsEqualTo("1");
+        await Assert.That(response.Commands[1].Params["delay_minutes"]).IsEqualTo("5");
+        await commands.Received(1).MarkCommandsDeliveredAsync(
+            Arg.Is<IEnumerable<string>>(ids => ids.SequenceEqual(new[] { "cmd-bad", "cmd-good" })),
+            Arg.Any<CancellationToken>());
+        IReadOnlyList<FakeLogRecord> warnings = logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Warning).ToList();
+        await Assert.That(warnings.Count).IsEqualTo(1);
+        await Assert.That(warnings[0].Message).Contains("cmd-bad");
+    }
+
+    [Test]
+    public async Task GetPendingCommands_ParamValueWithALoneSurrogateEscape_DoesNotThrowAndIsDeliveredAsItsRawJsonText()
+    {
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        commands.GetPendingCommandsForMachineAsync(42, 1, Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.RemoteCommand>
+            {
+                BuildPendingCommand(42, "cmd-bad", """{"a":"\ud800","ok":"1"}"""),
+                BuildPendingCommand(42, "cmd-good", """{"delay_minutes":"5"}"""),
+            });
+        FakeLogger<ConfigurationService> logger = new();
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, logger: logger);
+
+        GetPendingCommandsResponse response = await service.GetPendingCommands(
+            new GetPendingCommandsRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Commands.Count).IsEqualTo(2);
+        await Assert.That(response.Commands[0].Params["a"]).IsEqualTo("\"\\ud800\"");
+        await Assert.That(response.Commands[0].Params["ok"]).IsEqualTo("1");
+        await Assert.That(response.Commands[1].Params["delay_minutes"]).IsEqualTo("5");
+        await Assert.That(logger.Collector.GetSnapshot().Count(r => r.Level == LogLevel.Warning)).IsEqualTo(1);
+    }
+
+    [Test]
     [Arguments("""{"pid":42}""")]
     [Arguments("[]")]
     [Arguments("not json")]
