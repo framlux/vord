@@ -272,6 +272,87 @@ func TestNodeNameFromCertRejectsFileWithOnlyKeyBlock(t *testing.T) {
 	}
 }
 
+// Intent: only the first certificate names the node: a file whose first certificate is the admin
+// identity is rejected even when a later certificate is a node identity, so the collector never
+// picks a name from a certificate that is not the file's client certificate.
+func TestNodeNameFromCertUsesFirstCertificateOnly(t *testing.T) {
+	admin := newTestCert(t, "kubernetes-admin", 1)
+	node := newTestCert(t, "system:node:x", 2)
+
+	input := append(append([]byte{}, admin.certPEM...), node.certPEM...)
+
+	got, err := nodeNameFromCert(input)
+	if err == nil {
+		t.Errorf("nodeNameFromCert read a later certificate and returned %q", got)
+	}
+
+	if got != "" {
+		t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+	}
+}
+
+// Intent: the node name travels to the server in a string field, so only a valid RFC 1123 subdomain
+// of at most 253 characters is accepted; anything else is rejected rather than reported.
+func TestNodeNameFromCertRejectsInvalidNodeNames(t *testing.T) {
+	cases := map[string]string{
+		"uppercase":           "Worker-7",
+		"underscore":          "node_1",
+		"space":               "has space",
+		"leading hyphen":      "-node",
+		"trailing hyphen":     "node-",
+		"leading dot":         ".node",
+		"trailing dot":        "node.",
+		"empty label":         "a..b",
+		"slash":               "a/b",
+		"non ascii":           "n\u00f6de",
+		"too long":            strings.Repeat("a", 254),
+		"too long with dots":  strings.Repeat("ab.", 90) + "ab",
+		"control character":   "node\x01",
+		"colon inside":        "node:1",
+		"wildcard":            "*.example.com",
+		"percent":             "node%41",
+		"only a hyphen":       "-",
+		"only a dot":          ".",
+		"trailing whitespace": "node ",
+	}
+
+	for name, nodeName := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
+
+			got, err := nodeNameFromCert(c.certPEM)
+			if err == nil {
+				t.Errorf("nodeNameFromCert accepted node name %q and returned %q", nodeName, got)
+			}
+
+			if got != "" {
+				t.Errorf("nodeNameFromCert = %q on error, want empty", got)
+			}
+		})
+	}
+}
+
+// Intent: ordinary and boundary-length node names, including dotted FQDNs and a name of exactly
+// 253 characters, are reported unchanged.
+func TestNodeNameFromCertAcceptsValidNodeNames(t *testing.T) {
+	longest := strings.Repeat("a", 253)
+
+	for _, nodeName := range []string{"node-1", "n", "0", "worker.example.com", "a-b.c-d", "10.0.0.5", longest} {
+		t.Run(nodeName[:min(len(nodeName), 20)], func(t *testing.T) {
+			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
+
+			got, err := nodeNameFromCert(c.certPEM)
+			if err != nil {
+				t.Fatalf("nodeNameFromCert returned error for %q: %v", nodeName, err)
+			}
+
+			if got != nodeName {
+				t.Errorf("nodeNameFromCert = %q, want %q", got, nodeName)
+			}
+		})
+	}
+}
+
 // Intent: hostile or truncated certificate files never crash the agent: every bad input yields an error and no name.
 func TestNodeNameFromCertNoPanic(t *testing.T) {
 	c := newTestCert(t, "system:node:node-1", 1)
@@ -467,6 +548,32 @@ func TestParseKubeconfigRejectsMalformedYaml(t *testing.T) {
 			_, err := parseKubeconfig([]byte(data))
 			if err == nil {
 				t.Errorf("parseKubeconfig accepted malformed YAML %q", data)
+			}
+		})
+	}
+}
+
+// Intent: a parse failure never echoes file content: the yaml library quotes part of the scalar it
+// choked on, and a kubeconfig scalar can be a token or key, so the returned message is fixed text.
+func TestParseKubeconfigErrorDoesNotEchoFileContent(t *testing.T) {
+	const secret = "SUPERSECRETTOKENVALUE"
+
+	cases := map[string]string{
+		"scalar where a list is expected":    "clusters: " + secret + "\n",
+		"scalar where a mapping is expected": "clusters:\n- name: a\n  cluster: " + secret + "\n",
+		"scalar in a string list":            "users:\n- " + secret + "\n",
+		"scalar after unterminated flow":     "users: [" + secret + "\nclusters: ]",
+	}
+
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseKubeconfig([]byte(data))
+			if err == nil {
+				t.Fatalf("parseKubeconfig accepted %q", data)
+			}
+
+			if strings.Contains(err.Error(), "SUPERSE") {
+				t.Errorf("error text %q echoes part of the file content", err.Error())
 			}
 		})
 	}
@@ -785,6 +892,70 @@ func TestKubeDistroVersionParsersNoPanic(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Intent: a version string is sent to the server in a protobuf string field, so a token with bytes
+// outside [0-9A-Za-z.+_-], including invalid UTF-8 or control bytes, is rejected rather than reported.
+func TestKubeDistroVersionParsersRejectTokensOutsideTheVersionCharset(t *testing.T) {
+	tokens := map[string]string{
+		"invalid utf-8":     "v1\xff\x01bad",
+		"control byte":      "v1.30.\x01",
+		"nul byte":          "v1.30.1\x00",
+		"non ascii letter":  "v1.30.1\u00e9",
+		"semicolon":         "v1.30.1;rm",
+		"slash":             "v1.30.1/x",
+		"equals":            "v1.30.1=x",
+		"colon":             "v1.30.1:x",
+		"unicode lookalike": "v1.30.1\u2011k3s1",
+	}
+
+	for _, tc := range versionParserCases() {
+		for name, token := range tokens {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				input := strings.Replace(tc.sample, tc.want, token, 1)
+
+				if got := tc.parse(input); got != "" {
+					t.Errorf("%s(%q) = %q, want empty", tc.name, input, got)
+				}
+			})
+		}
+	}
+
+	if got := parseK3sVersion("k3s version v1\xff\x01bad (x)"); got != "" {
+		t.Errorf("parseK3sVersion = %q for invalid UTF-8, want empty", got)
+	}
+
+	if got := parseSnapVersion("version: v1\xff\x01bad\n"); got != "" {
+		t.Errorf("parseSnapVersion = %q for invalid UTF-8, want empty", got)
+	}
+}
+
+// Intent: a version longer than 64 characters is not a real release string, so it is dropped and an
+// unbounded value from a hostile binary never reaches the telemetry payload.
+func TestKubeDistroVersionParsersCapVersionLength(t *testing.T) {
+	atLimit := "v" + strings.Repeat("1", 63)
+	overLimit := "v" + strings.Repeat("1", 64)
+	huge := "v" + strings.Repeat("1", 100000)
+
+	for _, tc := range versionParserCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			for token, want := range map[string]string{atLimit: atLimit, overLimit: "", huge: ""} {
+				input := strings.Replace(tc.sample, tc.want, token, 1)
+
+				if got := tc.parse(input); got != want {
+					t.Errorf("%s with a %d character version = %q, want %q", tc.name, len(token), got[:min(len(got), 20)], want[:min(len(want), 20)])
+				}
+			}
+		})
+	}
+
+	if got := parseSnapVersion("version: " + atLimit + "\n"); got != atLimit {
+		t.Errorf("parseSnapVersion rejected a 64 character version")
+	}
+
+	if got := parseSnapVersion("version: " + huge + "\n"); got != "" {
+		t.Errorf("parseSnapVersion accepted a %d character version", len(huge))
 	}
 }
 

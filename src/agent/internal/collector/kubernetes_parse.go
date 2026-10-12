@@ -12,14 +12,25 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
-	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
 
 // nodeCertCommonNamePrefix is the common-name prefix Kubernetes gives a kubelet client certificate.
 const nodeCertCommonNamePrefix = "system:node:"
+
+// maxNodeNameLength is the longest name Kubernetes accepts for a node.
+const maxNodeNameLength = 253
+
+// maxVersionLength bounds a reported version. Real releases are far shorter, and the value is sent to the
+// server on every report.
+const maxVersionLength = 64
+
+// nodeNamePattern matches an RFC 1123 subdomain: lowercase alphanumeric labels joined by dots, where a label may
+// hold hyphens but neither starts nor ends with one.
+var nodeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
 // kubeconfigRefs is what the collector needs from a kubeconfig: where the cluster CA and the client
 // certificate are, either embedded or as a path. Paths are returned exactly as written in the file.
@@ -62,11 +73,12 @@ type kubeconfigDocument struct {
 // cluster or user the file does not define yields no reference for that side, because picking another entry
 // would fingerprint the wrong CA.
 // A user authenticated by token or password yields no certificate reference. Malformed YAML or base64
-// returns an error.
+// returns an error. The YAML error is replaced by fixed text, because the decoder quotes the start of the
+// scalar it failed on and a kubeconfig scalar can be a credential.
 func parseKubeconfig(data []byte) (kubeconfigRefs, error) {
 	var doc kubeconfigDocument
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return kubeconfigRefs{}, fmt.Errorf("parse kubeconfig: %w", err)
+		return kubeconfigRefs{}, errors.New("parse kubeconfig: malformed YAML")
 	}
 
 	clusterIndex, userIndex := -1, -1
@@ -190,8 +202,8 @@ func caFingerprint(pemData []byte) (string, error) {
 }
 
 // nodeNameFromCert returns <name> from the CN "system:node:<name>" of the first CERTIFICATE block. It skips
-// every other block type, including private keys, without decoding them. It returns an error when no block
-// holds a valid certificate with that CN form.
+// every other block type, including private keys, without decoding them. It returns an error when that block
+// is not a valid certificate with that CN form, or when <name> is not a valid node name.
 func nodeNameFromCert(pemData []byte) (string, error) {
 	block := firstCertificate(pemData)
 	if block == nil {
@@ -208,7 +220,17 @@ func nodeNameFromCert(pemData []byte) (string, error) {
 		return "", errors.New("certificate common name is not a node identity")
 	}
 
+	if validNodeName(name) == false {
+		return "", errors.New("certificate node name is not a valid node name")
+	}
+
 	return name, nil
+}
+
+// validNodeName reports whether name is an RFC 1123 subdomain of at most 253 characters, the form Kubernetes
+// requires of a node name. It also guarantees the name is plain ASCII, so it is safe in a protobuf string.
+func validNodeName(name string) bool {
+	return (len(name) <= maxNodeNameLength) && nodeNamePattern.MatchString(name)
 }
 
 // firstLine returns the first line of output without its line ending or surrounding whitespace.
@@ -218,18 +240,38 @@ func firstLine(output string) string {
 	return strings.TrimSpace(line)
 }
 
-// versionToken returns candidate when it is a single token that starts with "v" followed by a digit, and ""
-// otherwise.
+// versionToken returns candidate when it starts with "v" followed by a digit, holds only the characters
+// [0-9A-Za-z.+_-] and is at most 64 bytes long, and "" otherwise. The restriction keeps whitespace, control
+// bytes and invalid UTF-8 out of the telemetry payload, where invalid UTF-8 would fail marshalling of the whole
+// envelope.
 func versionToken(candidate string) string {
-	if (len(candidate) < 2) || (candidate[0] != 'v') || (candidate[1] < '0') || (candidate[1] > '9') {
+	if (len(candidate) < 2) || (len(candidate) > maxVersionLength) {
 		return ""
 	}
 
-	if strings.IndexFunc(candidate, unicode.IsSpace) >= 0 {
+	if (candidate[0] != 'v') || (candidate[1] < '0') || (candidate[1] > '9') {
 		return ""
+	}
+
+	for i := 0; i < len(candidate); i++ {
+		if isVersionByte(candidate[i]) == false {
+			return ""
+		}
 	}
 
 	return candidate
+}
+
+// isVersionByte reports whether b is one of the characters a release version is made of.
+func isVersionByte(b byte) bool {
+	switch {
+	case (b >= '0') && (b <= '9'), (b >= 'a') && (b <= 'z'), (b >= 'A') && (b <= 'Z'):
+		return true
+	case (b == '.') || (b == '+') || (b == '_') || (b == '-'):
+		return true
+	}
+
+	return false
 }
 
 // parseDistroBanner reads "<program> version <version> ..." from the first line of output.
