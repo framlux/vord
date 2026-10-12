@@ -181,6 +181,29 @@ public interface IKubernetesInventoryRepository
     Task<KubernetesNode?> GetNodeForMachineAsync(int tenantId, long machineId, CancellationToken ct);
 
     /// <summary>
+    /// Returns the reporter candidate row of a machine, or null when the machine is not a candidate of
+    /// any cluster or belongs to another tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant the machine and candidate row must belong to.</param>
+    /// <param name="machineId">The machine id.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<KubernetesReporterCandidate?> GetCandidateForMachineAsync(int tenantId, long machineId, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the payload of the latest local node report (telemetry type 14) of each of the given
+    /// machines, by server receipt time, in one query for however many machines are asked about. Only
+    /// the tenant's own rows received after <paramref name="receivedAfter"/> are considered, and a
+    /// machine with no such row is absent from the result. Never reads any other telemetry type.
+    /// </summary>
+    /// <param name="tenantId">The tenant the telemetry rows must belong to.</param>
+    /// <param name="machineIds">The machines whose latest report is wanted.</param>
+    /// <param name="receivedAfter">The start of the read window, exclusive.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>The raw JSON payload of each machine's latest report, keyed by machine id.</returns>
+    Task<IReadOnlyDictionary<long, string>> GetLatestKubernetesNodePayloadsAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset receivedAfter, CancellationToken ct);
+
+    /// <summary>
     /// Returns the tenant's clusters that hold a CA fingerprint, oldest first. Several can share one
     /// fingerprint.
     /// </summary>

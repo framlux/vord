@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Observability;
 
@@ -28,6 +29,9 @@ public sealed class RemoteCommandService
         "kill_session",
         "check_updates",
         "install_updates",
+        KubernetesCommandTypes.Enrol,
+        KubernetesCommandTypes.Unenrol,
+        KubernetesCommandTypes.Uninstall,
     };
 
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -38,6 +42,7 @@ public sealed class RemoteCommandService
     private readonly IMachinePingService _pingService;
     private readonly IQuotaPauseService _quotaPause;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly IKubernetesCommandEligibility _kubernetesEligibility;
     private readonly ILogger<RemoteCommandService> _logger;
 
     /// <summary>
@@ -51,6 +56,7 @@ public sealed class RemoteCommandService
     /// <param name="pingService">The machine ping and capabilities service</param>
     /// <param name="quotaPause">The quota pause decision, used to refuse commands for a paused host</param>
     /// <param name="quotaPauseMetrics">The instrument counting pause decisions that could not be made</param>
+    /// <param name="kubernetesEligibility">The check that decides which machines may be sent the cluster reporter commands</param>
     /// <param name="logger">The logger</param>
     public RemoteCommandService(
         IDatabaseTransactionProvider transactionProvider,
@@ -61,6 +67,7 @@ public sealed class RemoteCommandService
         IMachinePingService pingService,
         IQuotaPauseService quotaPause,
         QuotaPauseMetrics quotaPauseMetrics,
+        IKubernetesCommandEligibility kubernetesEligibility,
         ILogger<RemoteCommandService> logger)
     {
         _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
@@ -71,6 +78,7 @@ public sealed class RemoteCommandService
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _quotaPause = quotaPause ?? throw new ArgumentNullException(nameof(quotaPause));
         _quotaPauseMetrics = quotaPauseMetrics ?? throw new ArgumentNullException(nameof(quotaPauseMetrics));
+        _kubernetesEligibility = kubernetesEligibility ?? throw new ArgumentNullException(nameof(kubernetesEligibility));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -148,6 +156,17 @@ public sealed class RemoteCommandService
         if (isAuthorized == false)
         {
             return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
+        }
+
+        // Every command is handed to the Kubernetes eligibility check, which recognises its own types by
+        // itself and lets the rest through, so no spelling of a type can bypass it. It follows the key
+        // authorization so that what a machine reports about itself is only revealed to a caller who
+        // could have sent it a command.
+        ServiceResult<bool> eligibility = await _kubernetesEligibility.CheckAsync(
+            command.TenantId, machine, command.CommandType, command.Params, cancellationToken);
+        if (eligibility.IsSuccess == false)
+        {
+            return ServiceResult<RemoteCommand>.BadRequest(eligibility.ErrorMessage ?? "This machine cannot be sent this command");
         }
 
         // A paused host never polls for commands, so accepting one would leave it queued until it

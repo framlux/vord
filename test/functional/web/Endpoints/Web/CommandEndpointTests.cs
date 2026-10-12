@@ -178,7 +178,13 @@ public sealed class CommandEndpointTests
         await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
     }
 
-    private static object BuildCommandRequest(long machineId, int signingKeyId, NSec.Cryptography.Key privateKey, string? commandId = null)
+    private static object BuildCommandRequest(
+        long machineId,
+        int signingKeyId,
+        NSec.Cryptography.Key privateKey,
+        string? commandId = null,
+        string commandType = "reboot",
+        string? commandParams = null)
     {
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
         string payload = "{}";
@@ -190,7 +196,8 @@ public sealed class CommandEndpointTests
             CommandId = commandId ?? Guid.NewGuid().ToString("D"),
             MachineId = machineId,
             SigningKeyId = signingKeyId,
-            CommandType = "reboot",
+            CommandType = commandType,
+            Params = commandParams,
             Nonce = Guid.NewGuid().ToString("N"),
             Signature = Convert.ToBase64String(signature),
             CanonicalPayload = payload,
@@ -723,5 +730,323 @@ public sealed class CommandEndpointTests
 
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("Command type is required");
+    }
+
+    // ========== Cluster reporter commands ==========
+
+    private const string KubernetesFingerprint = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
+
+    private static string LocalReportJson(bool controlPlane, bool adminCredentialPresent, bool reporterEnrolled)
+    {
+        return "{\"distro\":\"k3s\",\"kubelet_version\":\"v1.30.4+k3s1\",\"node_name\":\"cp-1\",\"node_name_source\":\"certificate\","
+            + $"\"has_kubelet\":true,\"control_plane\":{(controlPlane ? "true" : "false")},\"ca_fingerprint\":\"{KubernetesFingerprint}\","
+            + $"\"admin_credential_present\":{(adminCredentialPresent ? "true" : "false")},\"reporter_enrolled\":{(reporterEnrolled ? "true" : "false")}}}";
+    }
+
+    private static async Task SeedLocalReportAsync(
+        DatabaseContext db, int tenantId, long machineId, string payload, TimeSpan? age = null)
+    {
+        DateTimeOffset receivedAt = DateTimeOffset.UtcNow - (age ?? TimeSpan.FromMinutes(5));
+        await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machineId, tenantId: tenantId, telemetryType: 14, payload: payload, receivedAt: receivedAt, serverReceivedAt: receivedAt));
+    }
+
+    private static async Task SeedCandidateAsync(DatabaseContext db, int tenantId, long machineId)
+    {
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = KubernetesFingerprint,
+            Distro = "k3s",
+            FirstSeenAt = DateTimeOffset.UtcNow,
+            LastSeenAt = DateTimeOffset.UtcNow,
+        });
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = DateTimeOffset.UtcNow,
+        });
+    }
+
+    private static HttpClient BuildMachineAdminClient(FunctionalTestFactory factory, int tenantId, int userId)
+    {
+        return new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+    }
+
+    private static async Task<string?> ErrorMessageOfAsync(HttpResponseMessage response)
+    {
+        using JsonDocument body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        return body.RootElement.GetProperty("message").GetString();
+    }
+
+    [Test]
+    [Arguments("k8s_reporter_enrol")]
+    [Arguments("k8s_reporter_uninstall")]
+    public async Task SubmitCommand_EnrolOrUninstallOnAControlPlaneWithAnAdminCredential_IsStored(string commandType)
+    {
+        // Intent: a control-plane host whose latest local report shows an admin credential may be sent the
+        // commands that read it, through the same signed path as every other command.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        RemoteCommand stored = await db.RemoteCommands.SingleAsync(c => c.MachineId == machineId);
+        await Assert.That(stored.CommandType).IsEqualTo(commandType);
+        await Assert.That(stored.Status).IsEqualTo(RemoteCommandStatus.Pending);
+    }
+
+    [Test]
+    [Arguments("k8s_reporter_enrol")]
+    [Arguments("k8s_reporter_uninstall")]
+    public async Task SubmitCommand_EnrolOrUninstallOnAHostWithoutAnAdminCredential_Returns400AndStoresNothing(string commandType)
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: false, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Only control-plane machines with an admin credential can enrol");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_EnrolOnAMachineThatNeverReportedKubernetes_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Only control-plane machines with an admin credential can enrol");
+    }
+
+    [Test]
+    public async Task SubmitCommand_EnrolWhenTheOnlyReportIsOlderThanSevenDays_Returns400()
+    {
+        // Intent: a stale report is no evidence about the host today, so it does not make it eligible.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(
+            db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false), age: TimeSpan.FromDays(8));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task SubmitCommand_EnrolDecidesOnTheLatestReportNotAnOlderOne()
+    {
+        // Intent: eligibility follows the machine's current state. An older report that showed an admin
+        // credential does not outvote a newer one that no longer does.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(
+            db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false), age: TimeSpan.FromHours(2));
+        await SeedLocalReportAsync(
+            db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: false, reporterEnrolled: false), age: TimeSpan.FromMinutes(5));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolOnACandidateMachine_IsStored()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedCandidateAsync(db, tenantId, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => (c.MachineId == machineId) && (c.CommandType == "k8s_reporter_unenrol"))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolOnAMachineWhoseReportSaysEnrolled_IsStored()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolOnAMachineThatIsNotAReporter_Returns400AndStoresNothing()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("This machine is not an enrolled reporter");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolIgnoresAnotherTenantsCandidateRowForTheSameMachineId()
+    {
+        // Intent: a candidate row only counts for the tenant that owns it. A row another tenant holds
+        // under the same machine id must not make this tenant's machine look enrolled.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        (int otherTenantId, int _, long _, int _, NSec.Cryptography.Key _) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedCandidateAsync(db, otherTenantId, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    [Arguments("K8S_REPORTER_ENROL")]
+    [Arguments("k8s_reporter_Unenrol")]
+    [Arguments("K8s_Reporter_Uninstall")]
+    public async Task SubmitCommand_MixedCaseKubernetesType_Returns400InvalidCommandTypeEvenForAnEligibleMachine(string commandType)
+    {
+        // Intent: the allowlist ignores case, so the guard must not be skippable by changing it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        await SeedCandidateAsync(db, tenantId, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Invalid command type");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments("k8s_reporter_enrol")]
+    [Arguments("k8s_reporter_unenrol")]
+    [Arguments("k8s_reporter_uninstall")]
+    public async Task SubmitCommand_KubernetesCommandWithParameters_Returns400(string commandType)
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType, commandParams: "{\"node\":\"cp-1\"}"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("This command takes no parameters");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_KubernetesCommandWithAnEmptyParamsObject_IsStored()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol", commandParams: "{}"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task SubmitCommand_KubernetesCommandOnAProTenant_StillReturns403WithTheTeamMessage()
+    {
+        // Intent: the Team subscription gate on the endpoint is unchanged and runs before eligibility.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, SubscriptionTier.Pro);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        await Assert.That(await response.Content.ReadAsStringAsync()).Contains("Team subscription");
+    }
+
+    [Test]
+    public async Task SubmitCommand_ExistingCommandsAreUnaffectedByTheKubernetesCheck()
+    {
+        // Intent: a machine that never reported Kubernetes can still be sent every pre-existing command.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "check_updates"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
     }
 }

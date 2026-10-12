@@ -13,9 +13,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
 
 /// <summary>
-/// Functional tests for the read and rename methods the Kubernetes web API uses on
-/// <see cref="Database.Repositories.DatabaseRepository"/>. Every method is scoped to one tenant, so
-/// each test seeds a second tenant that must never show through.
+/// Functional tests for the read and rename methods the Kubernetes web API and the cluster reporter
+/// command check use on <see cref="Database.Repositories.DatabaseRepository"/>. Every method is scoped
+/// to one tenant, so each test seeds a second tenant that must never show through.
 /// </summary>
 public class KubernetesClusterQueryRepositoryTests
 {
@@ -322,6 +322,133 @@ public class KubernetesClusterQueryRepositoryTests
         await Assert.That(unknown).IsFalse();
         KubernetesCluster stored = await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id == foreignClusterId);
         await Assert.That(stored.DisplayName).IsEqualTo("Theirs");
+    }
+
+    [Test]
+    public async Task GetCandidateForMachine_CandidateOfTheTenant_ReturnsItsRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-1");
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            ReporterError = "credentials_rejected",
+            LastReportAt = T0,
+        });
+
+        KubernetesReporterCandidate? candidate = await repo.GetCandidateForMachineAsync(tenantId, machineId, CancellationToken.None);
+
+        await Assert.That(candidate).IsNotNull();
+        await Assert.That(candidate!.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(candidate.MachineId).IsEqualTo(machineId);
+        await Assert.That(candidate.ReporterError).IsEqualTo("credentials_rejected");
+    }
+
+    [Test]
+    public async Task GetCandidateForMachine_NotACandidateOrAnotherTenantsRow_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        int otherTenantId = await SeedTenantAsync(dbFactory.Context);
+        long plainMachineId = await SeedMachineAsync(dbFactory.Context, tenantId, "plain");
+        long foreignMachineId = await SeedMachineAsync(dbFactory.Context, otherTenantId, "foreign");
+        long foreignClusterId = await SeedClusterAsync(dbFactory.Context, otherTenantId, FingerprintA);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = otherTenantId,
+            ClusterId = foreignClusterId,
+            MachineId = foreignMachineId,
+            LastReportAt = T0,
+        });
+
+        KubernetesReporterCandidate? plain = await repo.GetCandidateForMachineAsync(tenantId, plainMachineId, CancellationToken.None);
+        KubernetesReporterCandidate? foreign = await repo.GetCandidateForMachineAsync(tenantId, foreignMachineId, CancellationToken.None);
+
+        await Assert.That(plain).IsNull();
+        await Assert.That(foreign).IsNull();
+    }
+
+    private static async Task InsertKubernetesTelemetryAsync(
+        DatabaseContext db, int tenantId, long machineId, short type, string payload, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
+    {
+        await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machineId, tenantId: tenantId, telemetryType: type, payload: payload,
+            receivedAt: receivedAt, serverReceivedAt: serverReceivedAt));
+    }
+
+    [Test]
+    public async Task GetLatestKubernetesNodePayloads_ReturnsTheLatestTypeFourteenPayloadOfEachMachine()
+    {
+        // Intent: one read answers for several machines at once and yields the newest local report of
+        // each by server receipt time, whatever order the rows were written in.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        int tenantId = await SeedTenantAsync(db);
+        long first = await SeedMachineAsync(db, tenantId, "first");
+        long second = await SeedMachineAsync(db, tenantId, "second");
+        long silent = await SeedMachineAsync(db, tenantId, "silent");
+        await InsertKubernetesTelemetryAsync(db, tenantId, first, 14, "first-newest", T0.AddMinutes(-1), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, first, 14, "first-older", T0.AddMinutes(-30), T0.AddMinutes(-30));
+        await InsertKubernetesTelemetryAsync(db, tenantId, second, 14, "second-oldest", T0.AddHours(-3), T0.AddHours(-3));
+        await InsertKubernetesTelemetryAsync(db, tenantId, second, 14, "second-newest", T0.AddHours(-2), T0.AddHours(-2));
+        await InsertKubernetesTelemetryAsync(db, tenantId, second, 14, "second-middle", T0.AddHours(-2).AddMinutes(-5), T0.AddHours(-2).AddMinutes(-5));
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [first, second, silent], T0.AddDays(-7), CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(2);
+        await Assert.That(payloads[first]).IsEqualTo("first-newest");
+        await Assert.That(payloads[second]).IsEqualTo("second-newest");
+        await Assert.That(payloads.ContainsKey(silent)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetLatestKubernetesNodePayloads_IgnoresOtherTypesOtherMachinesOtherTenantsAndRowsOutsideTheWindow()
+    {
+        // Intent: only a type-14 row of an asked-for machine of this tenant, received inside the window,
+        // can answer. A newer cluster snapshot or CPU row must not shadow the local report, and a row of
+        // another tenant that carries the same machine id must never show through.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long asked = await SeedMachineAsync(db, tenantId, "asked");
+        long notAsked = await SeedMachineAsync(db, tenantId, "not-asked");
+        long expired = await SeedMachineAsync(db, tenantId, "expired");
+        DateTimeOffset receivedAfter = T0.AddDays(-7);
+        await InsertKubernetesTelemetryAsync(db, tenantId, asked, 14, "local-report", T0.AddMinutes(-10), T0.AddMinutes(-10));
+        await InsertKubernetesTelemetryAsync(db, tenantId, asked, 15, "cluster-snapshot", T0.AddMinutes(-1), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, asked, 1, "cpu", T0.AddMinutes(-1), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, otherTenantId, asked, 14, "foreign-report", T0.AddMinutes(-1), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, notAsked, 14, "not-asked-report", T0.AddMinutes(-1), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, expired, 14, "expired-report", receivedAfter, receivedAfter);
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [asked, expired], receivedAfter, CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(1);
+        await Assert.That(payloads[asked]).IsEqualTo("local-report");
+    }
+
+    [Test]
+    public async Task GetLatestKubernetesNodePayloads_NoMachineIds_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [], T0.AddDays(-7), CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(0);
     }
 
     private static async Task<bool> RenameInTransactionAsync(

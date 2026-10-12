@@ -8,11 +8,13 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using System.Diagnostics.Metrics;
 
@@ -32,6 +34,7 @@ public sealed class RemoteCommandServiceTests
     private readonly InMemoryMachinePingService _pingService = new();
     private readonly IQuotaPauseService _quotaPause = Substitute.For<IQuotaPauseService>();
     private readonly QuotaPauseMetrics _quotaPauseMetrics = TestMetricsFactory.CreateQuotaPauseMetrics();
+    private readonly IKubernetesCommandEligibility _kubernetesEligibility = Substitute.For<IKubernetesCommandEligibility>();
     private readonly ILogger<RemoteCommandService> _logger = Substitute.For<ILogger<RemoteCommandService>>();
 
     public RemoteCommandServiceTests()
@@ -43,9 +46,12 @@ public sealed class RemoteCommandServiceTests
         _remoteCommandRepository = Substitute.For<IRemoteCommandRepository>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
         _transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        _kubernetesEligibility
+            .CheckAsync(Arg.Any<int>(), Arg.Any<Machine>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(ServiceResult<bool>.Ok(true));
     }
 
-    private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+    private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
     // ========== Constructor null guard validation ==========
 
@@ -56,7 +62,7 @@ public sealed class RemoteCommandServiceTests
         // misconfigured DI container fails loudly rather than causing a deferred NullReferenceException.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(null!, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(null!, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -72,7 +78,7 @@ public sealed class RemoteCommandServiceTests
         // never silently proceeds without its required audit dependency.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, null!, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, null!, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -87,7 +93,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null machine repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, null!, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, null!, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -102,7 +108,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null signing key repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, null!, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, null!, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -117,7 +123,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null remote command repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, null!, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, null!, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -132,7 +138,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null machine ping service must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, null!, _quotaPause, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, null!, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -147,7 +153,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null logger must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, null!);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _kubernetesEligibility, null!);
 
             return Task.CompletedTask;
         });
@@ -162,7 +168,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null quota pause service must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, null!, _quotaPauseMetrics, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, null!, _quotaPauseMetrics, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
@@ -177,13 +183,29 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null metrics instrument must be caught at construction, not at the first failed check.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, null!, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, null!, _kubernetesEligibility, _logger);
 
             return Task.CompletedTask;
         });
 
         await Assert.That(ex).IsNotNull();
         await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
+    }
+
+    [Test]
+    public async Task Constructor_NullKubernetesEligibility_Throws()
+    {
+        // Intent: a missing eligibility check would silently let every cluster reporter command through
+        // to any machine, so it must fail at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, null!, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("kubernetesEligibility");
     }
 
     private static (UserSigningKey key, NSec.Cryptography.Key privateKey) BuildSignedKey(int id = 1, int userId = 1, int tenantId = 1)
@@ -656,7 +678,7 @@ public sealed class RemoteCommandServiceTests
         SetupValidCommandMocks(key);
         _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
-        RemoteCommandService service = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, new QuotaPauseMetrics(meterFactory), _logger);
+        RemoteCommandService service = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, new QuotaPauseMetrics(meterFactory), _kubernetesEligibility, _logger);
 
         await service.SubmitCommandAsync(BuildSignedCommand(privateKey), CancellationToken.None);
 
@@ -711,6 +733,159 @@ public sealed class RemoteCommandServiceTests
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await _quotaPause.DidNotReceiveWithAnyArgs().IsPausedAsync(default, default, default);
+    }
+
+    // ========== SubmitCommandAsync — Cluster reporter commands ==========
+
+    [Test]
+    [Arguments("k8s_reporter_enrol")]
+    [Arguments("k8s_reporter_unenrol")]
+    [Arguments("k8s_reporter_uninstall")]
+    public async Task SubmitCommand_KubernetesReporterCommand_IsOnTheAllowlistAndStoredWhenEligible(string commandType)
+    {
+        // Intent: the three cluster reporter commands travel the same signed path as every other command
+        // once the eligibility check passes.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: commandType), CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.CommandType).IsEqualTo(commandType);
+        await _remoteCommandRepository.Received(1).CreateRemoteCommandAsync(
+            Arg.Is<RemoteCommand>(c => c.CommandType == commandType), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitCommand_IneligibleMachine_Returns400WithTheReasonAndCreatesNothing()
+    {
+        // Intent: the reason the eligibility check gives reaches the caller as a 400, and an ineligible
+        // command leaves neither a command row nor an audit entry.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _kubernetesEligibility
+            .CheckAsync(Arg.Any<int>(), Arg.Any<Machine>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(ServiceResult<bool>.BadRequest("Only control-plane machines with an admin credential can enrol"));
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_enrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Only control-plane machines with an admin credential can enrol");
+        await _remoteCommandRepository.DidNotReceiveWithAnyArgs().CreateRemoteCommandAsync(default!, default);
+        await _auditLog.DidNotReceiveWithAnyArgs().InsertAuditLogAsync(default!, default);
+    }
+
+    [Test]
+    public async Task SubmitCommand_EligibilityIsGivenTheTenantMachineTypeAndParams()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey(tenantId: 7);
+        SetupValidCommandMocks(key, machineId: 55);
+        RemoteCommand command = BuildSignedCommand(privateKey, tenantId: 7, machineId: 55, commandType: "k8s_reporter_unenrol");
+        command.Params = "{}";
+        RemoteCommandService service = CreateService();
+
+        await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await _kubernetesEligibility.Received(1).CheckAsync(
+            7,
+            Arg.Is<Machine>(m => m.Id == 55),
+            "k8s_reporter_unenrol",
+            "{}",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitCommand_ExistingCommandType_StillGoesThroughTheEligibilityCheck()
+    {
+        // Intent: the service never decides by itself which types the check applies to, so a spelling of
+        // a Kubernetes type cannot slip past a pre-filter. Every command is handed to the check.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommandService service = CreateService();
+
+        await service.SubmitCommandAsync(BuildSignedCommand(privateKey, commandType: "reboot"), CancellationToken.None);
+
+        await _kubernetesEligibility.Received(1).CheckAsync(
+            Arg.Any<int>(), Arg.Any<Machine>(), "reboot", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnauthorizedKey_IsRefusedBeforeTheEligibilityCheck()
+    {
+        // Intent: whether a machine is eligible is only revealed to a caller whose key is authorized for
+        // it, so authorization comes first and costs no eligibility lookup.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _signingKeyRepository.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_enrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(403);
+        await _kubernetesEligibility.DidNotReceiveWithAnyArgs().CheckAsync(default, default!, default!, default, default);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnknownMachine_IsRefusedBeforeTheEligibilityCheck()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns((Machine?)null);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_enrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await _kubernetesEligibility.DidNotReceiveWithAnyArgs().CheckAsync(default, default!, default!, default, default);
+    }
+
+    [Test]
+    [Arguments("K8S_REPORTER_ENROL")]
+    [Arguments("k8s_reporter_Unenrol")]
+    [Arguments("K8s_Reporter_Uninstall")]
+    public async Task SubmitCommand_MixedCaseKubernetesType_IsRefusedAsAnInvalidCommandType(string commandType)
+    {
+        // Intent: the allowlist ignores case, so the only thing standing between a mixed-case spelling
+        // and a machine that was never checked is the real eligibility check. With it wired in, such a
+        // command is refused even for a machine that would be eligible, and nothing is stored.
+        IKubernetesInventoryRepository kubernetesRepository = Substitute.For<IKubernetesInventoryRepository>();
+        KubernetesCommandEligibility realEligibility = new(kubernetesRepository, new FakeTimeProvider());
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommandService service = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, realEligibility, _logger);
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: commandType), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Invalid command type");
+        await _remoteCommandRepository.DidNotReceiveWithAnyArgs().CreateRemoteCommandAsync(default!, default);
+        await _auditLog.DidNotReceiveWithAnyArgs().InsertAuditLogAsync(default!, default);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnknownCommandType_IsStillRefusedByTheAllowlist()
+    {
+        // Intent: adding the reporter commands must not widen the allowlist to anything else that looks
+        // like them.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_destroy"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Invalid command type");
+        await _kubernetesEligibility.DidNotReceiveWithAnyArgs().CheckAsync(default, default!, default!, default, default);
     }
 
     // ========== SubmitCommandAsync — Signing key not authorized for machine ==========

@@ -363,6 +363,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDataExportHandler, DataExportHandler>();
         services.AddScoped<ISigningKeyService, SigningKeyService>();
         services.AddScoped<MachineAuthorizedKeyService>();
+        services.AddScoped<IKubernetesCommandEligibility, KubernetesCommandEligibility>();
         services.AddScoped<RemoteCommandService>();
 
         if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)

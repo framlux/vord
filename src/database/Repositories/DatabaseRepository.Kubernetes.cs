@@ -25,6 +25,9 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>The projection is a single stream, so its cursor table holds one row with this key.</summary>
     private const int KubernetesCursorRowId = 1;
 
+    /// <summary>The telemetry type of a machine's local Kubernetes node report.</summary>
+    private const short KubernetesNodeTelemetryType = 14;
+
     /// <summary>The distro value a report carries when the host's layout matched no known distribution.</summary>
     private const string UnknownKubernetesDistro = "unknown";
 
@@ -165,6 +168,62 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         return await _db.KubernetesNodes
             .Where(n => (n.TenantId == tenantId) && (n.MachineId == machineId))
             .FirstOrDefaultAsync(ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<KubernetesReporterCandidate?> GetCandidateForMachineAsync(int tenantId, long machineId, CancellationToken ct)
+    {
+        return await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<long, string>> GetLatestKubernetesNodePayloadsAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset receivedAfter, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(machineIds);
+
+        if (machineIds.Count == 0)
+        {
+            return new Dictionary<long, string>();
+        }
+
+        long[] ids = machineIds.Distinct().ToArray();
+        List<MachineTelemetry> rows;
+
+        if (_db.DataProvider.Name.Contains("PostgreSQL"))
+        {
+            // One statement for every machine asked about, however many: DISTINCT ON keeps the first row
+            // of each machine in the requested order, which is the newest by server receipt time. The type
+            // is a SQL literal for the same reason as in the projector's batch read, and the lower bound
+            // on ReceivedAt, the partition key, lets Postgres skip partitions older than the window.
+            rows = await _db.QueryToListAsync<MachineTelemetry>(
+                """
+                SELECT DISTINCT ON ("MachineId") "MachineId", "Payload" FROM "MachineTelemetry"
+                WHERE "TenantId" = @tenantId AND "TelemetryType" = 14 AND "MachineId" = ANY(@machineIds)
+                  AND "ReceivedAt" > @receivedAfter
+                ORDER BY "MachineId", "ServerReceivedAt" DESC
+                """,
+                ct,
+                new DataParameter("@tenantId", tenantId),
+                new DataParameter("@machineIds", ids),
+                new DataParameter("@receivedAfter", receivedAfter));
+        }
+        else
+        {
+            // SQLite test path, which has no DISTINCT ON: the same newest-row-per-machine rule as a group-by.
+            rows = await _db.MachineTelemetry
+                .Where(t => (t.TenantId == tenantId)
+                    && (t.TelemetryType == KubernetesNodeTelemetryType)
+                    && ids.Contains(t.MachineId)
+                    && (t.ReceivedAt > receivedAfter))
+                .GroupBy(t => t.MachineId)
+                .Select(g => g.OrderByDescending(t => t.ServerReceivedAt).First())
+                .ToListAsync(ct);
+        }
+
+        return rows.ToDictionary(r => r.MachineId, r => r.Payload);
     }
 
     /// <inheritdoc/>

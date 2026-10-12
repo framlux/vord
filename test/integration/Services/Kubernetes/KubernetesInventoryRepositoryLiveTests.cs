@@ -435,6 +435,80 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LatestNodePayloads_AnswersForSeveralMachinesInOneQueryAndScopesToTheTenant()
+    {
+        // Intent: the latest-report read runs on the production database as one DISTINCT ON statement
+        // over an array of machine ids. It returns each asked-for machine's newest type-14 payload by
+        // server receipt time, and ignores other types, machines nobody asked for, rows outside the
+        // window, and another tenant's rows that carry an asked-for machine id.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long first = await SeedMachineAsync(db, tenantId);
+        long second = await SeedMachineAsync(db, tenantId);
+        long silent = await SeedMachineAsync(db, tenantId);
+        long notAsked = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        async Task InsertAsync(int rowTenantId, long machineId, short type, string payload, TimeSpan age)
+        {
+            DateTimeOffset at = now - age;
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = machineId,
+                TenantId = rowTenantId,
+                TelemetryType = type,
+                Payload = payload,
+                ReceivedAt = at,
+                ServerReceivedAt = at,
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+        }
+
+        await InsertAsync(tenantId, first, 14, "first-older", TimeSpan.FromMinutes(30));
+        await InsertAsync(tenantId, first, 14, "first-newest", TimeSpan.FromMinutes(1));
+        await InsertAsync(tenantId, first, 15, "first-snapshot", TimeSpan.FromSeconds(10));
+        await InsertAsync(tenantId, second, 14, "second-only", TimeSpan.FromMinutes(10));
+        await InsertAsync(otherTenantId, second, 14, "foreign-newer", TimeSpan.FromSeconds(5));
+        await InsertAsync(tenantId, notAsked, 14, "not-asked", TimeSpan.FromMinutes(2));
+        await InsertAsync(tenantId, silent, 1, "cpu", TimeSpan.FromMinutes(2));
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [first, second, silent], now.AddDays(-7), CancellationToken.None);
+        IReadOnlyDictionary<long, string> narrowWindow = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [first, second, silent], now.AddMinutes(-5), CancellationToken.None);
+        IReadOnlyDictionary<long, string> none = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [], now.AddDays(-7), CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(2);
+        await Assert.That(payloads[first]).IsEqualTo("first-newest");
+        await Assert.That(payloads[second]).IsEqualTo("second-only");
+        await Assert.That(narrowWindow.Count).IsEqualTo(1);
+        await Assert.That(narrowWindow[first]).IsEqualTo("first-newest");
+        await Assert.That(none.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Live_CandidateForMachine_ScopesToTheTenant()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        long clusterId = await SeedLiveClusterAsync(db, tenantId, NewFingerprint());
+        await SeedLiveCandidateAsync(db, tenantId, clusterId, machineId, DateTimeOffset.UtcNow);
+
+        KubernetesReporterCandidate? own = await repo.GetCandidateForMachineAsync(tenantId, machineId, CancellationToken.None);
+        KubernetesReporterCandidate? foreign = await repo.GetCandidateForMachineAsync(otherTenantId, machineId, CancellationToken.None);
+
+        await Assert.That(own).IsNotNull();
+        await Assert.That(own!.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(foreign).IsNull();
+    }
+
+    [Test]
     public async Task Live_TenantPurge_WaitsForTheTenantLockThenRemovesTheKubernetesRows()
     {
         // Intent: the purge deletes a tenant's Kubernetes rows under the same per-tenant lock as the
