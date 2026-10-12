@@ -26,7 +26,7 @@ type runtimeRig struct {
 	ticks   chan time.Time
 }
 
-func newRuntimeRig(t *testing.T) *runtimeRig {
+func newRuntimeRig(t *testing.T, adjust ...func(opts *RuntimeOptions)) *runtimeRig {
 	t.Helper()
 
 	rig := &runtimeRig{
@@ -35,7 +35,7 @@ func newRuntimeRig(t *testing.T) *runtimeRig {
 		ticks:      make(chan time.Time),
 	}
 
-	rig.runtime = NewRuntime(RuntimeOptions{
+	opts := RuntimeOptions{
 		DataDir: rig.dataDir,
 		Clock:   rig.clock,
 		Gate: Gate{
@@ -45,7 +45,13 @@ func newRuntimeRig(t *testing.T) *runtimeRig {
 		},
 		OnLost: func() { rig.lost++ },
 		Ticks:  rig.ticks,
-	})
+	}
+
+	for _, change := range adjust {
+		change(&opts)
+	}
+
+	rig.runtime = NewRuntime(opts)
 
 	return rig
 }

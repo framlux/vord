@@ -746,6 +746,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             TelemetryItem.PayloadOneofCase.ServiceStatus => item.ServiceStatus,
             TelemetryItem.PayloadOneofCase.AgentVersion => item.AgentVersion,
             TelemetryItem.PayloadOneofCase.KubernetesNode => item.KubernetesNode,
+            TelemetryItem.PayloadOneofCase.KubernetesCluster => item.KubernetesCluster,
             _ => null
         };
 

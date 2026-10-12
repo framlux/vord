@@ -135,16 +135,20 @@ func main() {
 	))
 
 	// The reporter runtime elects one enrolled control-plane host per cluster to report the cluster, and runs on
-	// every enrolled host whether or not remote commands are allowed. Its health gate reads the sender's last
-	// acknowledgement, and the sender is built below, so the gate reaches it through the variable declared above.
+	// every enrolled host whether or not remote commands are allowed. The holder reads the cluster and queues its
+	// snapshot, replacing any that has not been sent. Its health gate reads the sender's last acknowledgement, and
+	// the sender is built below, so the gate reaches it through the variable declared above.
 	reporterRuntime := kubereporter.NewRuntime(kubereporter.RuntimeOptions{
 		DataDir: cfg.DataDir,
 		Gate: newReporterGate(
 			pauseCoordinator.Paused,
 			func() time.Time { return telemetrySender.LastAckAt() },
+			newOldestPendingSnapshot(store.OldestQueuedTelemetry),
 			time.Now(),
 		),
-		OnLost: newSnapshotFence(store.DeleteTelemetryByType),
+		OnLost:    newSnapshotFence(store.DeleteTelemetryByType),
+		Snapshots: store,
+		Facts:     kubelocal.Detector{Root: "/"}.Detect,
 	})
 
 	// Initialize command processor if remote commands are enabled. The cluster reporter commands report a state

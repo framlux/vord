@@ -97,6 +97,7 @@ type Elector struct {
 	clock         Clock
 	gate          Gate
 	onLost        func()
+	onAcquired    func()
 
 	// withTimeout bounds each Lease request. It is context.WithTimeout, and a test replaces it to see the limits.
 	withTimeout func(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc)
@@ -126,9 +127,11 @@ type Elector struct {
 
 // NewElector builds a candidate. clientFactory builds the client the Lease is read and written with, and is
 // called again after a failure until it succeeds. identity is the name the candidate holds the Lease under.
-// onLost runs when the candidate stops being the holder, however that came about, and must be safe to call from
-// any goroutine.
-func NewElector(clientFactory func() (*kube.Client, error), identity string, clock Clock, gate Gate, onLost func()) *Elector {
+// onLost runs when the candidate stops being the holder, however that came about. onAcquired runs when it starts
+// being the holder, after the leadership can be read, and also when it takes back a claim the record still held
+// after a loss. Both may be nil, must be safe to call from any goroutine, and must not block: onAcquired runs
+// inside the election step.
+func NewElector(clientFactory func() (*kube.Client, error), identity string, clock Clock, gate Gate, onLost func(), onAcquired func()) *Elector {
 	if clock == nil {
 		clock = systemClock{}
 	}
@@ -139,6 +142,7 @@ func NewElector(clientFactory func() (*kube.Client, error), identity string, clo
 		clock:         clock,
 		gate:          gate,
 		onLost:        onLost,
+		onAcquired:    onAcquired,
 		withTimeout:   context.WithTimeout,
 	}
 }
@@ -408,6 +412,10 @@ func (e *Elector) won(stored map[string]any, sentAt time.Time, transitions int64
 
 	if wasHeld == false {
 		slog.Info("this host now holds the cluster reporter lease", "identity", e.identity, "transitions", transitions)
+
+		if e.onAcquired != nil {
+			e.onAcquired()
+		}
 	}
 }
 

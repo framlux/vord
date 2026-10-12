@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +86,10 @@ type fakeAPI struct {
 	// nsGoneAfter is how many GETs of a terminating namespace still find it before it finishes deleting.
 	nsGoneAfter int
 	nsGets      int
+
+	// nodes and pods are what the cluster-wide node and pod lists serve, a page at a time.
+	nodes []map[string]any
+	pods  []map[string]any
 }
 
 // newFakeAPI starts the fake on a TLS test server that closes with the test.
@@ -121,6 +126,22 @@ func (a *fakeAPI) issueReporterToken() string {
 	a.issued[token] = "standalone"
 
 	return token
+}
+
+// setNodes replaces the nodes the node list serves.
+func (a *fakeAPI) setNodes(nodes []map[string]any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.nodes = nodes
+}
+
+// setPods replaces the pods the pod list serves.
+func (a *fakeAPI) setPods(pods []map[string]any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.pods = pods
 }
 
 // url is the address of the fake.
@@ -394,15 +415,14 @@ func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 
 	if principal == "reporter" {
 		switch {
-		case (r.Method == http.MethodGet) && (r.URL.Path == "/api/v1/nodes"):
-			reply(http.StatusOK, map[string]any{"kind": "NodeList", "items": []any{}})
-
-			return
+		case (r.Method == http.MethodGet) && reporterMayRead(r.URL.Path):
+			// The reporter's ClusterRole grants get and list on nodes, list on pods, get on namespaces, and the
+			// version endpoint is open to every authenticated caller, so those reads are served like the admin's.
 		case ((r.Method == http.MethodGet) || (r.Method == http.MethodPut)) && (r.URL.Path == leasePath):
 			// The reporter's Role grants get and update on the one Lease, so those requests are served like
 			// the admin's.
 		default:
-			fail(http.StatusForbidden, "Forbidden", "the reporter token may only list nodes and use its Lease")
+			fail(http.StatusForbidden, "Forbidden", "the reporter token may only read nodes, pods, namespaces and the version, and use its Lease")
 
 			return
 		}
@@ -426,8 +446,81 @@ type replyFunc func(status int, value any)
 
 type failFunc func(status int, reason string, message string, causes ...string)
 
+// reporterMayRead reports whether the reporter's ClusterRole lets it GET path.
+func reporterMayRead(path string) bool {
+	if (path == "/api/v1/nodes") || (path == "/api/v1/pods") || (path == "/version") {
+		return true
+	}
+
+	name, isNamespace := strings.CutPrefix(path, "/api/v1/namespaces/")
+
+	return isNamespace && (name != "") && (strings.Contains(name, "/") == false)
+}
+
+// listPaged answers a list of items the way the API server pages one: limit sets the page size, and a continue
+// token carries the offset of the next page. A fieldSelector that excludes terminal pod phases is honoured.
+func (a *fakeAPI) listPaged(r *http.Request, kind string, items []map[string]any, reply replyFunc, fail failFunc) {
+	query := r.URL.Query()
+
+	var kept []map[string]any
+
+	for _, item := range items {
+		phase := stringAt(item, "status", "phase")
+		selector := query.Get("fieldSelector")
+
+		if (phase != "") && strings.Contains(selector, "status.phase!="+phase) {
+			continue
+		}
+
+		kept = append(kept, item)
+	}
+
+	start := 0
+
+	if token := query.Get("continue"); token != "" {
+		offset, err := strconv.Atoi(strings.TrimPrefix(token, "offset-"))
+		if err != nil {
+			fail(http.StatusBadRequest, "BadRequest", "invalid continue token")
+
+			return
+		}
+
+		start = offset
+	}
+
+	end := len(kept)
+	next := ""
+
+	if limit, _ := strconv.Atoi(query.Get("limit")); (limit > 0) && (start+limit < end) {
+		end = start + limit
+		next = fmt.Sprintf("offset-%d", end)
+	}
+
+	page := []map[string]any{}
+	if start < end {
+		page = kept[start:end]
+	}
+
+	reply(http.StatusOK, map[string]any{
+		"kind": kind, "apiVersion": "v1",
+		"metadata": map[string]any{"continue": next, "resourceVersion": "1"},
+		"items":    page,
+	})
+}
+
 func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 	path := r.URL.Path
+
+	switch path {
+	case "/api/v1/nodes":
+		a.listPaged(r, "NodeList", a.nodes, reply, fail)
+
+		return
+	case "/api/v1/pods":
+		a.listPaged(r, "PodList", a.pods, reply, fail)
+
+		return
+	}
 
 	if path == namespacePath {
 		if stringAt(a.objects[path], "metadata", "deletionTimestamp") != "" {

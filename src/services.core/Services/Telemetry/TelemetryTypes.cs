@@ -51,4 +51,7 @@ public static class TelemetryTypeIds
 
     /// <summary>The identity of a Kubernetes node, read from local files on the host.</summary>
     public const short KubernetesNode = 14;
+
+    /// <summary>A snapshot of a Kubernetes cluster, sent only by the host that holds the cluster's reporter Lease.</summary>
+    public const short KubernetesCluster = 15;
 }

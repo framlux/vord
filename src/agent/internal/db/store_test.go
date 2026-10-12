@@ -1962,3 +1962,309 @@ func TestDeleteTelemetryByType_KeepsCachedCountExact(t *testing.T) {
 		t.Errorf("pending count after a reload = %d, want 1", got)
 	}
 }
+
+// queuedIDs lists the ids in the telemetry queue, sorted.
+func queuedIDs(t *testing.T, store *Store) string {
+	t.Helper()
+
+	rows, err := store.DB().Query("SELECT id FROM telemetry_queue ORDER BY id")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+
+	defer rows.Close()
+
+	var ids []string
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	return strings.Join(ids, ",")
+}
+
+// statusOf reads the status of one queued item.
+func statusOf(t *testing.T, store *Store, id string) QueueStatus {
+	t.Helper()
+
+	var status int
+	if err := store.DB().QueryRow("SELECT status FROM telemetry_queue WHERE id = ?", id).Scan(&status); err != nil {
+		t.Fatalf("status of %s: %v", id, err)
+	}
+
+	return QueueStatus(status)
+}
+
+// Intent: a cluster snapshot supersedes every older one that has not been delivered, whether it is waiting or the
+// sender has already taken it, and only those: other kinds of telemetry and the history of delivered snapshots
+// stay. The new snapshot is the one pending row of its type, and the cached count follows the table.
+func TestReplaceTelemetryOfType_ReplacesPendingAndProcessingOfThatTypeOnly(t *testing.T) {
+	store := newTestStore(t)
+
+	enqueue := func(id string, itemType TelemetryType) {
+		t.Helper()
+
+		if err := store.EnqueueTelemetry(id, itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	enqueue("delivered", TelemetryKubernetesCluster)
+	enqueue("in-flight", TelemetryKubernetesCluster)
+
+	taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10)
+	if err != nil || len(taken) != 2 {
+		t.Fatalf("dequeue snapshots: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	enqueue("pending-1", TelemetryKubernetesCluster)
+	enqueue("pending-2", TelemetryKubernetesCluster)
+	enqueue("node", TelemetryKubernetesNode)
+	enqueue("cpu", TelemetryCpuUsage)
+
+	if got := pendingCountOf(t, store); got != 4 {
+		t.Fatalf("pending count before = %d, want 4", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("fresh", TelemetryKubernetesCluster, `{"kube_system_uid":"u"}`); err != nil {
+		t.Fatalf("ReplaceTelemetryOfType: %v", err)
+	}
+
+	if got, want := queuedIDs(t, store), "cpu,delivered,fresh,node"; got != want {
+		t.Errorf("rows left = %s, want %s", got, want)
+	}
+
+	if got := statusOf(t, store, "fresh"); got != QueueStatusPending {
+		t.Errorf("status of the new snapshot = %d, want pending", got)
+	}
+
+	if got := statusOf(t, store, "delivered"); got != QueueStatusCompleted {
+		t.Errorf("status of the delivered snapshot = %d, want completed and untouched", got)
+	}
+
+	if got := pendingCountOf(t, store); got != 3 {
+		t.Errorf("pending count after = %d, want 3 (the node, cpu and new snapshot)", got)
+	}
+
+	var payload string
+	if err := store.DB().QueryRow("SELECT payload FROM telemetry_queue WHERE id = 'fresh'").Scan(&payload); err != nil || payload != `{"kube_system_uid":"u"}` {
+		t.Errorf("payload of the new snapshot = %q, %v", payload, err)
+	}
+}
+
+// Intent: the cached pending count must be exact whether or not it was loaded before the replace, with no
+// snapshot to replace and with one, and must equal a reload from the table.
+func TestReplaceTelemetryOfType_KeepsCachedCountExact(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.ReplaceTelemetryOfType("first", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Fatalf("pending count after the first snapshot = %d, want 1", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("second", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after replacing = %d, want 1", got)
+	}
+
+	if got := queuedIDs(t, store); got != "second" {
+		t.Errorf("rows = %s, want only the second snapshot", got)
+	}
+
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after a reload = %d, want 1", got)
+	}
+}
+
+// Intent: a snapshot the queue can never hold is refused before anything changes, so the snapshot it would have
+// replaced is still there to be delivered.
+func TestReplaceTelemetryOfType_RefusesAnOversizedPayloadAndKeepsTheOldSnapshot(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.EnqueueTelemetry("old", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	err := store.ReplaceTelemetryOfType("huge", TelemetryKubernetesCluster, strings.Repeat("x", MaxPayloadBytes+1))
+	if !errors.Is(err, ErrPayloadTooLarge) {
+		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+	}
+
+	if got := queuedIDs(t, store); got != "old" {
+		t.Errorf("rows = %s, want the old snapshot untouched", got)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("exact", TelemetryKubernetesCluster, strings.Repeat("x", MaxPayloadBytes)); err != nil {
+		t.Errorf("a payload of exactly the limit was refused: %v", err)
+	}
+}
+
+// Intent: the replace is one transaction. When the insert fails, here because the id is already a delivered
+// snapshot, the rows it deleted come back and the cached count is unchanged.
+func TestReplaceTelemetryOfType_RollsBackWholeWhenTheInsertFails(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.EnqueueTelemetry("taken-id", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"taken-id"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("waiting", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("taken-id", TelemetryKubernetesCluster, `{}`); err == nil {
+		t.Fatal("ReplaceTelemetryOfType succeeded with an id that is already in the queue")
+	}
+
+	if got, want := queuedIDs(t, store), "taken-id,waiting"; got != want {
+		t.Errorf("rows = %s, want %s: the failed replace must delete nothing", got, want)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+}
+
+// Intent: a replace obeys the same queue capacity as every other enqueue: when the queue is full the oldest
+// pending items of other kinds make room, and a snapshot never grows the queue past its limit.
+func TestReplaceTelemetryOfType_EvictsTheOldestPendingWhenTheQueueIsFull(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+
+	t.Cleanup(func() { database.Close() })
+
+	store := NewStore(database, 3)
+
+	for _, id := range []string{"a", "b"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	if err := store.EnqueueTelemetry("snap-1", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue snapshot: %v", err)
+	}
+
+	// Replacing the one snapshot keeps the queue at its limit, so nothing else is evicted.
+	if err := store.ReplaceTelemetryOfType("snap-2", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if got, want := queuedIDs(t, store), "a,b,snap-2"; got != want {
+		t.Errorf("rows = %s, want %s", got, want)
+	}
+
+	// With no snapshot to replace, the new one needs a place: the oldest pending item goes.
+	if _, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("c", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue c: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("snap-3", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace into a full queue: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 3 {
+		t.Errorf("pending count = %d, want the queue held to its limit of 3", got)
+	}
+
+	if got := queuedIDs(t, store); !strings.Contains(got, "snap-3") || strings.Count(got, ",") != 2 {
+		t.Errorf("rows = %s, want three rows including the new snapshot", got)
+	}
+}
+
+// Intent: the gate asks how long a cluster snapshot has been waiting, so the answer is the creation time of the
+// oldest snapshot that is pending or in flight, and nothing else counts: not other kinds, not delivered ones.
+func TestOldestQueuedTelemetry_ReportsTheOldestUndeliveredItemOfThatType(t *testing.T) {
+	store := newTestStore(t)
+
+	if _, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster); err != nil || found {
+		t.Fatalf("on an empty queue = found %v, err %v; want none", found, err)
+	}
+
+	setCreatedAt := func(id string, createdAt string) {
+		t.Helper()
+
+		if _, err := store.DB().Exec("UPDATE telemetry_queue SET created_at = ? WHERE id = ?", createdAt, id); err != nil {
+			t.Fatalf("set created_at: %v", err)
+		}
+	}
+
+	for _, row := range []struct {
+		id       string
+		itemType TelemetryType
+		created  string
+	}{
+		{"delivered", TelemetryKubernetesCluster, "2026-10-11T09:00:00Z"},
+		{"cpu", TelemetryCpuUsage, "2026-10-11T09:30:00Z"},
+		{"in-flight", TelemetryKubernetesCluster, "2026-10-11T10:00:00Z"},
+		{"waiting", TelemetryKubernetesCluster, "2026-10-11T11:00:00Z"},
+	} {
+		if err := store.EnqueueTelemetry(row.id, row.itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", row.id, err)
+		}
+
+		setCreatedAt(row.id, row.created)
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if err := store.UpdateTelemetryStatus("in-flight", QueueStatusProcessing); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+
+	created, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster)
+	if err != nil || found == false {
+		t.Fatalf("OldestQueuedTelemetry = found %v, err %v; want the in-flight snapshot", found, err)
+	}
+
+	if want := time.Date(2026, time.October, 11, 10, 0, 0, 0, time.UTC); created.Equal(want) == false {
+		t.Errorf("oldest = %v, want %v (the in-flight one: the delivered one is history)", created, want)
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"in-flight", "waiting"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if _, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster); err != nil || found {
+		t.Errorf("with every snapshot delivered = found %v, err %v; want none", found, err)
+	}
+}

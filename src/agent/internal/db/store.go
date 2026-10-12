@@ -603,6 +603,125 @@ func (s *Store) DeleteTelemetryByType(t TelemetryType) (int64, error) {
 	return deleted, nil
 }
 
+// ReplaceTelemetryOfType queues one item of a type that supersedes every older one still waiting to be
+// delivered. In a single transaction it deletes the pending and processing items of that type, makes room if the
+// queue is full, and inserts the new item as pending. A snapshot that fails at any step leaves the older one in
+// place. Items already delivered are history and stay. The cached pending count changes by one for the new item,
+// less the pending items it replaced and the items evicted for room; processing items were taken out of the count
+// when they were dequeued. An item the queue could never hold is refused before anything changes.
+//
+// Deleting a processing item while the sender holds it is safe: the sender's later completed or pending marks
+// match no row.
+func (s *Store) ReplaceTelemetryOfType(id string, t TelemetryType, payload string) error {
+	if len(payload) > MaxPayloadBytes {
+		return fmt.Errorf("%w: type %d is %d bytes, limit %d", ErrPayloadTooLarge, int(t), len(payload), MaxPayloadBytes)
+	}
+
+	// The count must be loaded before the transaction starts: the database has one connection, and a lazy load
+	// inside the transaction would wait for it forever.
+	count, err := s.loadPendingCount()
+	if err != nil {
+		return fmt.Errorf("checking queue depth: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replace telemetry transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var replacedPending int64
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM telemetry_queue WHERE item_type = ? AND status = ?",
+		int(t), int(QueueStatusPending),
+	).Scan(&replacedPending); err != nil {
+		return fmt.Errorf("counting pending telemetry of type %d: %w", int(t), err)
+	}
+
+	if _, err := tx.Exec(
+		"DELETE FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)",
+		int(t), int(QueueStatusPending), int(QueueStatusProcessing),
+	); err != nil {
+		return fmt.Errorf("deleting telemetry of type %d: %w", int(t), err)
+	}
+
+	// The queue holds at most maxQueueSize pending items, as EnqueueTelemetry keeps it: whatever the replaced
+	// items did not free is made up by dropping the oldest pending items.
+	var evicted int64
+	if remaining := count - replacedPending; remaining >= int64(s.maxQueueSize) {
+		result, err := tx.Exec(
+			`DELETE FROM telemetry_queue WHERE id IN (
+				SELECT id FROM telemetry_queue
+				WHERE status = ?
+				ORDER BY created_at ASC
+				LIMIT ?
+			)`,
+			int(QueueStatusPending), remaining-int64(s.maxQueueSize)+1,
+		)
+		if err != nil {
+			return fmt.Errorf("evicting oldest telemetry: %w", err)
+		}
+
+		if evicted, err = result.RowsAffected(); err != nil {
+			return fmt.Errorf("counting evicted telemetry: %w", err)
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := tx.Exec(
+		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id, int(t), payload, int(QueueStatusPending), now, now,
+	); err != nil {
+		if isSQLiteFull(err) {
+			slog.Warn("SQLite database disk full, dropping telemetry item")
+
+			return fmt.Errorf("database disk full: %w", err)
+		}
+
+		return fmt.Errorf("inserting telemetry of type %d: %w", int(t), err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing replace telemetry transaction: %w", err)
+	}
+
+	s.pendingCount.Add(1 - replacedPending - evicted)
+
+	if evicted > 0 {
+		slog.Warn("telemetry queue at capacity, evicted oldest items",
+			"evicted", evicted,
+			"max_queue_size", s.maxQueueSize,
+		)
+	}
+
+	return nil
+}
+
+// OldestQueuedTelemetry returns when the oldest pending or processing item of one type was queued, and false
+// when there is none. Delivered items are history and do not count. The cluster reporter's health gate uses it to
+// tell a snapshot that is not getting through from one that is merely waiting.
+func (s *Store) OldestQueuedTelemetry(t TelemetryType) (time.Time, bool, error) {
+	var oldest sql.NullString
+	if err := s.db.QueryRow(
+		"SELECT MIN(created_at) FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)",
+		int(t), int(QueueStatusPending), int(QueueStatusProcessing),
+	).Scan(&oldest); err != nil {
+		return time.Time{}, false, fmt.Errorf("finding the oldest queued telemetry of type %d: %w", int(t), err)
+	}
+
+	if oldest.Valid == false {
+		return time.Time{}, false, nil
+	}
+
+	created, err := time.Parse(time.RFC3339, oldest.String)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("reading the creation time of queued telemetry of type %d: %w", int(t), err)
+	}
+
+	return created, true, nil
+}
+
 // MarkTelemetryCompleted marks multiple items as completed.
 func (s *Store) MarkTelemetryCompleted(ids []string) error {
 	if len(ids) == 0 {

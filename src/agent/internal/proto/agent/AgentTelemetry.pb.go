@@ -44,6 +44,7 @@ const (
 	TelemetryTypes_SERVICE_STATUS_TYPE     TelemetryTypes = 12
 	TelemetryTypes_AGENT_VERSION_TYPE      TelemetryTypes = 13
 	TelemetryTypes_KUBERNETES_NODE_TYPE    TelemetryTypes = 14
+	TelemetryTypes_KUBERNETES_CLUSTER_TYPE TelemetryTypes = 15
 )
 
 // Enum value maps for TelemetryTypes.
@@ -64,6 +65,7 @@ var (
 		12: "SERVICE_STATUS_TYPE",
 		13: "AGENT_VERSION_TYPE",
 		14: "KUBERNETES_NODE_TYPE",
+		15: "KUBERNETES_CLUSTER_TYPE",
 	}
 	TelemetryTypes_value = map[string]int32{
 		"TELEMETRY_UNKNOWN":       0,
@@ -81,6 +83,7 @@ var (
 		"SERVICE_STATUS_TYPE":     12,
 		"AGENT_VERSION_TYPE":      13,
 		"KUBERNETES_NODE_TYPE":    14,
+		"KUBERNETES_CLUSTER_TYPE": 15,
 	}
 )
 
@@ -192,6 +195,7 @@ type TelemetryItem struct {
 	//	*TelemetryItem_ServiceStatus
 	//	*TelemetryItem_AgentVersion
 	//	*TelemetryItem_KubernetesNode
+	//	*TelemetryItem_KubernetesCluster
 	Payload       isTelemetryItem_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -381,6 +385,15 @@ func (x *TelemetryItem) GetKubernetesNode() *KubernetesNodeRecord {
 	return nil
 }
 
+func (x *TelemetryItem) GetKubernetesCluster() *KubernetesClusterRecord {
+	if x != nil {
+		if x, ok := x.Payload.(*TelemetryItem_KubernetesCluster); ok {
+			return x.KubernetesCluster
+		}
+	}
+	return nil
+}
+
 type isTelemetryItem_Payload interface {
 	isTelemetryItem_Payload()
 }
@@ -441,6 +454,10 @@ type TelemetryItem_KubernetesNode struct {
 	KubernetesNode *KubernetesNodeRecord `protobuf:"bytes,23,opt,name=kubernetes_node,json=kubernetesNode,proto3,oneof"`
 }
 
+type TelemetryItem_KubernetesCluster struct {
+	KubernetesCluster *KubernetesClusterRecord `protobuf:"bytes,24,opt,name=kubernetes_cluster,json=kubernetesCluster,proto3,oneof"`
+}
+
 func (*TelemetryItem_SystemInfo) isTelemetryItem_Payload() {}
 
 func (*TelemetryItem_OsVersion) isTelemetryItem_Payload() {}
@@ -468,6 +485,8 @@ func (*TelemetryItem_ServiceStatus) isTelemetryItem_Payload() {}
 func (*TelemetryItem_AgentVersion) isTelemetryItem_Payload() {}
 
 func (*TelemetryItem_KubernetesNode) isTelemetryItem_Payload() {}
+
+func (*TelemetryItem_KubernetesCluster) isTelemetryItem_Payload() {}
 
 type TelemetryAck struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
@@ -2329,6 +2348,323 @@ func (x *KubernetesNodeRecord) GetReporterError() string {
 	return ""
 }
 
+// One condition of a node that is not in its healthy state, such as MemoryPressure being True.
+type KubernetesNodeCondition struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Type               string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Status             string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	LastTransitionTime string                 `protobuf:"bytes,3,opt,name=last_transition_time,json=lastTransitionTime,proto3" json:"last_transition_time,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *KubernetesNodeCondition) Reset() {
+	*x = KubernetesNodeCondition{}
+	mi := &file_AgentTelemetry_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubernetesNodeCondition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubernetesNodeCondition) ProtoMessage() {}
+
+func (x *KubernetesNodeCondition) ProtoReflect() protoreflect.Message {
+	mi := &file_AgentTelemetry_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubernetesNodeCondition.ProtoReflect.Descriptor instead.
+func (*KubernetesNodeCondition) Descriptor() ([]byte, []int) {
+	return file_AgentTelemetry_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *KubernetesNodeCondition) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *KubernetesNodeCondition) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *KubernetesNodeCondition) GetLastTransitionTime() string {
+	if x != nil {
+		return x.LastTransitionTime
+	}
+	return ""
+}
+
+// One node of a cluster as the cluster itself reports it.
+type KubernetesClusterNode struct {
+	state                   protoimpl.MessageState     `protogen:"open.v1"`
+	Name                    string                     `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Roles                   []string                   `protobuf:"bytes,2,rep,name=roles,proto3" json:"roles,omitempty"`
+	ReadyStatus             string                     `protobuf:"bytes,3,opt,name=ready_status,json=readyStatus,proto3" json:"ready_status,omitempty"`
+	ReadySince              string                     `protobuf:"bytes,4,opt,name=ready_since,json=readySince,proto3" json:"ready_since,omitempty"`
+	Conditions              []*KubernetesNodeCondition `protobuf:"bytes,5,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	Unschedulable           bool                       `protobuf:"varint,6,opt,name=unschedulable,proto3" json:"unschedulable,omitempty"`
+	MachineId               string                     `protobuf:"bytes,7,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
+	KubeletVersion          string                     `protobuf:"bytes,8,opt,name=kubelet_version,json=kubeletVersion,proto3" json:"kubelet_version,omitempty"`
+	ContainerRuntimeVersion string                     `protobuf:"bytes,9,opt,name=container_runtime_version,json=containerRuntimeVersion,proto3" json:"container_runtime_version,omitempty"`
+	PodCount                int32                      `protobuf:"varint,10,opt,name=pod_count,json=podCount,proto3" json:"pod_count,omitempty"`
+	PodCapacity             int32                      `protobuf:"varint,11,opt,name=pod_capacity,json=podCapacity,proto3" json:"pod_capacity,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *KubernetesClusterNode) Reset() {
+	*x = KubernetesClusterNode{}
+	mi := &file_AgentTelemetry_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubernetesClusterNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubernetesClusterNode) ProtoMessage() {}
+
+func (x *KubernetesClusterNode) ProtoReflect() protoreflect.Message {
+	mi := &file_AgentTelemetry_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubernetesClusterNode.ProtoReflect.Descriptor instead.
+func (*KubernetesClusterNode) Descriptor() ([]byte, []int) {
+	return file_AgentTelemetry_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *KubernetesClusterNode) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *KubernetesClusterNode) GetReadyStatus() string {
+	if x != nil {
+		return x.ReadyStatus
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetReadySince() string {
+	if x != nil {
+		return x.ReadySince
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetConditions() []*KubernetesNodeCondition {
+	if x != nil {
+		return x.Conditions
+	}
+	return nil
+}
+
+func (x *KubernetesClusterNode) GetUnschedulable() bool {
+	if x != nil {
+		return x.Unschedulable
+	}
+	return false
+}
+
+func (x *KubernetesClusterNode) GetMachineId() string {
+	if x != nil {
+		return x.MachineId
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetKubeletVersion() string {
+	if x != nil {
+		return x.KubeletVersion
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetContainerRuntimeVersion() string {
+	if x != nil {
+		return x.ContainerRuntimeVersion
+	}
+	return ""
+}
+
+func (x *KubernetesClusterNode) GetPodCount() int32 {
+	if x != nil {
+		return x.PodCount
+	}
+	return 0
+}
+
+func (x *KubernetesClusterNode) GetPodCapacity() int32 {
+	if x != nil {
+		return x.PodCapacity
+	}
+	return 0
+}
+
+// A cluster snapshot, sent only by the host that holds the cluster's reporter Lease. A snapshot that carries a
+// reporter_error lists no nodes.
+type KubernetesClusterRecord struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	KubeSystemUid  string                 `protobuf:"bytes,1,opt,name=kube_system_uid,json=kubeSystemUid,proto3" json:"kube_system_uid,omitempty"`
+	ClusterVersion string                 `protobuf:"bytes,2,opt,name=cluster_version,json=clusterVersion,proto3" json:"cluster_version,omitempty"`
+	RoleVersion    int32                  `protobuf:"varint,3,opt,name=role_version,json=roleVersion,proto3" json:"role_version,omitempty"`
+	RoleOutdated   bool                   `protobuf:"varint,4,opt,name=role_outdated,json=roleOutdated,proto3" json:"role_outdated,omitempty"`
+	CaFingerprint  string                 `protobuf:"bytes,5,opt,name=ca_fingerprint,json=caFingerprint,proto3" json:"ca_fingerprint,omitempty"`
+	// The Lease's leaseTransitions when the snapshot was taken, which fences snapshots of an earlier holder.
+	LeaseTransitions int64 `protobuf:"varint,6,opt,name=lease_transitions,json=leaseTransitions,proto3" json:"lease_transitions,omitempty"`
+	// credentials_rejected, tls_ca_changed, api_unreachable or namespace_terminating, else empty.
+	ReporterError string `protobuf:"bytes,7,opt,name=reporter_error,json=reporterError,proto3" json:"reporter_error,omitempty"`
+	// True when nodes were left out to keep the snapshot within its size cap.
+	Truncated bool                     `protobuf:"varint,8,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	Nodes     []*KubernetesClusterNode `protobuf:"bytes,9,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	// The Lease's metadata.uid and creationTimestamp, which tell one Lease from the next one created after the
+	// reporter was disabled and enabled again.
+	LeaseUid       string `protobuf:"bytes,10,opt,name=lease_uid,json=leaseUid,proto3" json:"lease_uid,omitempty"`
+	LeaseCreatedAt string `protobuf:"bytes,11,opt,name=lease_created_at,json=leaseCreatedAt,proto3" json:"lease_created_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *KubernetesClusterRecord) Reset() {
+	*x = KubernetesClusterRecord{}
+	mi := &file_AgentTelemetry_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KubernetesClusterRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KubernetesClusterRecord) ProtoMessage() {}
+
+func (x *KubernetesClusterRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_AgentTelemetry_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KubernetesClusterRecord.ProtoReflect.Descriptor instead.
+func (*KubernetesClusterRecord) Descriptor() ([]byte, []int) {
+	return file_AgentTelemetry_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *KubernetesClusterRecord) GetKubeSystemUid() string {
+	if x != nil {
+		return x.KubeSystemUid
+	}
+	return ""
+}
+
+func (x *KubernetesClusterRecord) GetClusterVersion() string {
+	if x != nil {
+		return x.ClusterVersion
+	}
+	return ""
+}
+
+func (x *KubernetesClusterRecord) GetRoleVersion() int32 {
+	if x != nil {
+		return x.RoleVersion
+	}
+	return 0
+}
+
+func (x *KubernetesClusterRecord) GetRoleOutdated() bool {
+	if x != nil {
+		return x.RoleOutdated
+	}
+	return false
+}
+
+func (x *KubernetesClusterRecord) GetCaFingerprint() string {
+	if x != nil {
+		return x.CaFingerprint
+	}
+	return ""
+}
+
+func (x *KubernetesClusterRecord) GetLeaseTransitions() int64 {
+	if x != nil {
+		return x.LeaseTransitions
+	}
+	return 0
+}
+
+func (x *KubernetesClusterRecord) GetReporterError() string {
+	if x != nil {
+		return x.ReporterError
+	}
+	return ""
+}
+
+func (x *KubernetesClusterRecord) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *KubernetesClusterRecord) GetNodes() []*KubernetesClusterNode {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+func (x *KubernetesClusterRecord) GetLeaseUid() string {
+	if x != nil {
+		return x.LeaseUid
+	}
+	return ""
+}
+
+func (x *KubernetesClusterRecord) GetLeaseCreatedAt() string {
+	if x != nil {
+		return x.LeaseCreatedAt
+	}
+	return ""
+}
+
 type SshSessionRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	User          string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
@@ -2343,7 +2679,7 @@ type SshSessionRecord struct {
 
 func (x *SshSessionRecord) Reset() {
 	*x = SshSessionRecord{}
-	mi := &file_AgentTelemetry_proto_msgTypes[24]
+	mi := &file_AgentTelemetry_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2355,7 +2691,7 @@ func (x *SshSessionRecord) String() string {
 func (*SshSessionRecord) ProtoMessage() {}
 
 func (x *SshSessionRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_AgentTelemetry_proto_msgTypes[24]
+	mi := &file_AgentTelemetry_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2368,7 +2704,7 @@ func (x *SshSessionRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SshSessionRecord.ProtoReflect.Descriptor instead.
 func (*SshSessionRecord) Descriptor() ([]byte, []int) {
-	return file_AgentTelemetry_proto_rawDescGZIP(), []int{24}
+	return file_AgentTelemetry_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SshSessionRecord) GetUser() string {
@@ -2421,7 +2757,7 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x11TelemetryEnvelope\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12C\n" +
 	"\x0fagent_timestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x0eagentTimestamp\x12*\n" +
-	"\x05items\x18\x03 \x03(\v2\x14.agent.TelemetryItemR\x05items\"\xb8\b\n" +
+	"\x05items\x18\x03 \x03(\v2\x14.agent.TelemetryItemR\x05items\"\x89\t\n" +
 	"\rTelemetryItem\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12)\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x15.agent.TelemetryTypesR\x04type\x12=\n" +
@@ -2444,7 +2780,8 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x0fpackage_updates\x18\x14 \x01(\v2\x1b.agent.PackageUpdatesRecordH\x00R\x0epackageUpdates\x12C\n" +
 	"\x0eservice_status\x18\x15 \x01(\v2\x1a.agent.ServiceStatusRecordH\x00R\rserviceStatus\x12@\n" +
 	"\ragent_version\x18\x16 \x01(\v2\x19.agent.AgentVersionRecordH\x00R\fagentVersion\x12F\n" +
-	"\x0fkubernetes_node\x18\x17 \x01(\v2\x1b.agent.KubernetesNodeRecordH\x00R\x0ekubernetesNodeB\t\n" +
+	"\x0fkubernetes_node\x18\x17 \x01(\v2\x1b.agent.KubernetesNodeRecordH\x00R\x0ekubernetesNode\x12O\n" +
+	"\x12kubernetes_cluster\x18\x18 \x01(\v2\x1e.agent.KubernetesClusterRecordH\x00R\x11kubernetesClusterB\t\n" +
 	"\apayload\"\xd4\x01\n" +
 	"\fTelemetryAck\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x124\n" +
@@ -2624,7 +2961,41 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x18admin_credential_present\x18\b \x01(\bR\x16adminCredentialPresent\x12+\n" +
 	"\x11reporter_enrolled\x18\t \x01(\bR\x10reporterEnrolled\x12%\n" +
 	"\x0ereporter_error\x18\n" +
-	" \x01(\tR\rreporterError\"\xbb\x01\n" +
+	" \x01(\tR\rreporterError\"w\n" +
+	"\x17KubernetesNodeCondition\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x120\n" +
+	"\x14last_transition_time\x18\x03 \x01(\tR\x12lastTransitionTime\"\xaf\x03\n" +
+	"\x15KubernetesClusterNode\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05roles\x18\x02 \x03(\tR\x05roles\x12!\n" +
+	"\fready_status\x18\x03 \x01(\tR\vreadyStatus\x12\x1f\n" +
+	"\vready_since\x18\x04 \x01(\tR\n" +
+	"readySince\x12>\n" +
+	"\n" +
+	"conditions\x18\x05 \x03(\v2\x1e.agent.KubernetesNodeConditionR\n" +
+	"conditions\x12$\n" +
+	"\runschedulable\x18\x06 \x01(\bR\runschedulable\x12\x1d\n" +
+	"\n" +
+	"machine_id\x18\a \x01(\tR\tmachineId\x12'\n" +
+	"\x0fkubelet_version\x18\b \x01(\tR\x0ekubeletVersion\x12:\n" +
+	"\x19container_runtime_version\x18\t \x01(\tR\x17containerRuntimeVersion\x12\x1b\n" +
+	"\tpod_count\x18\n" +
+	" \x01(\x05R\bpodCount\x12!\n" +
+	"\fpod_capacity\x18\v \x01(\x05R\vpodCapacity\"\xc6\x03\n" +
+	"\x17KubernetesClusterRecord\x12&\n" +
+	"\x0fkube_system_uid\x18\x01 \x01(\tR\rkubeSystemUid\x12'\n" +
+	"\x0fcluster_version\x18\x02 \x01(\tR\x0eclusterVersion\x12!\n" +
+	"\frole_version\x18\x03 \x01(\x05R\vroleVersion\x12#\n" +
+	"\rrole_outdated\x18\x04 \x01(\bR\froleOutdated\x12%\n" +
+	"\x0eca_fingerprint\x18\x05 \x01(\tR\rcaFingerprint\x12+\n" +
+	"\x11lease_transitions\x18\x06 \x01(\x03R\x10leaseTransitions\x12%\n" +
+	"\x0ereporter_error\x18\a \x01(\tR\rreporterError\x12\x1c\n" +
+	"\ttruncated\x18\b \x01(\bR\ttruncated\x122\n" +
+	"\x05nodes\x18\t \x03(\v2\x1c.agent.KubernetesClusterNodeR\x05nodes\x12\x1b\n" +
+	"\tlease_uid\x18\n" +
+	" \x01(\tR\bleaseUid\x12(\n" +
+	"\x10lease_created_at\x18\v \x01(\tR\x0eleaseCreatedAt\"\xbb\x01\n" +
 	"\x10SshSessionRecord\x12\x12\n" +
 	"\x04user\x18\x01 \x01(\tR\x04user\x12\x1b\n" +
 	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x1f\n" +
@@ -2633,7 +3004,7 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x06action\x18\x04 \x01(\tR\x06action\x12\x1f\n" +
 	"\vauth_method\x18\x05 \x01(\tR\n" +
 	"authMethod\x12\x1c\n" +
-	"\ttimestamp\x18\x06 \x01(\tR\ttimestamp*\xf6\x02\n" +
+	"\ttimestamp\x18\x06 \x01(\tR\ttimestamp*\x93\x03\n" +
 	"\x0eTelemetryTypes\x12\x15\n" +
 	"\x11TELEMETRY_UNKNOWN\x10\x00\x12\x14\n" +
 	"\x10SYSTEM_INFO_TYPE\x10\x01\x12\x13\n" +
@@ -2650,7 +3021,8 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x14PACKAGE_UPDATES_TYPE\x10\v\x12\x17\n" +
 	"\x13SERVICE_STATUS_TYPE\x10\f\x12\x16\n" +
 	"\x12AGENT_VERSION_TYPE\x10\r\x12\x18\n" +
-	"\x14KUBERNETES_NODE_TYPE\x10\x0e2\x93\x01\n" +
+	"\x14KUBERNETES_NODE_TYPE\x10\x0e\x12\x1b\n" +
+	"\x17KUBERNETES_CLUSTER_TYPE\x10\x0f2\x93\x01\n" +
 	"\tTelemetry\x12D\n" +
 	"\x0fStreamTelemetry\x12\x18.agent.TelemetryEnvelope\x1a\x13.agent.TelemetryAck(\x010\x01\x12@\n" +
 	"\x0fSubmitTelemetry\x12\x18.agent.TelemetryEnvelope\x1a\x13.agent.TelemetryAckB\\Z,github.com/framlux/vord/internal/proto/agent\xaa\x02+Framlux.FleetManagement.Grpc.AgentTelemetryb\x06proto3"
@@ -2668,7 +3040,7 @@ func file_AgentTelemetry_proto_rawDescGZIP() []byte {
 }
 
 var file_AgentTelemetry_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_AgentTelemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_AgentTelemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_AgentTelemetry_proto_goTypes = []any{
 	(TelemetryTypes)(0),             // 0: agent.TelemetryTypes
 	(*TelemetryEnvelope)(nil),       // 1: agent.TelemetryEnvelope
@@ -2695,15 +3067,18 @@ var file_AgentTelemetry_proto_goTypes = []any{
 	(*ServiceEntry)(nil),            // 22: agent.ServiceEntry
 	(*AgentVersionRecord)(nil),      // 23: agent.AgentVersionRecord
 	(*KubernetesNodeRecord)(nil),    // 24: agent.KubernetesNodeRecord
-	(*SshSessionRecord)(nil),        // 25: agent.SshSessionRecord
-	(*timestamppb.Timestamp)(nil),   // 26: google.protobuf.Timestamp
-	(IngestRejectionReason)(0),      // 27: agent.IngestRejectionReason
+	(*KubernetesNodeCondition)(nil), // 25: agent.KubernetesNodeCondition
+	(*KubernetesClusterNode)(nil),   // 26: agent.KubernetesClusterNode
+	(*KubernetesClusterRecord)(nil), // 27: agent.KubernetesClusterRecord
+	(*SshSessionRecord)(nil),        // 28: agent.SshSessionRecord
+	(*timestamppb.Timestamp)(nil),   // 29: google.protobuf.Timestamp
+	(IngestRejectionReason)(0),      // 30: agent.IngestRejectionReason
 }
 var file_AgentTelemetry_proto_depIdxs = []int32{
-	26, // 0: agent.TelemetryEnvelope.agent_timestamp:type_name -> google.protobuf.Timestamp
+	29, // 0: agent.TelemetryEnvelope.agent_timestamp:type_name -> google.protobuf.Timestamp
 	2,  // 1: agent.TelemetryEnvelope.items:type_name -> agent.TelemetryItem
 	0,  // 2: agent.TelemetryItem.type:type_name -> agent.TelemetryTypes
-	26, // 3: agent.TelemetryItem.collected_at:type_name -> google.protobuf.Timestamp
+	29, // 3: agent.TelemetryItem.collected_at:type_name -> google.protobuf.Timestamp
 	4,  // 4: agent.TelemetryItem.system_info:type_name -> agent.SystemInfoRecord
 	5,  // 5: agent.TelemetryItem.os_version:type_name -> agent.OsVersionRecord
 	6,  // 6: agent.TelemetryItem.cpu_info:type_name -> agent.CpuInfoRecord
@@ -2712,31 +3087,34 @@ var file_AgentTelemetry_proto_depIdxs = []int32{
 	10, // 9: agent.TelemetryItem.cpu_utilization:type_name -> agent.CpuUtilizationRecord
 	11, // 10: agent.TelemetryItem.memory_utilization:type_name -> agent.MemoryUtilizationRecord
 	12, // 11: agent.TelemetryItem.disk_utilization:type_name -> agent.DiskUtilizationRecord
-	25, // 12: agent.TelemetryItem.ssh_session:type_name -> agent.SshSessionRecord
+	28, // 12: agent.TelemetryItem.ssh_session:type_name -> agent.SshSessionRecord
 	14, // 13: agent.TelemetryItem.hardware_health:type_name -> agent.HardwareHealthRecord
 	19, // 14: agent.TelemetryItem.package_updates:type_name -> agent.PackageUpdatesRecord
 	21, // 15: agent.TelemetryItem.service_status:type_name -> agent.ServiceStatusRecord
 	23, // 16: agent.TelemetryItem.agent_version:type_name -> agent.AgentVersionRecord
 	24, // 17: agent.TelemetryItem.kubernetes_node:type_name -> agent.KubernetesNodeRecord
-	27, // 18: agent.TelemetryAck.reason:type_name -> agent.IngestRejectionReason
-	26, // 19: agent.OsVersionRecord.install_date:type_name -> google.protobuf.Timestamp
-	9,  // 20: agent.DiskInfoRecord.disks:type_name -> agent.DiskInfoEntry
-	13, // 21: agent.DiskUtilizationRecord.disks:type_name -> agent.DiskUtilizationEntry
-	15, // 22: agent.HardwareHealthRecord.fans:type_name -> agent.FanReading
-	16, // 23: agent.HardwareHealthRecord.power_supplies:type_name -> agent.PowerSupplyReading
-	17, // 24: agent.HardwareHealthRecord.temperatures:type_name -> agent.TemperatureReading
-	18, // 25: agent.HardwareHealthRecord.disk_smart:type_name -> agent.DiskSmartReading
-	20, // 26: agent.PackageUpdatesRecord.updates:type_name -> agent.PackageUpdate
-	22, // 27: agent.ServiceStatusRecord.services:type_name -> agent.ServiceEntry
-	1,  // 28: agent.Telemetry.StreamTelemetry:input_type -> agent.TelemetryEnvelope
-	1,  // 29: agent.Telemetry.SubmitTelemetry:input_type -> agent.TelemetryEnvelope
-	3,  // 30: agent.Telemetry.StreamTelemetry:output_type -> agent.TelemetryAck
-	3,  // 31: agent.Telemetry.SubmitTelemetry:output_type -> agent.TelemetryAck
-	30, // [30:32] is the sub-list for method output_type
-	28, // [28:30] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	27, // 18: agent.TelemetryItem.kubernetes_cluster:type_name -> agent.KubernetesClusterRecord
+	30, // 19: agent.TelemetryAck.reason:type_name -> agent.IngestRejectionReason
+	29, // 20: agent.OsVersionRecord.install_date:type_name -> google.protobuf.Timestamp
+	9,  // 21: agent.DiskInfoRecord.disks:type_name -> agent.DiskInfoEntry
+	13, // 22: agent.DiskUtilizationRecord.disks:type_name -> agent.DiskUtilizationEntry
+	15, // 23: agent.HardwareHealthRecord.fans:type_name -> agent.FanReading
+	16, // 24: agent.HardwareHealthRecord.power_supplies:type_name -> agent.PowerSupplyReading
+	17, // 25: agent.HardwareHealthRecord.temperatures:type_name -> agent.TemperatureReading
+	18, // 26: agent.HardwareHealthRecord.disk_smart:type_name -> agent.DiskSmartReading
+	20, // 27: agent.PackageUpdatesRecord.updates:type_name -> agent.PackageUpdate
+	22, // 28: agent.ServiceStatusRecord.services:type_name -> agent.ServiceEntry
+	25, // 29: agent.KubernetesClusterNode.conditions:type_name -> agent.KubernetesNodeCondition
+	26, // 30: agent.KubernetesClusterRecord.nodes:type_name -> agent.KubernetesClusterNode
+	1,  // 31: agent.Telemetry.StreamTelemetry:input_type -> agent.TelemetryEnvelope
+	1,  // 32: agent.Telemetry.SubmitTelemetry:input_type -> agent.TelemetryEnvelope
+	3,  // 33: agent.Telemetry.StreamTelemetry:output_type -> agent.TelemetryAck
+	3,  // 34: agent.Telemetry.SubmitTelemetry:output_type -> agent.TelemetryAck
+	33, // [33:35] is the sub-list for method output_type
+	31, // [31:33] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_AgentTelemetry_proto_init() }
@@ -2760,6 +3138,7 @@ func file_AgentTelemetry_proto_init() {
 		(*TelemetryItem_ServiceStatus)(nil),
 		(*TelemetryItem_AgentVersion)(nil),
 		(*TelemetryItem_KubernetesNode)(nil),
+		(*TelemetryItem_KubernetesCluster)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2767,7 +3146,7 @@ func file_AgentTelemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_AgentTelemetry_proto_rawDesc), len(file_AgentTelemetry_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   25,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

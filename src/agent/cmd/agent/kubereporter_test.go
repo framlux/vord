@@ -102,14 +102,16 @@ func TestSnapshotFence_DeleteFailureDoesNotPanic(t *testing.T) {
 	newSnapshotFence(func(db.TelemetryType) (int64, error) { return 0, errors.New("disk full") })()
 }
 
-// Intent: the gate's three agent-side inputs are the ones the agent owns: the pause state, the sender's last
-// acknowledgement and the moment the reporter started counting from.
+// Intent: the gate's agent-side inputs are the ones the agent owns: the pause state, the sender's last
+// acknowledgement, the age of the oldest undelivered cluster snapshot and the moment the reporter started
+// counting from.
 func TestNewReporterGate_UsesTheAgentsOwnInputs(t *testing.T) {
 	started := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	acked := started.Add(time.Minute)
+	queued := started.Add(2 * time.Minute)
 	paused := false
 
-	gate := newReporterGate(func() bool { return paused }, func() time.Time { return acked }, started)
+	gate := newReporterGate(func() bool { return paused }, func() time.Time { return acked }, func() (time.Time, bool) { return queued, true }, started)
 
 	if gate.Paused() {
 		t.Error("Paused() = true for a host that is not paused")
@@ -127,5 +129,81 @@ func TestNewReporterGate_UsesTheAgentsOwnInputs(t *testing.T) {
 
 	if gate.StartedAt.Equal(started) == false {
 		t.Errorf("StartedAt = %v, want %v", gate.StartedAt, started)
+	}
+
+	if oldest, pending := gate.OldestPendingSnapshot(); (pending == false) || oldest.Equal(queued) == false {
+		t.Errorf("OldestPendingSnapshot() = %v, %v; want %v, true", oldest, pending, queued)
+	}
+}
+
+// Intent: the gate's question about a snapshot that is stuck is answered from the real queue: the creation time
+// of the oldest cluster snapshot that is pending or being sent, and nothing when the queue holds none, whatever
+// else it holds.
+func TestOldestPendingSnapshot_ReadsTheRealQueue(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() { database.Close() })
+
+	store := db.NewStore(database, 0)
+	oldest := newOldestPendingSnapshot(store.OldestQueuedTelemetry)
+
+	if _, pending := oldest(); pending {
+		t.Fatal("an empty queue reports a pending snapshot")
+	}
+
+	if err := store.EnqueueTelemetry("node", db.TelemetryKubernetesNode, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if _, pending := oldest(); pending {
+		t.Fatal("a queue holding only a node report reports a pending snapshot")
+	}
+
+	if err := store.ReplaceTelemetryOfType("snapshot", db.TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if _, err := store.DB().Exec("UPDATE telemetry_queue SET created_at = '2026-10-11T11:00:00Z' WHERE id = 'snapshot'"); err != nil {
+		t.Fatalf("set created_at: %v", err)
+	}
+
+	created, pending := oldest()
+	if want := time.Date(2026, 10, 11, 11, 0, 0, 0, time.UTC); (pending == false) || created.Equal(want) == false {
+		t.Fatalf("oldest = %v, %v; want %v, true", created, pending, want)
+	}
+
+	if _, err := store.DequeueTelemetryByTypes([]db.TelemetryType{db.TelemetryKubernetesCluster}, 1); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+
+	if _, pending := oldest(); pending == false {
+		t.Error("a snapshot the sender holds no longer counts as undelivered")
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"snapshot"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if _, pending := oldest(); pending {
+		t.Error("a delivered snapshot still counts as undelivered")
+	}
+}
+
+// Intent: a queue that cannot be read must not stop the Lease being held: the gate is told nothing is pending,
+// and the failure is logged.
+func TestOldestPendingSnapshot_AReadFailureReportsNothingPending(t *testing.T) {
+	oldest := newOldestPendingSnapshot(func(itemType db.TelemetryType) (time.Time, bool, error) {
+		if itemType != db.TelemetryKubernetesCluster {
+			t.Errorf("asked for type %d, want the cluster snapshot type", itemType)
+		}
+
+		return time.Date(2026, 10, 11, 11, 0, 0, 0, time.UTC), true, errors.New("database is locked")
+	})
+
+	if created, pending := oldest(); pending || created.IsZero() == false {
+		t.Errorf("oldest = %v, %v; want nothing pending", created, pending)
 	}
 }

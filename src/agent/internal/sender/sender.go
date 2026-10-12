@@ -47,6 +47,7 @@ var SlowTypes = []db.TelemetryType{
 	db.TelemetryPackageUpdates,
 	db.TelemetryAgentVersion,
 	db.TelemetryKubernetesNode,
+	db.TelemetryKubernetesCluster,
 }
 
 const (
@@ -516,6 +517,12 @@ var payloadDispatch = map[db.TelemetryType]payloadEntry{
 		newMsg: func() proto.Message { return &pb.KubernetesNodeRecord{} },
 		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
 			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_KubernetesNode{KubernetesNode: m.(*pb.KubernetesNodeRecord)}}
+		},
+	},
+	db.TelemetryKubernetesCluster: {
+		newMsg: func() proto.Message { return &pb.KubernetesClusterRecord{} },
+		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
+			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_KubernetesCluster{KubernetesCluster: m.(*pb.KubernetesClusterRecord)}}
 		},
 	},
 }

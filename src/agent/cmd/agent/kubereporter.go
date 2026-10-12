@@ -50,11 +50,29 @@ func newSnapshotFence(deleteByType func(db.TelemetryType) (int64, error)) func()
 }
 
 // newReporterGate builds the agent-side inputs of the reporter's health gate: whether the host is paused, when
-// the server last acknowledged a batch, and when the agent started counting from.
-func newReporterGate(paused func() bool, lastAck func() time.Time, startedAt time.Time) kubereporter.Gate {
+// the server last acknowledged a batch, when the oldest undelivered cluster snapshot was queued, and when the
+// agent started counting from. The count of error snapshots in a row is the runtime's own and is not set here.
+func newReporterGate(paused func() bool, lastAck func() time.Time, oldestPendingSnapshot func() (time.Time, bool), startedAt time.Time) kubereporter.Gate {
 	return kubereporter.Gate{
-		Paused:    paused,
-		LastAck:   lastAck,
-		StartedAt: startedAt,
+		Paused:                paused,
+		LastAck:               lastAck,
+		StartedAt:             startedAt,
+		OldestPendingSnapshot: oldestPendingSnapshot,
+	}
+}
+
+// newOldestPendingSnapshot builds the gate's view of the queue: when the oldest cluster snapshot that is pending
+// or being sent was queued. A queue that cannot be read reports none, so a database fault cannot make the holder
+// give up the Lease; it is logged.
+func newOldestPendingSnapshot(oldestQueued func(db.TelemetryType) (time.Time, bool, error)) func() (time.Time, bool) {
+	return func() (time.Time, bool) {
+		created, found, err := oldestQueued(db.TelemetryKubernetesCluster)
+		if err != nil {
+			slog.Warn("could not read the age of the queued cluster snapshot", "error", err)
+
+			return time.Time{}, false
+		}
+
+		return created, found
 	}
 }

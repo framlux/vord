@@ -114,6 +114,7 @@ type candidate struct {
 	identity string
 	elector  *Elector
 	lost     int
+	acquired int
 
 	paused     bool
 	ackFresh   bool
@@ -170,6 +171,8 @@ func (r *electorRig) newCandidateWithClient(instance string, factory func() (*ku
 		if c.lostHook != nil {
 			c.lostHook()
 		}
+	}, func() {
+		c.acquired++
 	})
 
 	return c
@@ -1815,5 +1818,105 @@ func TestElector_OnLostFiresForEachTenure(t *testing.T) {
 
 	if a.lost != 2 {
 		t.Errorf("onLost ran %d times after the second tenure, want 2", a.lost)
+	}
+}
+
+// Intent: the owner of the elector is told each time this agent starts leading, so a holder collects its first
+// snapshot at once. A renew is not an acquisition, and a standby never announces one.
+func TestElector_AnnouncesEachAcquisitionOnce(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	b := rig.newCandidate("bbbb")
+
+	if a.acquired != 0 {
+		t.Fatalf("acquired before any tick = %d, want 0", a.acquired)
+	}
+
+	a.tick()
+	b.tick()
+
+	if a.acquired != 1 {
+		t.Errorf("acquired after taking the Lease = %d, want 1", a.acquired)
+	}
+
+	if b.acquired != 0 {
+		t.Errorf("acquired by the standby = %d, want 0", b.acquired)
+	}
+
+	for i := 0; i < 3; i++ {
+		rig.advance(electionInterval)
+		a.tick()
+		b.tick()
+	}
+
+	if a.acquired != 1 {
+		t.Errorf("acquired after three renewals = %d, want still 1", a.acquired)
+	}
+
+	if _, ok := a.elector.IsLeader(); ok == false {
+		t.Fatal("a stopped leading")
+	}
+}
+
+// Intent: the announcement is made after the leadership is recorded, so a listener that reacts at once finds the
+// agent leading with the transition count and epoch of the tenure it just won.
+func TestElector_AnnouncesAcquisitionOnlyOnceLeadershipCanBeRead(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+
+	var transitions int64
+
+	var leaseUID string
+
+	var leading bool
+
+	a.elector.onAcquired = func() {
+		transitions, leaseUID, _, leading = a.elector.Leadership()
+	}
+
+	a.tick()
+
+	if leading == false || transitions != 1 || leaseUID == "" {
+		t.Errorf("leadership read from the announcement = %d, %q, %v; want transitions 1, the Lease uid, leading", transitions, leaseUID, leading)
+	}
+}
+
+// Intent: an agent that loses the Lease and finds its own claim still on the record takes it back without a new
+// transition, and that is an acquisition too: its snapshots were dropped when it lost, so its owner must collect
+// again.
+func TestElector_AnnouncesAReacquisitionThatKeepsTheTransitionCount(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	rig.api.inject(fault{method: http.MethodPut, path: leasePath, status: http.StatusInternalServerError, reason: "InternalError", times: 1})
+
+	rig.advance(electionInterval)
+	a.tick()
+
+	rig.advance(21 * time.Second)
+	a.requireNotLeader()
+	a.tick()
+	a.requireLeader(1)
+
+	if a.acquired != 2 {
+		t.Errorf("acquired = %d, want 2: once for each tenure", a.acquired)
+	}
+}
+
+// Intent: a gate failure that gives the Lease up and a later return to leadership announce a second acquisition.
+func TestElector_AnnouncesTheAcquisitionThatFollowsARelease(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	a.elector.Release(context.Background())
+
+	rig.advance(releaseBackoff + electionInterval)
+	a.tick()
+	a.requireLeader(2)
+
+	if a.acquired != 2 {
+		t.Errorf("acquired = %d, want 2", a.acquired)
 	}
 }

@@ -224,6 +224,7 @@ func TestPayloadDispatch_AllTypesRegistered(t *testing.T) {
 		db.TelemetryServiceStatus,
 		db.TelemetryAgentVersion,
 		db.TelemetryKubernetesNode,
+		db.TelemetryKubernetesCluster,
 	}
 
 	for _, tt := range allTypes {
@@ -423,6 +424,86 @@ func TestSetPayload_KubernetesNode_CarriesReporterError(t *testing.T) {
 
 	if node.ReporterError != "credentials_rejected" {
 		t.Errorf("ReporterError = %q, want credentials_rejected", node.ReporterError)
+	}
+}
+
+// Intent: a cluster snapshot queued as JSON reaches the server as the KubernetesCluster payload with every field
+// intact, including the nested nodes and conditions and the 64-bit transition count, which protojson writes as a
+// string and a hand-written payload may write as a number.
+func TestSetPayload_KubernetesCluster(t *testing.T) {
+	for name, transitions := range map[string]string{"string": `"7"`, "number": `7`} {
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+			telItem := &pb.TelemetryItem{}
+			s.setPayload(telItem, db.TelemetryQueueItem{
+				ID:       "test-kubernetes-cluster",
+				ItemType: db.TelemetryKubernetesCluster,
+				Payload: `{"kube_system_uid": "uid-1", "cluster_version": "v1.31.4+k3s1", "role_version": 1, "role_outdated": true, ` +
+					`"ca_fingerprint": "ab", "lease_transitions": ` + transitions + `, "reporter_error": "", "truncated": true, ` +
+					`"lease_uid": "lease-uid", "lease_created_at": "2026-10-11T12:00:00Z", "nodes": [` +
+					`{"name": "cp-1", "roles": ["control-plane", "master"], "ready_status": "True", "ready_since": "2026-10-11T10:00:00Z", ` +
+					`"conditions": [{"type": "MemoryPressure", "status": "True", "last_transition_time": "2026-10-11T11:00:00Z"}], ` +
+					`"unschedulable": true, "machine_id": "m-1", "kubelet_version": "v1.31.4", "container_runtime_version": "containerd://1.7.1", ` +
+					`"pod_count": 12, "pod_capacity": 110}]}`,
+			})
+
+			cluster := telItem.GetKubernetesCluster()
+			if cluster == nil {
+				t.Fatal("expected KubernetesCluster payload, got nil")
+			}
+
+			if cluster.KubeSystemUid != "uid-1" || cluster.ClusterVersion != "v1.31.4+k3s1" || cluster.CaFingerprint != "ab" ||
+				cluster.LeaseUid != "lease-uid" || cluster.LeaseCreatedAt != "2026-10-11T12:00:00Z" {
+				t.Errorf("unexpected string fields: %+v", cluster)
+			}
+
+			if cluster.RoleVersion != 1 || cluster.RoleOutdated == false || cluster.LeaseTransitions != 7 || cluster.Truncated == false {
+				t.Errorf("unexpected scalar fields: %+v", cluster)
+			}
+
+			if len(cluster.Nodes) != 1 {
+				t.Fatalf("nodes = %d, want 1", len(cluster.Nodes))
+			}
+
+			node := cluster.Nodes[0]
+			if node.Name != "cp-1" || len(node.Roles) != 2 || node.ReadyStatus != "True" || node.ReadySince != "2026-10-11T10:00:00Z" ||
+				node.Unschedulable == false || node.MachineId != "m-1" || node.KubeletVersion != "v1.31.4" ||
+				node.ContainerRuntimeVersion != "containerd://1.7.1" || node.PodCount != 12 || node.PodCapacity != 110 {
+				t.Errorf("unexpected node: %+v", node)
+			}
+
+			if len(node.Conditions) != 1 || node.Conditions[0].Type != "MemoryPressure" || node.Conditions[0].Status != "True" ||
+				node.Conditions[0].LastTransitionTime != "2026-10-11T11:00:00Z" {
+				t.Errorf("unexpected conditions: %+v", node.Conditions)
+			}
+		})
+	}
+}
+
+// Intent: the cluster snapshot is sent on the slow tier with the other once-in-a-while telemetry, and a snapshot
+// the sender dequeues is wrapped in the wire item of its own type.
+func TestBuildItems_KubernetesClusterCarriesTheClusterTypeAndPayload(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+	items := s.buildItems([]db.TelemetryQueueItem{{
+		ID:       "snapshot",
+		ItemType: db.TelemetryKubernetesCluster,
+		Payload:  `{"kube_system_uid": "uid-1"}`,
+	}})
+
+	if len(items) != 1 || items[0].Type != pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE {
+		t.Fatalf("items = %+v, want one of type KUBERNETES_CLUSTER_TYPE", items)
+	}
+
+	if items[0].GetKubernetesCluster().GetKubeSystemUid() != "uid-1" {
+		t.Errorf("payload = %+v, want the snapshot", items[0].GetPayload())
+	}
+
+	if int32(db.TelemetryKubernetesCluster) != int32(pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE) {
+		t.Errorf("agent type %d and wire type %d disagree", db.TelemetryKubernetesCluster, pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE)
 	}
 }
 
@@ -949,15 +1030,16 @@ func TestRunTier_FastTypes(t *testing.T) {
 // Intent: Slow tier processes only slow telemetry types.
 func TestRunTier_SlowTypes(t *testing.T) {
 	expectedSlow := map[db.TelemetryType]bool{
-		db.TelemetrySystemInfo:     true,
-		db.TelemetryOsVersion:      true,
-		db.TelemetryCpuInfo:        true,
-		db.TelemetryMemoryInfo:     true,
-		db.TelemetryDiskInfo:       true,
-		db.TelemetryHardwareHealth: true,
-		db.TelemetryPackageUpdates: true,
-		db.TelemetryAgentVersion:   true,
-		db.TelemetryKubernetesNode: true,
+		db.TelemetrySystemInfo:        true,
+		db.TelemetryOsVersion:         true,
+		db.TelemetryCpuInfo:           true,
+		db.TelemetryMemoryInfo:        true,
+		db.TelemetryDiskInfo:          true,
+		db.TelemetryHardwareHealth:    true,
+		db.TelemetryPackageUpdates:    true,
+		db.TelemetryAgentVersion:      true,
+		db.TelemetryKubernetesNode:    true,
+		db.TelemetryKubernetesCluster: true,
 	}
 
 	for _, tt := range SlowTypes {
