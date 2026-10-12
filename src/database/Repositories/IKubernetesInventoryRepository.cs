@@ -70,6 +70,45 @@ public interface IKubernetesInventoryRepository
     Task<LocalReportOutcome> ApplyLocalNodeReportAsync(LocalNodeReport report, DateTimeOffset now, CancellationToken ct);
 
     /// <summary>
+    /// Applies one cluster snapshot from the holder of a cluster's reporter Lease in its own
+    /// transaction under the tenant's Kubernetes lock, and advances the projection cursor to the
+    /// snapshot's telemetry id in the same transaction whatever the outcome.
+    /// <list type="number">
+    /// <item>
+    /// The cluster is resolved from the sender's candidate row, else its node row, else the
+    /// snapshot's UID, else the one UID-less cluster holding its CA fingerprint. No cluster is ever
+    /// created from an error snapshot or one without a fingerprint.
+    /// </item>
+    /// <item>
+    /// A UID is never overwritten: a cluster that holds a different UID is left as it is, and the
+    /// snapshot, the sender's candidate row and the nodes it lists move to the cluster of its own UID.
+    /// </item>
+    /// <item>
+    /// A second cluster holding the UID is merged in, and so is every UID-less cluster that is
+    /// fingerprint-related (it holds the fingerprint, or one of its nodes reported it within the last
+    /// hour) and shares a node name with the snapshot. The cluster with the lower id survives.
+    /// </item>
+    /// <item>
+    /// The surviving cluster then fences the snapshot per Lease epoch: an older epoch, a lower
+    /// transition count within the epoch, or an equal count that is not newer by (receipt time, id)
+    /// is ignored. A newer epoch starts the comparison over.
+    /// </item>
+    /// <item>
+    /// An accepted snapshot records the Lease state and the sender as the active reporter and keeps
+    /// the sender a candidate. An error snapshot only records its error. Any other snapshot upserts
+    /// its nodes, links them to machines by machine id when that is unambiguous, and, unless it is
+    /// truncated, removes nodes it no longer lists that no local report has described recently.
+    /// </item>
+    /// </list>
+    /// The method opens its own transaction, so it must not be called inside one.
+    /// </summary>
+    /// <param name="snapshot">The snapshot to apply.</param>
+    /// <param name="now">The time to record as the cursor's last advance and as the creation time of a cluster the snapshot founds.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>What the snapshot did to the inventory.</returns>
+    Task<SnapshotOutcome> ApplyClusterSnapshotAsync(ClusterSnapshot snapshot, DateTimeOffset now, CancellationToken ct);
+
+    /// <summary>
     /// Collects stale Kubernetes inventory one tenant at a time, each in its own transaction under
     /// that tenant's lock. The method opens those transactions itself, so it must not be called
     /// inside one.

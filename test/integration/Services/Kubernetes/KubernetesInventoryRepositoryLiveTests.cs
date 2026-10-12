@@ -798,6 +798,361 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
     }
 
+    [Test]
+    public async Task Live_SnapshotTenantLock_SerialisesTwoSnapshotsThatWouldBothFoundTheSameCluster()
+    {
+        // Intent: two holders report the same new cluster at the same moment. Both would insert a cluster
+        // with the same UID if they could interleave, and the unique index would make one of them fail.
+        // Both are held at the tenant's Kubernetes lock until it is released, then run one after the
+        // other, so there is exactly one cluster whatever order they run in, and it ends up with the
+        // state of the snapshot with the higher transition count. The interleaving is forced by watching
+        // the server's lock waits, never by sleeping.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long holderA = await SeedMachineAsync(seedDb, tenantId);
+        long holderB = await SeedMachineAsync(seedDb, tenantId);
+        string uid = Guid.NewGuid().ToString();
+        string fingerprint = NewFingerprint();
+        DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        string nameA = NewApplicationName("holder-a");
+        string nameB = NewApplicationName("holder-b");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task<SnapshotOutcome> first;
+        Task<SnapshotOutcome> second;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            first = ApplySnapshotOnNewConnectionAsync(
+                nameA, LiveSnapshot(1, tenantId, holderA, at, uid, fingerprint, transitions: 1, nodes: [LiveNode("n1"), LiveNode("n3")]));
+            bool firstBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(_migratedConnectionString, nameA, first, failsafe.Token);
+
+            second = ApplySnapshotOnNewConnectionAsync(
+                nameB, LiveSnapshot(2, tenantId, holderB, at.AddSeconds(1), uid, fingerprint, transitions: 2, nodes: [LiveNode("n1"), LiveNode("n2")]));
+            bool secondBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(_migratedConnectionString, nameB, second, failsafe.Token);
+
+            await Assert.That(firstBlocked).IsTrue();
+            await Assert.That(secondBlocked).IsTrue();
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        SnapshotOutcome outcomeA = await first;
+        SnapshotOutcome outcomeB = await second;
+
+        await Assert.That(outcomeB).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That((outcomeA == SnapshotOutcome.Accepted) || (outcomeA == SnapshotOutcome.Fenced)).IsTrue();
+        KubernetesCluster cluster = await seedDb.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+        await Assert.That(cluster.KubeSystemUid).IsEqualTo(uid);
+        await Assert.That(cluster.LeaseTransitions).IsEqualTo(2L);
+        await Assert.That(cluster.ActiveReporterMachineId).IsEqualTo(holderB);
+        List<string> nodeNames = (await seedDb.KubernetesNodes.Where(n => n.ClusterId == cluster.Id).ToListAsync()).Select(n => n.NodeName).Order().ToList();
+        await Assert.That(nodeNames).IsEquivalentTo(new[] { "n1", "n2" });
+        await Assert.That(await seedDb.KubernetesReporterCandidates.CountAsync(c => c.MachineId == holderB)).IsEqualTo(1);
+        await Assert.That(await seedDb.KubernetesReporterCandidates.CountAsync(c => c.MachineId == holderA))
+            .IsEqualTo(outcomeA == SnapshotOutcome.Accepted ? 1 : 0);
+
+        await CleanUpKubernetesRowsAsync(seedDb, tenantId);
+    }
+
+    [Test]
+    public async Task Live_SnapshotTenantLock_SerialisesTwoSnapshotsThatMergeTheSameSplitCluster()
+    {
+        // Intent: a cluster that local reports split in two is reported by a holder from each half, and both
+        // snapshots want to merge the halves. Without the lock both would try to delete the same cluster
+        // and move the same rows. Held and then released, they run one after the other: the first merges,
+        // the second finds one cluster. Whichever runs first, the older cluster survives with both
+        // candidates and every node, holds the UID and carries the higher transition count.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long holderA = await SeedMachineAsync(seedDb, tenantId);
+        long holderB = await SeedMachineAsync(seedDb, tenantId);
+        string uid = Guid.NewGuid().ToString();
+        string fingerprint = NewFingerprint();
+        DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long older = await SeedLiveClusterAsync(seedDb, tenantId, fingerprint, displayName: "older");
+        long younger = await SeedLiveClusterAsync(seedDb, tenantId, fingerprint);
+        await SeedLiveCandidateAsync(seedDb, tenantId, older, holderA, at.AddMinutes(-5));
+        await SeedLiveCandidateAsync(seedDb, tenantId, younger, holderB, at.AddMinutes(-5));
+        await SeedLiveNodeAsync(seedDb, tenantId, older, "a-node", holderA, at.AddMinutes(-5));
+        await SeedLiveNodeAsync(seedDb, tenantId, younger, "b-node", holderB, at.AddMinutes(-5));
+        ClusterSnapshotNode[] listed = [LiveNode("a-node"), LiveNode("b-node")];
+        string nameA = NewApplicationName("holder-a");
+        string nameB = NewApplicationName("holder-b");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task<SnapshotOutcome> first;
+        Task<SnapshotOutcome> second;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            first = ApplySnapshotOnNewConnectionAsync(
+                nameA, LiveSnapshot(1, tenantId, holderA, at, uid, fingerprint, transitions: 1, nodes: listed));
+            bool firstBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(_migratedConnectionString, nameA, first, failsafe.Token);
+
+            second = ApplySnapshotOnNewConnectionAsync(
+                nameB, LiveSnapshot(2, tenantId, holderB, at.AddSeconds(1), uid, fingerprint, transitions: 2, nodes: listed));
+            bool secondBlocked = await PostgresLockProbe.WaitUntilBlockedAsync(_migratedConnectionString, nameB, second, failsafe.Token);
+
+            await Assert.That(firstBlocked).IsTrue();
+            await Assert.That(secondBlocked).IsTrue();
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        SnapshotOutcome outcomeB = await second;
+        SnapshotOutcome outcomeA = await first;
+
+        await Assert.That(outcomeB).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That((outcomeA == SnapshotOutcome.Accepted) || (outcomeA == SnapshotOutcome.Fenced)).IsTrue();
+        KubernetesCluster cluster = await seedDb.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+        await Assert.That(cluster.Id).IsEqualTo(older);
+        await Assert.That(cluster.DisplayName).IsEqualTo("older");
+        await Assert.That(cluster.KubeSystemUid).IsEqualTo(uid);
+        await Assert.That(cluster.LeaseTransitions).IsEqualTo(2L);
+        await Assert.That(cluster.ActiveReporterMachineId).IsEqualTo(holderB);
+        List<string> nodeNames = (await seedDb.KubernetesNodes.Where(n => n.ClusterId == older).ToListAsync()).Select(n => n.NodeName).Order().ToList();
+        await Assert.That(nodeNames).IsEquivalentTo(new[] { "a-node", "b-node" });
+        await Assert.That(await seedDb.KubernetesReporterCandidates.CountAsync(c => (c.ClusterId == older) && (c.TenantId == tenantId))).IsEqualTo(2);
+
+        await CleanUpKubernetesRowsAsync(seedDb, tenantId);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Live_SnapshotUidMerge_KeepsTheLowerIdAndHoldsEveryUniqueIndexOnPostgres(bool uidHolderIsOlder)
+    {
+        // Intent: the merge runs its moves, combines and deletes against the real indexes and foreign keys:
+        // the partial unique index over (tenant, UID), the unique machine link of a node, the unique
+        // (cluster, node name) and the unique machine of a candidate. Two same-named nodes linked to
+        // different machines combine into one row that keeps the newer local report's machine, whichever
+        // cluster the surviving row came from.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long sender = await SeedMachineAsync(db, tenantId);
+        long other = await SeedMachineAsync(db, tenantId);
+        long machineOld = await SeedMachineAsync(db, tenantId);
+        long machineNew = await SeedMachineAsync(db, tenantId);
+        string uid = Guid.NewGuid().ToString();
+        string fingerprint = NewFingerprint();
+        DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long uidless;
+        long uidHolder;
+        if (uidHolderIsOlder)
+        {
+            uidHolder = await SeedLiveClusterAsync(db, tenantId, fingerprint, uid: uid);
+            uidless = await SeedLiveClusterAsync(db, tenantId, fingerprint);
+        }
+        else
+        {
+            uidless = await SeedLiveClusterAsync(db, tenantId, fingerprint);
+            uidHolder = await SeedLiveClusterAsync(db, tenantId, fingerprint, uid: uid);
+        }
+
+        await SeedLiveCandidateAsync(db, tenantId, uidless, sender, at.AddMinutes(-30));
+        await SeedLiveCandidateAsync(db, tenantId, uidHolder, other, at.AddMinutes(-30));
+        await SeedLiveNodeAsync(db, tenantId, uidless, "a", sender, at.AddMinutes(-3));
+        await SeedLiveNodeAsync(db, tenantId, uidHolder, "b", other, at.AddMinutes(-3));
+        await SeedLiveNodeAsync(db, tenantId, uidless, "dup", machineOld, at.AddHours(-3));
+        await SeedLiveNodeAsync(db, tenantId, uidHolder, "dup", machineNew, at.AddMinutes(-10));
+
+        SnapshotOutcome outcome = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(10, tenantId, sender, at, uid, fingerprint, nodes: [LiveNode("a"), LiveNode("b"), LiveNode("dup")]), at, CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        KubernetesCluster survivor = await db.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+        await Assert.That(survivor.Id).IsEqualTo(Math.Min(uidless, uidHolder));
+        await Assert.That(survivor.KubeSystemUid).IsEqualTo(uid);
+        Dictionary<string, KubernetesNode> nodes = (await db.KubernetesNodes.Where(n => n.ClusterId == survivor.Id).ToListAsync())
+            .ToDictionary(n => n.NodeName);
+        await Assert.That(nodes.Keys.Order()).IsEquivalentTo(new[] { "a", "b", "dup" });
+        await Assert.That(nodes["dup"].MachineId).IsEqualTo(machineNew);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.MachineId == machineOld)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => (c.ClusterId == survivor.Id) && (c.TenantId == tenantId))).IsEqualTo(2);
+
+        await CleanUpKubernetesRowsAsync(db, tenantId);
+    }
+
+    [Test]
+    public async Task Live_SnapshotSeparationAndOverlapMerge_RunAgainstTheRealIndexesOnPostgres()
+    {
+        // Intent: the hardest ordering of the algorithm on the production database. A sender grouped into
+        // a cluster with another UID is separated into a cluster founded for its own UID, and an older
+        // UID-less cluster that overlaps it is then merged in. The younger, founded cluster is deleted
+        // before the older one takes the UID, so the partial unique index never sees two holders. The same
+        // snapshot links an unlinked node to its machine through the system id compared in SQL without
+        // regard to case, and removes the node the snapshot no longer lists.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long sender = await SeedMachineAsync(db, tenantId);
+        string systemId = Guid.NewGuid().ToString("N");
+        long linkable = await SeedMachineAsync(db, tenantId, systemId: systemId.ToUpperInvariant());
+        string uidFirst = Guid.NewGuid().ToString();
+        string uidSecond = Guid.NewGuid().ToString();
+        string fingerprint = NewFingerprint();
+        DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long uidless = await SeedLiveClusterAsync(db, tenantId, fingerprint, displayName: "second cluster");
+        long firstUid = await SeedLiveClusterAsync(db, tenantId, fingerprint, uid: uidFirst);
+        await SeedLiveCandidateAsync(db, tenantId, firstUid, sender, at.AddMinutes(-30));
+        await SeedLiveNodeAsync(db, tenantId, uidless, "m-1", null, at.AddMinutes(-20));
+        await SeedLiveNodeAsync(db, tenantId, firstUid, "m-2", sender, at.AddMinutes(-20));
+        await SeedLiveNodeAsync(db, tenantId, uidless, "gone", null, at.AddHours(-5));
+
+        SnapshotOutcome outcome = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(10, tenantId, sender, at, uidSecond, fingerprint, nodes: [LiveNode("m-1"), LiveNode("m-2"), LiveNode("m-3", systemId.ToLowerInvariant())]),
+            at, CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        List<KubernetesCluster> clusters = await db.KubernetesClusters.Where(c => c.TenantId == tenantId).OrderBy(c => c.Id).ToListAsync();
+        await Assert.That(clusters.Select(c => c.Id)).IsEquivalentTo(new[] { uidless, firstUid });
+        await Assert.That(clusters[0].KubeSystemUid).IsEqualTo(uidSecond);
+        await Assert.That(clusters[0].DisplayName).IsEqualTo("second cluster");
+        await Assert.That(clusters[1].KubeSystemUid).IsEqualTo(uidFirst);
+        Dictionary<string, KubernetesNode> nodes = (await db.KubernetesNodes.Where(n => n.ClusterId == uidless).ToListAsync())
+            .ToDictionary(n => n.NodeName);
+        await Assert.That(nodes.Keys.Order()).IsEquivalentTo(new[] { "m-1", "m-2", "m-3" });
+        await Assert.That(nodes["m-3"].MachineId).IsEqualTo(linkable);
+        await Assert.That(nodes["m-2"].MachineId).IsEqualTo(sender);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.ClusterId == firstUid)).IsEqualTo(0);
+        await Assert.That((await db.KubernetesReporterCandidates.SingleAsync(c => c.MachineId == sender)).ClusterId).IsEqualTo(uidless);
+
+        await CleanUpKubernetesRowsAsync(db, tenantId);
+    }
+
+    [Test]
+    public async Task Live_SnapshotFencing_IsPerLeaseEpochOnPostgres()
+    {
+        // Intent: the epoch comparison reads back what Postgres stored. A new Lease epoch restarts the
+        // transition count and is accepted, a snapshot of the old epoch is then fenced, and the stored
+        // timestamps compare as the instants the agent sent.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long sender = await SeedMachineAsync(db, tenantId);
+        string uid = Guid.NewGuid().ToString();
+        string fingerprint = NewFingerprint();
+        DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset epochOne = at.AddDays(-30);
+        DateTimeOffset epochTwo = at.AddDays(-1);
+
+        SnapshotOutcome first = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(1, tenantId, sender, at, uid, fingerprint, transitions: 7, leaseCreatedAt: epochOne), at, CancellationToken.None);
+        SnapshotOutcome sameEpochLower = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(2, tenantId, sender, at.AddMinutes(1), uid, fingerprint, transitions: 6, leaseCreatedAt: epochOne), at, CancellationToken.None);
+        SnapshotOutcome newEpoch = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(3, tenantId, sender, at.AddMinutes(2), uid, fingerprint, transitions: 1, leaseCreatedAt: epochTwo), at, CancellationToken.None);
+        SnapshotOutcome oldEpoch = await repo.ApplyClusterSnapshotAsync(
+            LiveSnapshot(4, tenantId, sender, at.AddMinutes(3), uid, fingerprint, transitions: 99, leaseCreatedAt: epochOne), at, CancellationToken.None);
+
+        await Assert.That(first).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That(sameEpochLower).IsEqualTo(SnapshotOutcome.Fenced);
+        await Assert.That(newEpoch).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That(oldEpoch).IsEqualTo(SnapshotOutcome.Fenced);
+        KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+        await Assert.That(cluster.LeaseCreatedAt).IsEqualTo(epochTwo);
+        await Assert.That(cluster.LeaseTransitions).IsEqualTo(1L);
+        await Assert.That(cluster.LastSnapshotTelemetryId).IsEqualTo(3L);
+
+        await CleanUpKubernetesRowsAsync(db, tenantId);
+    }
+
+    /// <summary>
+    /// Removes the Kubernetes rows a test seeded for its tenant. Garbage collection visits every tenant of
+    /// the shared database and counts what it deletes, so a test must not leave rows behind that a later
+    /// test's collection would pick up.
+    /// </summary>
+    private static async Task CleanUpKubernetesRowsAsync(DatabaseContext db, int tenantId)
+    {
+        await db.KubernetesReporterCandidates.Where(c => c.TenantId == tenantId).DeleteAsync();
+        await db.KubernetesNodes.Where(n => n.TenantId == tenantId).DeleteAsync();
+        await db.KubernetesClusters.Where(c => c.TenantId == tenantId).DeleteAsync();
+    }
+
+    private static string NewFingerprint()
+    {
+        return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+    }
+
+    private static ClusterSnapshotNode LiveNode(string name, string? machineId = null)
+    {
+        return new ClusterSnapshotNode(name, machineId, ["worker"], "True", null, [], false, "v1.30.4+k3s1", "containerd://1.7.23", 3, 110);
+    }
+
+    private static ClusterSnapshot LiveSnapshot(
+        long telemetryId,
+        int tenantId,
+        long machineId,
+        DateTimeOffset at,
+        string uid,
+        string fingerprint,
+        long transitions = 1,
+        DateTimeOffset? leaseCreatedAt = null,
+        IReadOnlyList<ClusterSnapshotNode>? nodes = null)
+    {
+        return new ClusterSnapshot(
+            telemetryId, tenantId, machineId, at, uid, fingerprint, "v1.30.4+k3s1", false, transitions, "lease-uid",
+            leaseCreatedAt ?? at.AddDays(-30), null, false, nodes ?? []);
+    }
+
+    private static Task<SnapshotOutcome> ApplySnapshotOnNewConnectionAsync(string applicationName, ClusterSnapshot snapshot)
+    {
+        return Task.Run(async () =>
+        {
+            await using DatabaseContext db = CreateContext(applicationName);
+
+            return await CreateRepo(db).ApplyClusterSnapshotAsync(snapshot, snapshot.ServerReceivedAt, CancellationToken.None);
+        });
+    }
+
+    private static async Task<long> SeedLiveClusterAsync(
+        DatabaseContext db, int tenantId, string fingerprint, string? uid = null, string? displayName = null)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+
+        return await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = fingerprint,
+            DisplayName = displayName,
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            KubeSystemUid = uid,
+        });
+    }
+
+    private static async Task SeedLiveCandidateAsync(
+        DatabaseContext db, int tenantId, long clusterId, long machineId, DateTimeOffset lastReportAt)
+    {
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = lastReportAt,
+        });
+    }
+
+    private static async Task<long> SeedLiveNodeAsync(
+        DatabaseContext db, int tenantId, long clusterId, string nodeName, long? machineId, DateTimeOffset lastLocalReportAt)
+    {
+        return await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = nodeName,
+            MachineId = machineId,
+            LastLocalReportAt = lastLocalReportAt,
+        });
+    }
+
     private static string NewApplicationName(string role)
     {
         return $"vord-test-{role}-{Guid.NewGuid():N}";
@@ -863,7 +1218,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         });
     }
 
-    private static async Task<long> SeedMachineAsync(DatabaseContext db, int tenantId)
+    private static async Task<long> SeedMachineAsync(DatabaseContext db, int tenantId, string? systemId = null)
     {
         long registrationTokenId = await db.InsertWithInt64IdentityAsync(new RegistrationToken
         {
@@ -881,7 +1236,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             ApiKeyHash = Guid.NewGuid().ToString("N"),
             Name = "kubernetes-live-machine",
             SerialNumber = Guid.NewGuid().ToString("N"),
-            SystemId = Guid.NewGuid().ToString("N"),
+            SystemId = systemId ?? Guid.NewGuid().ToString("N"),
             MachineType = MachineTypes.BareMetalServer,
             OperatingSystem = OperatingSystems.Ubuntu,
             RegistrationTokenId = registrationTokenId,

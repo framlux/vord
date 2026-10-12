@@ -9,7 +9,7 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 /// </summary>
 public enum KubernetesProjectionFailureReason
 {
-    /// <summary>The stored payload could not be read as a node report or described no usable node.</summary>
+    /// <summary>The stored payload could not be read as a node report or a cluster snapshot, or described no usable node or Lease.</summary>
     InvalidPayload,
 
     /// <summary>Applying the row kept failing with errors that look temporary, until the retry budget ran out.</summary>

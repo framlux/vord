@@ -15,9 +15,10 @@ using System.Text.Json;
 namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 
 /// <summary>
-/// Continuously reads Kubernetes node reports (telemetry type 14) past its own cursor and applies
-/// each one to the Kubernetes inventory, so a tenant's clusters and nodes follow what its machines
-/// report about themselves.
+/// Continuously reads Kubernetes node reports (telemetry type 14) and cluster snapshots (type 15) past
+/// its own cursor and applies each one to the Kubernetes inventory, so a tenant's clusters and nodes
+/// follow what its machines report about themselves and what the holder of a cluster's reporter Lease
+/// reports about the cluster.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -69,6 +70,9 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
     /// the constructor.
     /// </summary>
     internal static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromSeconds(5);
+
+    private const string NodeReportDescription = "node report";
+    private const string ClusterSnapshotDescription = "cluster snapshot";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IAdvisoryLockProvider _advisoryLockProvider;
@@ -284,13 +288,23 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
     /// <returns>True when the rest of the batch must wait because this row failed temporarily.</returns>
     private async Task<bool> ProcessRowAsync(MachineTelemetry row, CancellationToken ct)
     {
-        if (row.TelemetryType != TelemetryTypeIds.KubernetesNode)
+        if (row.TelemetryType == TelemetryTypeIds.KubernetesNode)
         {
-            await SkipRowAsync(row.Id, ct);
-
-            return false;
+            return await ProcessNodeReportAsync(row, ct);
         }
 
+        if (row.TelemetryType == TelemetryTypeIds.KubernetesCluster)
+        {
+            return await ProcessClusterSnapshotAsync(row, ct);
+        }
+
+        await SkipRowAsync(row.Id, ct);
+
+        return false;
+    }
+
+    private async Task<bool> ProcessNodeReportAsync(MachineTelemetry row, CancellationToken ct)
+    {
         KubernetesNodePayload? payload;
         try
         {
@@ -298,14 +312,14 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         }
         catch (JsonException ex)
         {
-            await SkipInvalidPayloadAsync(row, "the payload is not valid JSON for a node report", ex, ct);
+            await SkipInvalidPayloadAsync(row, NodeReportDescription, "the payload is not valid JSON for a node report", ex, ct);
 
             return false;
         }
 
         if (payload is null)
         {
-            await SkipInvalidPayloadAsync(row, "the payload is empty", null, ct);
+            await SkipInvalidPayloadAsync(row, NodeReportDescription, "the payload is empty", null, ct);
 
             return false;
         }
@@ -313,19 +327,73 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         LocalNodeReport? report = NormalisePayload(payload, row);
         if (report is null)
         {
-            await SkipInvalidPayloadAsync(row, "the payload names no distro or its node name is not a valid Kubernetes node name", null, ct);
+            await SkipInvalidPayloadAsync(
+                row, NodeReportDescription, "the payload names no distro or its node name is not a valid Kubernetes node name", null, ct);
 
             return false;
         }
 
+        return await ApplyRowAsync(
+            row,
+            NodeReportDescription,
+            async repository => await repository.ApplyLocalNodeReportAsync(report, _timeProvider.GetUtcNow(), ct),
+            ct);
+    }
+
+    private async Task<bool> ProcessClusterSnapshotAsync(MachineTelemetry row, CancellationToken ct)
+    {
+        KubernetesClusterPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<KubernetesClusterPayload>(row.Payload, JsonDefaults.SnakeCase);
+        }
+        catch (JsonException ex)
+        {
+            await SkipInvalidPayloadAsync(row, ClusterSnapshotDescription, "the payload is not valid JSON for a cluster snapshot", ex, ct);
+
+            return false;
+        }
+
+        if (payload is null)
+        {
+            await SkipInvalidPayloadAsync(row, ClusterSnapshotDescription, "the payload is empty", null, ct);
+
+            return false;
+        }
+
+        ClusterSnapshot? snapshot = KubernetesClusterPayloadNormaliser.Normalise(payload, row);
+        if (snapshot is null)
+        {
+            await SkipInvalidPayloadAsync(
+                row, ClusterSnapshotDescription, "the Lease it was taken under has no readable creation time or a negative transition count", null, ct);
+
+            return false;
+        }
+
+        return await ApplyRowAsync(
+            row,
+            ClusterSnapshotDescription,
+            async repository => await repository.ApplyClusterSnapshotAsync(snapshot, _timeProvider.GetUtcNow(), ct),
+            ct);
+    }
+
+    /// <summary>
+    /// Applies a row through the repository, retrying temporary failures and skipping the row for good
+    /// when it can never be applied.
+    /// </summary>
+    /// <returns>True when the rest of the batch must wait because this row failed temporarily.</returns>
+    private async Task<bool> ApplyRowAsync<TOutcome>(
+        MachineTelemetry row, string description, Func<IKubernetesInventoryRepository, Task<TOutcome>> apply, CancellationToken ct)
+        where TOutcome : struct, Enum
+    {
         try
         {
             using IServiceScope scope = _scopeFactory.CreateScope();
             IKubernetesInventoryRepository repository = scope.ServiceProvider.GetRequiredService<IKubernetesInventoryRepository>();
 
-            LocalReportOutcome outcome = await repository.ApplyLocalNodeReportAsync(report, _timeProvider.GetUtcNow(), ct);
+            TOutcome outcome = await apply(repository);
             ClearRetryState();
-            _logger.LogDebug("Kubernetes node report {TelemetryId} applied with outcome {Outcome}", row.Id, outcome);
+            _logger.LogDebug("Kubernetes {Description} {TelemetryId} applied with outcome {Outcome}", description, row.Id, outcome);
 
             return false;
         }
@@ -333,7 +401,7 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         {
             if (KubernetesProjectionErrors.IsTransient(ex) == true)
             {
-                return await HandleTransientFailureAsync(row, ex, ct);
+                return await HandleTransientFailureAsync(row, description, ex, ct);
             }
 
             // The row only counts as skipped once the cursor has moved past it. If that write fails the
@@ -341,7 +409,7 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
             await SkipRowAsync(row.Id, ct);
             ClearRetryState();
             _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.ApplyFailed);
-            _logger.LogError(ex, "Kubernetes node report {TelemetryId} could not be applied and was skipped", row.Id);
+            _logger.LogError(ex, "Kubernetes {Description} {TelemetryId} could not be applied and was skipped", description, row.Id);
 
             return false;
         }
@@ -352,7 +420,7 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
     /// for the next poll; once it is spent the row is skipped so it cannot hold the stream back forever.
     /// </summary>
     /// <returns>True when the row stays for another attempt; false when it was skipped.</returns>
-    private async Task<bool> HandleTransientFailureAsync(MachineTelemetry row, Exception exception, CancellationToken ct)
+    private async Task<bool> HandleTransientFailureAsync(MachineTelemetry row, string description, Exception exception, CancellationToken ct)
     {
         _retryAttempts = (_retryTelemetryId == row.Id) ? (_retryAttempts + 1) : 1;
         _retryTelemetryId = row.Id;
@@ -361,8 +429,8 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         {
             _logger.LogWarning(
                 exception,
-                "Kubernetes node report {TelemetryId} hit a temporary error on attempt {Attempt} of {MaxAttempts}, retrying after {Delay}",
-                row.Id, _retryAttempts, MaxTransientAttempts, PollInterval);
+                "Kubernetes {Description} {TelemetryId} hit a temporary error on attempt {Attempt} of {MaxAttempts}, retrying after {Delay}",
+                description, row.Id, _retryAttempts, MaxTransientAttempts, PollInterval);
 
             return true;
         }
@@ -374,18 +442,18 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.RetriesExhausted);
         _logger.LogError(
             exception,
-            "Kubernetes node report {TelemetryId} still failed after {MaxAttempts} attempts and was skipped",
-            row.Id, MaxTransientAttempts);
+            "Kubernetes {Description} {TelemetryId} still failed after {MaxAttempts} attempts and was skipped",
+            description, row.Id, MaxTransientAttempts);
 
         return false;
     }
 
-    private async Task SkipInvalidPayloadAsync(MachineTelemetry row, string reason, Exception? exception, CancellationToken ct)
+    private async Task SkipInvalidPayloadAsync(MachineTelemetry row, string description, string reason, Exception? exception, CancellationToken ct)
     {
         await SkipRowAsync(row.Id, ct);
         ClearRetryState();
         _metrics.RecordProjectionFailure(KubernetesProjectionFailureReason.InvalidPayload);
-        _logger.LogError(exception, "Kubernetes node report {TelemetryId} was skipped: {Reason}", row.Id, reason);
+        _logger.LogError(exception, "Kubernetes {Description} {TelemetryId} was skipped: {Reason}", description, row.Id, reason);
     }
 
     /// <summary>

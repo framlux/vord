@@ -8,6 +8,8 @@ using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -897,5 +899,842 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     private static bool IsNewerThan(DateTimeOffset? stored, DateTimeOffset incoming)
     {
         return (stored != null) && (stored.Value > incoming);
+    }
+
+    /// <summary>
+    /// How many values one <c>IN</c> list carries, which keeps a snapshot of any size well below the
+    /// parameter limit of both database providers.
+    /// </summary>
+    private const int KubernetesInListChunkSize = 500;
+
+    /// <summary>Options for the JSON text stored in the node columns that hold lists.</summary>
+    private static readonly JsonSerializerOptions KubernetesStoredJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>A machine's id with its system id, which is all the machine-id link needs of a machine.</summary>
+    private sealed record MachineSystemId(long Id, string SystemId);
+
+    /// <inheritdoc/>
+    public async Task<SnapshotOutcome> ApplyClusterSnapshotAsync(ClusterSnapshot snapshot, DateTimeOffset now, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        await using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        await AcquireKubernetesTenantLockAsync(snapshot.TenantId, ct);
+
+        SnapshotOutcome outcome = await ResolveAndApplySnapshotAsync(snapshot, now, ct);
+
+        // The cursor moves in the same transaction as the write it accounts for, whatever the outcome,
+        // so a crash can neither lose an applied snapshot's cursor advance nor advance past one that
+        // was never applied.
+        await UpsertKubernetesCursorAsync(snapshot.TelemetryId, now, ct);
+        await transaction.CommitAsync(ct);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// Finds the snapshot's cluster, separates it from clusters that share its CA, merges in the
+    /// clusters it turns out to be split across, fences the snapshot against the surviving cluster and
+    /// applies it. The order is deliberate: fencing before the merges would compare the snapshot with
+    /// the wrong epoch or transition count. Must run inside the tenant's transaction and lock.
+    /// </summary>
+    private async Task<SnapshotOutcome> ResolveAndApplySnapshotAsync(ClusterSnapshot snapshot, DateTimeOffset now, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        long machineId = snapshot.MachineId;
+
+        Machine? machine = await _db.Machines
+            .Where(m => (m.Id == machineId) && (m.TenantId == tenantId))
+            .FirstOrDefaultAsync(ct);
+
+        if ((machine == null) || machine.IsDeleted)
+        {
+            return SnapshotOutcome.MachineDeleted;
+        }
+
+        string? uid = string.IsNullOrEmpty(snapshot.KubeSystemUid) ? null : snapshot.KubeSystemUid;
+        string? fingerprint = string.IsNullOrEmpty(snapshot.CaFingerprint) ? null : snapshot.CaFingerprint;
+        bool isError = string.IsNullOrEmpty(snapshot.ReporterError) == false;
+
+        KubernetesCluster? cluster = await FindSnapshotClusterAsync(snapshot, uid, fingerprint, ct);
+        if (cluster == null)
+        {
+            // An error snapshot says nothing about the cluster, and one without a fingerprint cannot
+            // be told apart from the tenant's other clusters, so neither may found one.
+            if (isError || (fingerprint == null))
+            {
+                return SnapshotOutcome.Unresolved;
+            }
+
+            cluster = await CreateSnapshotClusterAsync(tenantId, fingerprint, uid, now, ct);
+        }
+
+        // A cluster's UID is never overwritten. A snapshot that names a different UID than the cluster
+        // its sender was grouped into belongs to another cluster sharing the CA, and takes its sender
+        // and the nodes it lists along.
+        if ((uid != null) && (cluster.KubeSystemUid != null) && (string.Equals(cluster.KubeSystemUid, uid, StringComparison.Ordinal) == false))
+        {
+            KubernetesCluster? owner = await FindClusterByUidAsync(tenantId, uid, ct);
+            if (owner == null)
+            {
+                if (isError || (fingerprint == null))
+                {
+                    return SnapshotOutcome.Unresolved;
+                }
+
+                owner = await CreateSnapshotClusterAsync(tenantId, fingerprint, uid, now, ct);
+            }
+
+            _logger.LogInformation(
+                "Kubernetes cluster snapshot {TelemetryId} names UID {Uid}, not that of cluster {ClusterId}, so machine {MachineId} and the nodes it lists moved to cluster {OwnerId}",
+                snapshot.TelemetryId, uid, cluster.Id, machineId, owner.Id);
+            await MoveSnapshotMembersAsync(cluster, owner, snapshot, ct);
+            cluster = owner;
+        }
+
+        if (uid != null)
+        {
+            long currentId = cluster.Id;
+            KubernetesCluster? holder = await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId) && (c.KubeSystemUid == uid) && (c.Id != currentId))
+                .FirstOrDefaultAsync(ct);
+
+            if (holder != null)
+            {
+                cluster = await MergeClustersAsync(cluster, holder, ct);
+            }
+        }
+
+        if ((fingerprint != null) && (isError == false) && (snapshot.Nodes.Count > 0))
+        {
+            foreach (long relatedId in await FindOverlappingClusterIdsAsync(snapshot, fingerprint, cluster.Id, ct))
+            {
+                KubernetesCluster related = await LoadClusterAsync(tenantId, relatedId, ct);
+                cluster = await MergeClustersAsync(cluster, related, ct);
+            }
+        }
+
+        cluster = await LoadClusterAsync(tenantId, cluster.Id, ct);
+        if (IsFencedBySurvivor(cluster, snapshot))
+        {
+            _logger.LogDebug(
+                "Kubernetes cluster snapshot {TelemetryId} from machine {MachineId} is not newer than the state of cluster {ClusterId} and was ignored",
+                snapshot.TelemetryId, machineId, cluster.Id);
+
+            return SnapshotOutcome.Fenced;
+        }
+
+        await RecordAcceptedSnapshotAsync(cluster, snapshot, uid, fingerprint, isError, ct);
+        await UpsertSnapshotCandidateAsync(cluster.Id, snapshot, ct);
+        if (fingerprint != null)
+        {
+            await RecomputeFingerprintMismatchAsync(cluster.Id, fingerprint, ct);
+        }
+
+        if (isError)
+        {
+            return SnapshotOutcome.ErrorRecorded;
+        }
+
+        await UpsertSnapshotNodesAsync(cluster.Id, snapshot, ct);
+        if (snapshot.Truncated == false)
+        {
+            await RemoveNodesAbsentFromSnapshotAsync(cluster.Id, snapshot, ct);
+        }
+
+        return SnapshotOutcome.Accepted;
+    }
+
+    /// <summary>
+    /// Resolves the cluster a snapshot belongs to: the sender's candidate row, else the sender's node,
+    /// else the cluster holding the snapshot's UID, else the one UID-less cluster holding its CA
+    /// fingerprint. Returns nothing when none of them applies.
+    /// </summary>
+    private async Task<KubernetesCluster?> FindSnapshotClusterAsync(
+        ClusterSnapshot snapshot, string? uid, string? fingerprint, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        long machineId = snapshot.MachineId;
+
+        KubernetesReporterCandidate? candidate = await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+
+        if (candidate != null)
+        {
+            long candidateClusterId = candidate.ClusterId;
+            KubernetesCluster? ofCandidate = await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId) && (c.Id == candidateClusterId))
+                .FirstOrDefaultAsync(ct);
+
+            if (ofCandidate != null)
+            {
+                return ofCandidate;
+            }
+        }
+
+        KubernetesNode? node = await _db.KubernetesNodes
+            .Where(n => (n.TenantId == tenantId) && (n.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+
+        if (node != null)
+        {
+            long nodeClusterId = node.ClusterId;
+            KubernetesCluster? ofNode = await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId) && (c.Id == nodeClusterId))
+                .FirstOrDefaultAsync(ct);
+
+            if (ofNode != null)
+            {
+                return ofNode;
+            }
+        }
+
+        if (uid != null)
+        {
+            KubernetesCluster? ofUid = await FindClusterByUidAsync(tenantId, uid, ct);
+            if (ofUid != null)
+            {
+                return ofUid;
+            }
+        }
+
+        if (fingerprint == null)
+        {
+            return null;
+        }
+
+        // Only a CA held by exactly one cluster without a UID identifies it; several leave the snapshot
+        // to found a cluster of its own.
+        List<KubernetesCluster> uidless = await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.CaFingerprint == fingerprint) && (c.KubeSystemUid == null))
+            .OrderBy(c => c.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        return (uidless.Count == 1) ? uidless[0] : null;
+    }
+
+    private async Task<KubernetesCluster?> FindClusterByUidAsync(int tenantId, string uid, CancellationToken ct)
+    {
+        return await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId) && (c.KubeSystemUid == uid))
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private async Task<KubernetesCluster> LoadClusterAsync(int tenantId, long clusterId, CancellationToken ct)
+    {
+        return await _db.KubernetesClusters.FirstAsync(c => (c.TenantId == tenantId) && (c.Id == clusterId), ct);
+    }
+
+    /// <summary>
+    /// Founds a cluster for a snapshot. Its distro is unknown until a local report names one, which the
+    /// local report path then takes over.
+    /// </summary>
+    private async Task<KubernetesCluster> CreateSnapshotClusterAsync(
+        int tenantId, string fingerprint, string? uid, DateTimeOffset now, CancellationToken ct)
+    {
+        KubernetesCluster created = new()
+        {
+            TenantId = tenantId,
+            CaFingerprint = fingerprint,
+            Distro = UnknownKubernetesDistro,
+            FirstSeenAt = now,
+            LastSeenAt = now,
+            KubeSystemUid = uid,
+        };
+        created.Id = await _db.InsertWithInt64IdentityAsync(created, token: ct);
+
+        return created;
+    }
+
+    /// <summary>
+    /// Moves the sender's candidate row and the nodes the snapshot lists from the cluster its sender was
+    /// grouped into to the cluster of the snapshot's own UID. A node the target already has by name is
+    /// combined with the moved one.
+    /// </summary>
+    private async Task MoveSnapshotMembersAsync(
+        KubernetesCluster from, KubernetesCluster to, ClusterSnapshot snapshot, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        long machineId = snapshot.MachineId;
+        long fromId = from.Id;
+        long toId = to.Id;
+
+        await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId) && (c.ClusterId == fromId))
+            .Set(c => c.ClusterId, toId)
+            .UpdateAsync(ct);
+
+        List<string> names = snapshot.Nodes.Select(n => n.Name).Distinct(StringComparer.Ordinal).ToList();
+        if (names.Count == 0)
+        {
+            return;
+        }
+
+        List<KubernetesNode> moving = await _db.KubernetesNodes
+            .Where(n => (n.ClusterId == fromId) && names.Contains(n.NodeName))
+            .ToListAsync(ct);
+
+        Dictionary<string, KubernetesNode> targetByName = await NodesByNameAsync(toId, ct);
+        foreach (KubernetesNode node in moving)
+        {
+            await MoveNodeAsync(node, toId, targetByName, ct);
+        }
+
+        await RecomputeFingerprintMismatchAsync(toId, to.CaFingerprint, ct);
+    }
+
+    private async Task<Dictionary<string, KubernetesNode>> NodesByNameAsync(long clusterId, CancellationToken ct)
+    {
+        List<KubernetesNode> nodes = await _db.KubernetesNodes.Where(n => n.ClusterId == clusterId).ToListAsync(ct);
+
+        return nodes.ToDictionary(n => n.NodeName, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the ids of the other clusters in the tenant that are the snapshot's cluster split in two:
+    /// they have no UID, are related by CA (they hold the snapshot's fingerprint, or one of their nodes
+    /// reported it within the last hour) and have a node the snapshot lists by name. A node name alone
+    /// never qualifies, because default names such as <c>ubuntu</c> collide across a tenant's clusters.
+    /// A node of the same name that is linked to a machine whose system id equals the listed node's
+    /// machine id is a node of that name too, so it needs no case of its own.
+    /// </summary>
+    private async Task<List<long>> FindOverlappingClusterIdsAsync(
+        ClusterSnapshot snapshot, string fingerprint, long clusterId, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        DateTimeOffset recentSince = snapshot.ServerReceivedAt - KubernetesRecentReportWindow;
+        List<string> names = snapshot.Nodes.Select(n => n.Name).Distinct(StringComparer.Ordinal).ToList();
+
+        return await _db.KubernetesClusters
+            .Where(c => (c.TenantId == tenantId)
+                && (c.Id != clusterId)
+                && (c.KubeSystemUid == null)
+                && ((c.CaFingerprint == fingerprint)
+                    || _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && (n.ReportedCaFingerprint == fingerprint) && (n.LastLocalReportAt >= recentSince)))
+                && _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && names.Contains(n.NodeName)))
+            .OrderBy(c => c.Id)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Merges two clusters of one real cluster into the one with the lower id, which keeps its id, its
+    /// name (or takes the other's if it has none) and the newer of the two Lease states, and receives the
+    /// other's nodes, candidates and UID. The other cluster is deleted before the survivor takes its UID,
+    /// so the unique index over (tenant, UID) holds throughout.
+    /// </summary>
+    /// <returns>The surviving cluster as stored after the merge.</returns>
+    private async Task<KubernetesCluster> MergeClustersAsync(KubernetesCluster first, KubernetesCluster second, CancellationToken ct)
+    {
+        int tenantId = first.TenantId;
+        long survivorId = Math.Min(first.Id, second.Id);
+        long otherId = Math.Max(first.Id, second.Id);
+        KubernetesCluster survivor = await LoadClusterAsync(tenantId, survivorId, ct);
+        KubernetesCluster other = await LoadClusterAsync(tenantId, otherId, ct);
+
+        _logger.LogInformation(
+            "Kubernetes cluster {OtherId} is the same cluster as {SurvivorId} and was merged into it",
+            otherId, survivorId);
+
+        Dictionary<string, KubernetesNode> survivorByName = await NodesByNameAsync(survivorId, ct);
+        List<KubernetesNode> otherNodes = await _db.KubernetesNodes.Where(n => n.ClusterId == otherId).ToListAsync(ct);
+        foreach (KubernetesNode node in otherNodes)
+        {
+            await MoveNodeAsync(node, survivorId, survivorByName, ct);
+        }
+
+        await _db.KubernetesReporterCandidates
+            .Where(c => c.ClusterId == otherId)
+            .Set(c => c.ClusterId, survivorId)
+            .UpdateAsync(ct);
+
+        await _db.KubernetesClusters.Where(c => c.Id == otherId).DeleteAsync(ct);
+
+        // The Lease state, the reporter that sent it and the details of that snapshot travel together.
+        KubernetesCluster leaseSource = (CompareLeaseState(other, survivor) > 0) ? other : survivor;
+        string? clusterVersion = leaseSource.ClusterVersion ?? survivor.ClusterVersion ?? other.ClusterVersion;
+        string? displayName = string.IsNullOrWhiteSpace(survivor.DisplayName) ? other.DisplayName : survivor.DisplayName;
+        string distro = (string.Equals(survivor.Distro, UnknownKubernetesDistro, StringComparison.Ordinal)
+            && (string.Equals(other.Distro, UnknownKubernetesDistro, StringComparison.Ordinal) == false))
+            ? other.Distro
+            : survivor.Distro;
+        DateTimeOffset firstSeenAt = (other.FirstSeenAt < survivor.FirstSeenAt) ? other.FirstSeenAt : survivor.FirstSeenAt;
+        DateTimeOffset lastSeenAt = (other.LastSeenAt > survivor.LastSeenAt) ? other.LastSeenAt : survivor.LastSeenAt;
+        string? uid = survivor.KubeSystemUid ?? other.KubeSystemUid;
+        string? leaseUid = leaseSource.LeaseUid;
+        DateTimeOffset? leaseCreatedAt = leaseSource.LeaseCreatedAt;
+        long leaseTransitions = leaseSource.LeaseTransitions;
+        DateTimeOffset? lastSnapshotReceivedAt = leaseSource.LastSnapshotReceivedAt;
+        long? lastSnapshotTelemetryId = leaseSource.LastSnapshotTelemetryId;
+        long? activeReporter = leaseSource.ActiveReporterMachineId;
+        string? reporterError = leaseSource.ReporterError;
+        bool roleOutdated = leaseSource.RoleOutdated;
+        bool truncated = leaseSource.Truncated;
+
+        await _db.KubernetesClusters
+            .Where(c => c.Id == survivorId)
+            .Set(c => c.DisplayName, displayName)
+            .Set(c => c.Distro, distro)
+            .Set(c => c.FirstSeenAt, firstSeenAt)
+            .Set(c => c.LastSeenAt, lastSeenAt)
+            .Set(c => c.KubeSystemUid, uid)
+            .Set(c => c.ClusterVersion, clusterVersion)
+            .Set(c => c.ReporterError, reporterError)
+            .Set(c => c.RoleOutdated, roleOutdated)
+            .Set(c => c.Truncated, truncated)
+            .Set(c => c.LeaseUid, leaseUid)
+            .Set(c => c.LeaseCreatedAt, leaseCreatedAt)
+            .Set(c => c.LeaseTransitions, leaseTransitions)
+            .Set(c => c.LastSnapshotReceivedAt, lastSnapshotReceivedAt)
+            .Set(c => c.LastSnapshotTelemetryId, lastSnapshotTelemetryId)
+            .Set(c => c.ActiveReporterMachineId, activeReporter)
+            .UpdateAsync(ct);
+
+        await RecomputeFingerprintMismatchAsync(survivorId, survivor.CaFingerprint, ct);
+
+        return await LoadClusterAsync(tenantId, survivorId, ct);
+    }
+
+    /// <summary>
+    /// Orders two clusters by their Lease state: the newer Lease epoch first, then the larger transition
+    /// count within an epoch, then the newer last accepted snapshot. A cluster that has accepted nothing
+    /// is older than one that has.
+    /// </summary>
+    private static int CompareLeaseState(KubernetesCluster a, KubernetesCluster b)
+    {
+        int byEpoch = Nullable.Compare(a.LeaseCreatedAt, b.LeaseCreatedAt);
+        if (byEpoch != 0)
+        {
+            return byEpoch;
+        }
+
+        int byTransitions = a.LeaseTransitions.CompareTo(b.LeaseTransitions);
+        if (byTransitions != 0)
+        {
+            return byTransitions;
+        }
+
+        int byTime = Nullable.Compare(a.LastSnapshotReceivedAt, b.LastSnapshotReceivedAt);
+        if (byTime != 0)
+        {
+            return byTime;
+        }
+
+        return Nullable.Compare(a.LastSnapshotTelemetryId, b.LastSnapshotTelemetryId);
+    }
+
+    /// <summary>
+    /// Moves a node into another cluster. When the target already has a node of the same name the two are
+    /// combined, because a cluster holds a node name once.
+    /// </summary>
+    private async Task MoveNodeAsync(
+        KubernetesNode node, long targetClusterId, Dictionary<string, KubernetesNode> targetByName, CancellationToken ct)
+    {
+        if (targetByName.TryGetValue(node.NodeName, out KubernetesNode? kept) == false)
+        {
+            long nodeId = node.Id;
+            await _db.KubernetesNodes
+                .Where(n => n.Id == nodeId)
+                .Set(n => n.ClusterId, targetClusterId)
+                .UpdateAsync(ct);
+
+            node.ClusterId = targetClusterId;
+            targetByName[node.NodeName] = node;
+
+            return;
+        }
+
+        await CombineNodesAsync(kept, node, ct);
+    }
+
+    /// <summary>
+    /// Combines two rows of one node into the kept row. The fields that only the node's own machine
+    /// reports come from the row with the newer local report, the fields only the cluster reporter
+    /// reports come from the row with the newer sighting, and the kubelet version, which either may
+    /// report, comes from the row that was updated last. The machine link comes from whichever row has
+    /// one, the row with the newer local report first. The other row is deleted before the kept row takes
+    /// its link, so the unique index over the link holds.
+    /// </summary>
+    private async Task CombineNodesAsync(KubernetesNode kept, KubernetesNode moving, CancellationToken ct)
+    {
+        KubernetesNode local = (Nullable.Compare(moving.LastLocalReportAt, kept.LastLocalReportAt) > 0) ? moving : kept;
+        KubernetesNode otherLocal = ReferenceEquals(local, kept) ? moving : kept;
+        KubernetesNode sighting = (Nullable.Compare(moving.LastReporterSeenAt, kept.LastReporterSeenAt) > 0) ? moving : kept;
+        KubernetesNode freshest = (Nullable.Compare(LastActivityOf(moving), LastActivityOf(kept)) > 0) ? moving : kept;
+        long? machineId = local.MachineId ?? otherLocal.MachineId;
+        long keptId = kept.Id;
+        long movingId = moving.Id;
+
+        await _db.KubernetesNodes.Where(n => n.Id == movingId).DeleteAsync(ct);
+        await _db.KubernetesNodes
+            .Where(n => n.Id == keptId)
+            .Set(n => n.MachineId, machineId)
+            .Set(n => n.ReportedCaFingerprint, local.ReportedCaFingerprint)
+            .Set(n => n.FingerprintMismatch, local.FingerprintMismatch)
+            .Set(n => n.LocalControlPlane, local.LocalControlPlane)
+            .Set(n => n.LastLocalReportAt, local.LastLocalReportAt)
+            .Set(n => n.KubeletVersion, freshest.KubeletVersion)
+            .Set(n => n.NodeMachineId, sighting.NodeMachineId)
+            .Set(n => n.Roles, sighting.Roles)
+            .Set(n => n.ReadyStatus, sighting.ReadyStatus)
+            .Set(n => n.ReadySince, sighting.ReadySince)
+            .Set(n => n.Conditions, sighting.Conditions)
+            .Set(n => n.Unschedulable, sighting.Unschedulable)
+            .Set(n => n.UnschedulableSince, sighting.UnschedulableSince)
+            .Set(n => n.ContainerRuntimeVersion, sighting.ContainerRuntimeVersion)
+            .Set(n => n.PodCount, sighting.PodCount)
+            .Set(n => n.PodCapacity, sighting.PodCapacity)
+            .Set(n => n.LastReporterSeenAt, sighting.LastReporterSeenAt)
+            .UpdateAsync(ct);
+    }
+
+    private static DateTimeOffset? LastActivityOf(KubernetesNode node)
+    {
+        if (node.LastLocalReportAt == null)
+        {
+            return node.LastReporterSeenAt;
+        }
+
+        if (node.LastReporterSeenAt == null)
+        {
+            return node.LastLocalReportAt;
+        }
+
+        return (node.LastLocalReportAt > node.LastReporterSeenAt) ? node.LastLocalReportAt : node.LastReporterSeenAt;
+    }
+
+    /// <summary>
+    /// Reports whether the cluster has accepted a snapshot the new one must not replace. A newer Lease
+    /// epoch always passes, because uninstall deletes the Lease and the next one restarts the transition
+    /// count. Within an epoch a lower count is stale, and an equal one passes only when it is strictly
+    /// newer by (receipt time, telemetry id) than the last accepted snapshot.
+    /// </summary>
+    private static bool IsFencedBySurvivor(KubernetesCluster cluster, ClusterSnapshot snapshot)
+    {
+        if (cluster.LeaseCreatedAt == null)
+        {
+            return false;
+        }
+
+        int byEpoch = snapshot.LeaseCreatedAt.CompareTo(cluster.LeaseCreatedAt.Value);
+        if (byEpoch != 0)
+        {
+            return byEpoch < 0;
+        }
+
+        if (snapshot.LeaseTransitions != cluster.LeaseTransitions)
+        {
+            return snapshot.LeaseTransitions < cluster.LeaseTransitions;
+        }
+
+        if (cluster.LastSnapshotReceivedAt == null)
+        {
+            return false;
+        }
+
+        int byTime = snapshot.ServerReceivedAt.CompareTo(cluster.LastSnapshotReceivedAt.Value);
+        if (byTime != 0)
+        {
+            return byTime < 0;
+        }
+
+        return snapshot.TelemetryId <= (cluster.LastSnapshotTelemetryId ?? long.MinValue);
+    }
+
+    /// <summary>
+    /// Writes what an accepted snapshot says about the cluster: the Lease state and the sender as the
+    /// active reporter, the UID and CA fingerprint when it carries them, and either its error or, for a
+    /// snapshot of the cluster, the details it reports. An error leaves the last reported details alone.
+    /// </summary>
+    private async Task RecordAcceptedSnapshotAsync(
+        KubernetesCluster cluster, ClusterSnapshot snapshot, string? uid, string? fingerprint, bool isError, CancellationToken ct)
+    {
+        long clusterId = cluster.Id;
+        long machineId = snapshot.MachineId;
+        string? leaseUid = snapshot.LeaseUid;
+        DateTimeOffset leaseCreatedAt = snapshot.LeaseCreatedAt;
+        long leaseTransitions = snapshot.LeaseTransitions;
+        DateTimeOffset receivedAt = snapshot.ServerReceivedAt;
+        long telemetryId = snapshot.TelemetryId;
+        string? newUid = uid ?? cluster.KubeSystemUid;
+        string newFingerprint = fingerprint ?? cluster.CaFingerprint;
+        string? reporterError = isError ? snapshot.ReporterError : null;
+        string? clusterVersion = isError ? cluster.ClusterVersion : snapshot.ClusterVersion;
+        bool roleOutdated = isError ? cluster.RoleOutdated : snapshot.RoleOutdated;
+        bool truncated = isError ? cluster.Truncated : snapshot.Truncated;
+
+        await _db.KubernetesClusters
+            .Where(c => c.Id == clusterId)
+            .Set(c => c.LeaseUid, leaseUid)
+            .Set(c => c.LeaseCreatedAt, (DateTimeOffset?)leaseCreatedAt)
+            .Set(c => c.LeaseTransitions, leaseTransitions)
+            .Set(c => c.LastSnapshotReceivedAt, (DateTimeOffset?)receivedAt)
+            .Set(c => c.LastSnapshotTelemetryId, (long?)telemetryId)
+            .Set(c => c.ActiveReporterMachineId, (long?)machineId)
+            .Set(c => c.KubeSystemUid, newUid)
+            .Set(c => c.CaFingerprint, newFingerprint)
+            .Set(c => c.ReporterError, reporterError)
+            .Set(c => c.ClusterVersion, clusterVersion)
+            .Set(c => c.RoleOutdated, roleOutdated)
+            .Set(c => c.Truncated, truncated)
+            .UpdateAsync(ct);
+    }
+
+    /// <summary>
+    /// Keeps the sender a candidate of the cluster: an accepted snapshot proves it reports for the
+    /// cluster even when its own local report lags. The candidate row is dated by the snapshot's receipt
+    /// time only when that is newer than what it holds, so a local report received after the snapshot is
+    /// never taken for an older one. The row carries the snapshot's error, or none.
+    /// </summary>
+    private async Task UpsertSnapshotCandidateAsync(long clusterId, ClusterSnapshot snapshot, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        long machineId = snapshot.MachineId;
+        string? reporterError = string.IsNullOrEmpty(snapshot.ReporterError) ? null : snapshot.ReporterError;
+
+        KubernetesReporterCandidate? existing = await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .FirstOrDefaultAsync(ct);
+
+        if (existing == null)
+        {
+            await _db.InsertAsync(new KubernetesReporterCandidate
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                MachineId = machineId,
+                ReporterError = reporterError,
+                LastReportAt = snapshot.ServerReceivedAt,
+            }, token: ct);
+
+            return;
+        }
+
+        DateTimeOffset lastReportAt = IsNewerThan(existing.LastReportAt, snapshot.ServerReceivedAt)
+            ? existing.LastReportAt
+            : snapshot.ServerReceivedAt;
+
+        await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+            .Set(c => c.ClusterId, clusterId)
+            .Set(c => c.ReporterError, reporterError)
+            .Set(c => c.LastReportAt, lastReportAt)
+            .UpdateAsync(ct);
+    }
+
+    /// <summary>
+    /// Recomputes every node's fingerprint mismatch flag against the cluster's CA: a node is flagged
+    /// when it has reported a fingerprint and it differs.
+    /// </summary>
+    private async Task RecomputeFingerprintMismatchAsync(long clusterId, string fingerprint, CancellationToken ct)
+    {
+        await _db.KubernetesNodes
+            .Where(n => (n.ClusterId == clusterId)
+                && (n.FingerprintMismatch == false)
+                && (n.ReportedCaFingerprint != null)
+                && (n.ReportedCaFingerprint != fingerprint))
+            .Set(n => n.FingerprintMismatch, true)
+            .UpdateAsync(ct);
+
+        await _db.KubernetesNodes
+            .Where(n => (n.ClusterId == clusterId)
+                && n.FingerprintMismatch
+                && ((n.ReportedCaFingerprint == null) || (n.ReportedCaFingerprint == fingerprint)))
+            .Set(n => n.FingerprintMismatch, false)
+            .UpdateAsync(ct);
+    }
+
+    /// <summary>
+    /// Creates or updates a row for every node the snapshot lists, then links the new and still unlinked
+    /// rows to machines by machine id. Fields only a node's own machine can report are left alone, except
+    /// the kubelet version, which the cluster supplies when the node has had no local report within the
+    /// staleness threshold.
+    /// </summary>
+    private async Task UpsertSnapshotNodesAsync(long clusterId, ClusterSnapshot snapshot, CancellationToken ct)
+    {
+        int tenantId = snapshot.TenantId;
+        DateTimeOffset receivedAt = snapshot.ServerReceivedAt;
+        DateTimeOffset localReportStaleBefore = receivedAt - KubernetesReportingPolicy.StaleThreshold;
+        List<ClusterSnapshotNode> listed = snapshot.Nodes.DistinctBy(n => n.Name, StringComparer.Ordinal).ToList();
+        List<string> names = listed.Select(n => n.Name).ToList();
+
+        Dictionary<string, KubernetesNode> existing = [];
+        if (names.Count > 0)
+        {
+            List<KubernetesNode> rows = await _db.KubernetesNodes
+                .Where(n => (n.ClusterId == clusterId) && names.Contains(n.NodeName))
+                .ToListAsync(ct);
+            existing = rows.ToDictionary(n => n.NodeName, StringComparer.Ordinal);
+        }
+
+        List<(KubernetesNode Row, ClusterSnapshotNode Listed)> unlinked = [];
+        foreach (ClusterSnapshotNode node in listed)
+        {
+            string? nodeMachineId = string.IsNullOrEmpty(node.MachineId) ? null : node.MachineId;
+            string roles = JsonSerializer.Serialize(node.Roles, KubernetesStoredJsonOptions);
+            string conditions = JsonSerializer.Serialize(node.Conditions, KubernetesStoredJsonOptions);
+            int? podCapacity = node.PodCapacity;
+
+            if (existing.TryGetValue(node.Name, out KubernetesNode? row) == false)
+            {
+                KubernetesNode inserted = new()
+                {
+                    TenantId = tenantId,
+                    ClusterId = clusterId,
+                    NodeName = node.Name,
+                    KubeletVersion = node.KubeletVersion,
+                    NodeMachineId = nodeMachineId,
+                    Roles = roles,
+                    ReadyStatus = node.ReadyStatus,
+                    ReadySince = node.ReadySince,
+                    Conditions = conditions,
+                    Unschedulable = node.Unschedulable,
+                    UnschedulableSince = node.Unschedulable ? receivedAt : null,
+                    ContainerRuntimeVersion = node.ContainerRuntimeVersion,
+                    PodCount = node.PodCount,
+                    PodCapacity = podCapacity,
+                    LastReporterSeenAt = receivedAt,
+                };
+                inserted.Id = await _db.InsertWithInt64IdentityAsync(inserted, token: ct);
+                unlinked.Add((inserted, node));
+
+                continue;
+            }
+
+            // A node's own machine knows its kubelet version best, so the cluster's value only fills in
+            // when that machine has been silent for the whole threshold.
+            bool hasRecentLocalReport = (row.LastLocalReportAt != null) && (row.LastLocalReportAt.Value >= localReportStaleBefore);
+            string? kubeletVersion = (hasRecentLocalReport || (node.KubeletVersion == null)) ? row.KubeletVersion : node.KubeletVersion;
+
+            // Kubernetes does not record when a node was cordoned, so the first snapshot that shows it
+            // unschedulable dates it, and a snapshot that shows it schedulable clears the date.
+            DateTimeOffset? unschedulableSince = node.Unschedulable ? (row.UnschedulableSince ?? receivedAt) : null;
+            long rowId = row.Id;
+            bool unschedulable = node.Unschedulable;
+            string? readyStatus = node.ReadyStatus;
+            DateTimeOffset? readySince = node.ReadySince;
+            string? containerRuntimeVersion = node.ContainerRuntimeVersion;
+            int podCount = node.PodCount;
+
+            await _db.KubernetesNodes
+                .Where(n => n.Id == rowId)
+                .Set(n => n.NodeMachineId, nodeMachineId)
+                .Set(n => n.Roles, roles)
+                .Set(n => n.ReadyStatus, readyStatus)
+                .Set(n => n.ReadySince, readySince)
+                .Set(n => n.Conditions, conditions)
+                .Set(n => n.Unschedulable, unschedulable)
+                .Set(n => n.UnschedulableSince, unschedulableSince)
+                .Set(n => n.ContainerRuntimeVersion, containerRuntimeVersion)
+                .Set(n => n.PodCount, (int?)podCount)
+                .Set(n => n.PodCapacity, podCapacity)
+                .Set(n => n.KubeletVersion, kubeletVersion)
+                .Set(n => n.LastReporterSeenAt, (DateTimeOffset?)receivedAt)
+                .UpdateAsync(ct);
+
+            if (row.MachineId == null)
+            {
+                unlinked.Add((row, node));
+            }
+        }
+
+        await LinkNodesToMachinesAsync(tenantId, unlinked, ct);
+    }
+
+    /// <summary>
+    /// Links unlinked nodes to enrolled machines by <c>/etc/machine-id</c>, only where that is
+    /// unambiguous: exactly one non-deleted machine of the tenant has a non-empty system id equal to the
+    /// node's machine id (ordinal, ignoring case), the machine is not already linked to another node, and
+    /// the snapshot lists no other node with the same machine id, which is what clones of one template
+    /// look like.
+    /// </summary>
+    private async Task LinkNodesToMachinesAsync(
+        int tenantId, List<(KubernetesNode Row, ClusterSnapshotNode Listed)> unlinked, CancellationToken ct)
+    {
+        List<(KubernetesNode Row, string Key)> candidates = unlinked
+            .Where(u => string.IsNullOrWhiteSpace(u.Listed.MachineId) == false)
+            .Select(u => (u.Row, u.Listed.MachineId!.ToLowerInvariant()))
+            .ToList();
+
+        HashSet<string> shared = candidates
+            .GroupBy(c => c.Key, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        candidates = candidates.Where(c => shared.Contains(c.Key) == false).ToList();
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        List<string> keys = candidates.Select(c => c.Key).Distinct(StringComparer.Ordinal).ToList();
+        List<MachineSystemId> machines = [];
+        foreach (string[] chunk in keys.Chunk(KubernetesInListChunkSize))
+        {
+            List<string> chunkKeys = chunk.ToList();
+            machines.AddRange(await _db.Machines
+                .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false) && chunkKeys.Contains(m.SystemId.ToLower()))
+                .Select(m => new MachineSystemId(m.Id, m.SystemId))
+                .ToListAsync(ct));
+        }
+
+        Dictionary<string, long> uniqueMachines = machines
+            .GroupBy(m => m.SystemId.ToLowerInvariant(), StringComparer.Ordinal)
+            .Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
+
+        HashSet<long> linkedMachines = [];
+        foreach (long[] chunk in uniqueMachines.Values.Chunk(KubernetesInListChunkSize))
+        {
+            List<long> chunkIds = chunk.ToList();
+            List<long?> linked = await _db.KubernetesNodes
+                .Where(n => (n.MachineId != null) && chunkIds.Contains(n.MachineId.Value))
+                .Select(n => n.MachineId)
+                .ToListAsync(ct);
+            linkedMachines.UnionWith(linked.Where(id => id != null).Select(id => id!.Value));
+        }
+
+        foreach ((KubernetesNode row, string key) in candidates)
+        {
+            if ((uniqueMachines.TryGetValue(key, out long machineId) == false) || linkedMachines.Contains(machineId))
+            {
+                continue;
+            }
+
+            long rowId = row.Id;
+            await _db.KubernetesNodes
+                .Where(n => n.Id == rowId)
+                .Set(n => n.MachineId, (long?)machineId)
+                .UpdateAsync(ct);
+            linkedMachines.Add(machineId);
+        }
+    }
+
+    /// <summary>
+    /// Deletes the cluster's nodes that a complete snapshot no longer lists, unless their own machine
+    /// has reported within the staleness threshold, which can mean the cluster reporter is the one that
+    /// is wrong or lagging.
+    /// </summary>
+    private async Task RemoveNodesAbsentFromSnapshotAsync(long clusterId, ClusterSnapshot snapshot, CancellationToken ct)
+    {
+        DateTimeOffset localReportStaleBefore = snapshot.ServerReceivedAt - KubernetesReportingPolicy.StaleThreshold;
+        List<string> names = snapshot.Nodes.Select(n => n.Name).Distinct(StringComparer.Ordinal).ToList();
+
+        IQueryable<KubernetesNode> absent = _db.KubernetesNodes
+            .Where(n => (n.ClusterId == clusterId)
+                && ((n.LastLocalReportAt == null) || (n.LastLocalReportAt < localReportStaleBefore)));
+
+        if (names.Count > 0)
+        {
+            absent = absent.Where(n => names.Contains(n.NodeName) == false);
+        }
+
+        await absent.DeleteAsync(ct);
     }
 }

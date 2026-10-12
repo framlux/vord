@@ -102,6 +102,8 @@ public class KubernetesInventoryProjectionServiceTests
         private readonly CancellationTokenSource _cts = new();
         private readonly ConcurrentQueue<long> _applyAttempts = new();
         private readonly ConcurrentQueue<(long TelemetryId, LocalReportOutcome Outcome)> _outcomes = new();
+        private readonly ConcurrentQueue<ClusterSnapshot> _snapshotAttempts = new();
+        private readonly ConcurrentQueue<(long TelemetryId, SnapshotOutcome Outcome)> _snapshotOutcomes = new();
         private int _cursorReads;
         private int _garbageCollections;
 
@@ -149,7 +151,18 @@ public class KubernetesInventoryProjectionServiceTests
         /// </summary>
         public Func<LocalNodeReport, int, Exception?> ApplyFault { get; set; } = (_, _) => null;
 
+        /// <summary>
+        /// Decides, per snapshot apply call, whether it fails: given the snapshot and how many times that
+        /// telemetry row has been attempted so far (this call included), it returns the exception to fail
+        /// with, or null to let the call through to the real repository.
+        /// </summary>
+        public Func<ClusterSnapshot, int, Exception?> SnapshotFault { get; set; } = (_, _) => null;
+
         public long[] ApplyAttempts => [.. _applyAttempts];
+
+        public ClusterSnapshot[] SnapshotAttempts => [.. _snapshotAttempts];
+
+        public (long TelemetryId, SnapshotOutcome Outcome)[] SnapshotOutcomes => [.. _snapshotOutcomes];
 
         public (long TelemetryId, LocalReportOutcome Outcome)[] Outcomes => [.. _outcomes];
 
@@ -247,6 +260,24 @@ public class KubernetesInventoryProjectionServiceTests
 
                     return outcome;
                 });
+            Repository.ApplyClusterSnapshotAsync(Arg.Any<ClusterSnapshot>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
+                {
+                    ClusterSnapshot snapshot = ci.ArgAt<ClusterSnapshot>(0);
+                    _snapshotAttempts.Enqueue(snapshot);
+
+                    Exception? fault = SnapshotFault(snapshot, _snapshotAttempts.Count(s => s.TelemetryId == snapshot.TelemetryId));
+                    if (fault is not null)
+                    {
+                        throw fault;
+                    }
+
+                    SnapshotOutcome outcome = await Real.ApplyClusterSnapshotAsync(
+                        snapshot, ci.ArgAt<DateTimeOffset>(1), ci.ArgAt<CancellationToken>(2));
+                    _snapshotOutcomes.Enqueue((snapshot.TelemetryId, outcome));
+
+                    return outcome;
+                });
             Repository.CollectGarbageAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
                 {
@@ -293,13 +324,13 @@ public class KubernetesInventoryProjectionServiceTests
         long second = await rig.SeedMachineAsync(tenantId);
         long rowA = await rig.SeedRowAsync(first, tenantId, NodePayload("node-a", controlPlane: true));
         long rowB = await rig.SeedRowAsync(second, tenantId, NodePayload("node-b"));
-        long rowC = await rig.SeedRowAsync(first, tenantId, "{}", telemetryType: 15);
 
         await rig.StartAsync();
         await rig.Clock.NextDelayAsync();
 
         await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { rowA, rowB }, CollectionOrdering.Matching);
-        await Assert.That(await rig.CursorAsync()).IsEqualTo(rowC);
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(0);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(rowB);
         await Assert.That(await rig.Db.Context.KubernetesClusters.CountAsync()).IsEqualTo(1);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(2);
         await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
@@ -472,6 +503,283 @@ public class KubernetesInventoryProjectionServiceTests
         await Assert.That(await rig.CursorAsync()).IsEqualTo(laterRow);
         await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(1);
         await Assert.That(rig.Logger.Collector.GetSnapshot().Count(r => r.Level == LogLevel.Error)).IsEqualTo(1);
+    }
+
+    private const string UidA = "11111111-1111-4111-8111-111111111111";
+
+    private static string SnapshotPayload(
+        string uid = UidA,
+        string fingerprint = FingerprintA,
+        string leaseCreatedAt = "2026-10-11T08:00:00Z",
+        long leaseTransitions = 1,
+        string reporterError = "",
+        params string[] nodeNames)
+    {
+        KubernetesClusterRecord record = new()
+        {
+            KubeSystemUid = uid,
+            ClusterVersion = "v1.31.4+k3s1",
+            RoleVersion = 1,
+            CaFingerprint = fingerprint,
+            LeaseTransitions = leaseTransitions,
+            ReporterError = reporterError,
+            LeaseUid = "lease-uid-1",
+            LeaseCreatedAt = leaseCreatedAt,
+        };
+        foreach (string name in nodeNames)
+        {
+            record.Nodes.Add(new KubernetesClusterNode { Name = name, ReadyStatus = "True", PodCount = 3, PodCapacity = 110 });
+        }
+
+        return JsonSerializer.Serialize(record, JsonDefaults.SnakeCase);
+    }
+
+    [Test]
+    public async Task Projector_Type15Row_IsAppliedAsAClusterSnapshot()
+    {
+        // Intent: a cluster snapshot is read like a node report but applied through the snapshot method,
+        // which founds the cluster, records the Lease state and lists the nodes the holder reported.
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["cp-1", "worker-1"]), telemetryType: 15);
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.SnapshotOutcomes).IsEquivalentTo(new[] { (row, SnapshotOutcome.Accepted) }, CollectionOrdering.Matching);
+        await Assert.That(rig.ApplyAttempts.Length).IsEqualTo(0);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+        KubernetesCluster cluster = await rig.Db.Context.KubernetesClusters.SingleAsync();
+        await Assert.That(cluster.KubeSystemUid).IsEqualTo(UidA);
+        await Assert.That(cluster.ActiveReporterMachineId).IsEqualTo(holder);
+        await Assert.That(cluster.LastSnapshotTelemetryId).IsEqualTo(row);
+        await Assert.That(await rig.Db.Context.KubernetesNodes.CountAsync()).IsEqualTo(2);
+        await Assert.That(await rig.Db.Context.KubernetesReporterCandidates.CountAsync()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Projector_RowsOfBothTypes_AreAppliedInIdOrder()
+    {
+        // Intent: node reports and snapshots share one stream and one cursor, and each is applied by the
+        // method for its type, in the order the rows were stored. The local report founds the cluster by
+        // its fingerprint and the snapshot then adopts it, which only works in that order.
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long agent = await rig.SeedMachineAsync(tenantId);
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long nodeReport = await rig.SeedRowAsync(agent, tenantId, NodePayload("cp-1", controlPlane: true));
+        long snapshot = await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["cp-1"]), telemetryType: 15);
+        long laterNodeReport = await rig.SeedRowAsync(agent, tenantId, NodePayload("cp-1", controlPlane: true));
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { nodeReport, laterNodeReport }, CollectionOrdering.Matching);
+        await Assert.That(rig.SnapshotOutcomes).IsEquivalentTo(new[] { (snapshot, SnapshotOutcome.Accepted) }, CollectionOrdering.Matching);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(laterNodeReport);
+        KubernetesCluster cluster = await rig.Db.Context.KubernetesClusters.SingleAsync();
+        await Assert.That(cluster.KubeSystemUid).IsEqualTo(UidA);
+        KubernetesNode node = await rig.Db.Context.KubernetesNodes.SingleAsync();
+        await Assert.That(node.MachineId).IsEqualTo(agent);
+        await Assert.That(node.LastReporterSeenAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task Projector_Type15Row_IsNormalisedBeforeItIsApplied()
+    {
+        // Intent: the repository trusts what it is handed, so the projector must hand it a snapshot whose
+        // identity has the expected shape, whose error is one of the known codes and whose nodes all have
+        // valid names.
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        string payload = SnapshotPayload(
+            uid: "not-a-uid", fingerprint: "ABC", reporterError: "something_new", nodeNames: ["cp-1"]);
+        long row = await rig.SeedRowAsync(holder, tenantId, payload, telemetryType: 15);
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        ClusterSnapshot snapshot = rig.SnapshotAttempts.Single();
+        await Assert.That(snapshot.TelemetryId).IsEqualTo(row);
+        await Assert.That(snapshot.TenantId).IsEqualTo(tenantId);
+        await Assert.That(snapshot.MachineId).IsEqualTo(holder);
+        await Assert.That(snapshot.KubeSystemUid).IsNull();
+        await Assert.That(snapshot.CaFingerprint).IsNull();
+        await Assert.That(snapshot.ReporterError).IsEqualTo("api_unreachable");
+        await Assert.That(snapshot.Nodes.Count).IsEqualTo(0);
+        await Assert.That(snapshot.LeaseCreatedAt).IsEqualTo(new DateTimeOffset(2026, 10, 11, 8, 0, 0, TimeSpan.Zero));
+        await Assert.That(rig.SnapshotOutcomes).IsEquivalentTo(new[] { (row, SnapshotOutcome.Unresolved) }, CollectionOrdering.Matching);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Projector_Type15RowWithInvalidNodeNames_IsAppliedWithoutThoseNodes()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["Bad_Name", "worker-1"]), telemetryType: 15);
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.SnapshotAttempts.Single().Nodes.Select(n => n.Name)).IsEquivalentTo(new[] { "worker-1" }, CollectionOrdering.Matching);
+        await Assert.That((await rig.Db.Context.KubernetesNodes.SingleAsync()).NodeName).IsEqualTo("worker-1");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("{}")]
+    [Arguments("not json")]
+    [Arguments("null")]
+    [Arguments("[]")]
+    [Arguments("""{"lease_created_at":"2026-10-11T08:00:00Z","lease_transitions":"many"}""")]
+    [Arguments("""{"lease_created_at":"yesterday","lease_transitions":1}""")]
+    [Arguments("""{"lease_created_at":"2026-10-11T08:00:00Z","lease_transitions":-1}""")]
+    [Arguments("""{"kube_system_uid":"11111111-1111-4111-8111-111111111111","ca_fingerprint":"a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718"}""")]
+    public async Task Projector_UnusableType15Payload_IsSkippedCountedAndTheCursorAdvances(string payload)
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(holder, tenantId, payload, telemetryType: 15);
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.FailureCount("invalid_payload")).IsEqualTo(1L);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(1);
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(0);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+        await Assert.That(await rig.Db.Context.KubernetesClusters.CountAsync()).IsEqualTo(0);
+
+        IReadOnlyList<FakeLogRecord> errors = [.. rig.Logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error)];
+        await Assert.That(errors.Count).IsEqualTo(1);
+        await Assert.That(errors[0].Message).Contains(row.ToString());
+        await Assert.That(errors[0].Message).Contains("cluster snapshot");
+    }
+
+    [Test]
+    public async Task Projector_InvalidType15Payload_DoesNotHoldBackTheRowsBehindIt()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long agent = await rig.SeedMachineAsync(tenantId);
+        await rig.SeedRowAsync(holder, tenantId, "{}", telemetryType: 15);
+        long valid = await rig.SeedRowAsync(agent, tenantId, NodePayload("node-b"));
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.FailureCount("invalid_payload")).IsEqualTo(1L);
+        await Assert.That(rig.ApplyAttempts).IsEquivalentTo(new[] { valid }, CollectionOrdering.Matching);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(valid);
+    }
+
+    [Test]
+    public async Task Projector_Type15TransientFailure_RetriesWithoutAdvancing_ThenSucceeds()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["cp-1"]), telemetryType: 15);
+        rig.SnapshotFault = (_, attempt) => attempt == 1 ? new TimeoutException("connection reset") : null;
+
+        await rig.StartAsync();
+        ParkedDelay afterFailure = await rig.Clock.NextDelayAsync();
+
+        await Assert.That(afterFailure.Delay).IsEqualTo(PollInterval);
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(1);
+        await Assert.That(await rig.CursorAsync()).IsNull();
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+
+        rig.Clock.Advance(afterFailure.Delay);
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(2);
+        await Assert.That(rig.SnapshotOutcomes).IsEquivalentTo(new[] { (row, SnapshotOutcome.Accepted) }, CollectionOrdering.Matching);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Projector_Type15TransientFailureFiveTimes_SkipsAndCounts()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["cp-1"]), telemetryType: 15);
+        rig.SnapshotFault = (_, _) => new TimeoutException("still down");
+
+        await rig.StartAsync();
+        for (int attempt = 1; attempt < KubernetesInventoryProjectionService.MaxTransientAttempts; attempt++)
+        {
+            ParkedDelay delay = await rig.Clock.NextDelayAsync();
+            await Assert.That(await rig.CursorAsync()).IsNull();
+            rig.Clock.Advance(delay.Delay);
+        }
+
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(KubernetesInventoryProjectionService.MaxTransientAttempts);
+        await Assert.That(rig.FailureCount("retries_exhausted")).IsEqualTo(1L);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+    }
+
+    [Test]
+    public async Task Projector_Type15NonTransientFailure_SkipsAndCounts()
+    {
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long holder = await rig.SeedMachineAsync(tenantId);
+        long row = await rig.SeedRowAsync(holder, tenantId, SnapshotPayload(nodeNames: ["cp-1"]), telemetryType: 15);
+        rig.SnapshotFault = (_, _) => new InvalidOperationException("a constraint no retry can satisfy");
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(1);
+        await Assert.That(rig.FailureCount("apply_failed")).IsEqualTo(1L);
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(row);
+        await Assert.That(rig.Logger.Collector.GetSnapshot().Count(r => (r.Level == LogLevel.Error) && r.Message.Contains("cluster snapshot"))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Projector_RowOfAnotherType_IsSkippedWithoutBeingCounted()
+    {
+        // Intent: the read asks for the two Kubernetes types only, but a row of any other type that
+        // reached the projector would still be stepped over rather than stall the stream.
+        await using Rig rig = new();
+        int tenantId = await rig.SeedTenantAsync();
+        long machineId = await rig.SeedMachineAsync(tenantId);
+        long foreign = await rig.SeedRowAsync(machineId, tenantId, "{}", telemetryType: 6);
+        bool served = false;
+        rig.Repository.GetKubernetesTelemetryBatchAsync(
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async ci =>
+            {
+                if (served)
+                {
+                    return [];
+                }
+
+                served = true;
+                MachineTelemetry stored = await rig.Db.Context.MachineTelemetry.SingleAsync(t => t.Id == foreign);
+
+                return (IReadOnlyList<MachineTelemetry>)[stored];
+            });
+
+        await rig.StartAsync();
+        await rig.Clock.NextDelayAsync();
+
+        await Assert.That(await rig.CursorAsync()).IsEqualTo(foreign);
+        await Assert.That(rig.ApplyAttempts.Length).IsEqualTo(0);
+        await Assert.That(rig.SnapshotAttempts.Length).IsEqualTo(0);
+        await Assert.That(rig.Failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
     }
 
     [Test]

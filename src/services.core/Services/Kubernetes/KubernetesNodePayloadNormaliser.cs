@@ -9,7 +9,8 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 /// <summary>
 /// Validates and normalises a stored Kubernetes node report so that no value can exceed the column it
 /// will be written to or the view it will be shown in. The inventory projection and the machine page
-/// both read the same stored payload, so they share this one definition of what a usable report is.
+/// both read the same stored payload, so they share this one definition of what a usable report is. The
+/// cluster snapshot normaliser reuses the node name, fingerprint and kubelet version rules.
 /// </summary>
 internal static class KubernetesNodePayloadNormaliser
 {
@@ -87,7 +88,7 @@ internal static class KubernetesNodePayloadNormaliser
     /// hyphens but neither starts nor ends with one. Checked by hand rather than with a regular
     /// expression so that a hostile name can never make the check time out and wedge the projection.
     /// </summary>
-    private static bool IsValidNodeName(string name)
+    internal static bool IsValidNodeName(string name)
     {
         if ((name.Length == 0) || (name.Length > MaxNodeNameLength))
         {
@@ -138,7 +139,7 @@ internal static class KubernetesNodePayloadNormaliser
         return UnknownDistro;
     }
 
-    private static string? NormaliseCaFingerprint(string? fingerprint)
+    internal static string? NormaliseCaFingerprint(string? fingerprint)
     {
         if ((fingerprint is null) || (fingerprint.Length != CaFingerprintLength))
         {
@@ -172,7 +173,7 @@ internal static class KubernetesNodePayloadNormaliser
         return null;
     }
 
-    private static string? NormaliseKubeletVersion(string? version)
+    internal static string? NormaliseKubeletVersion(string? version)
     {
         if (string.IsNullOrEmpty(version))
         {
