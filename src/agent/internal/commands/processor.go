@@ -214,11 +214,7 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		})
 
 		// Always ACK destructive command results so the server knows the outcome.
-		resultType := ResultTypeCompleted
-		if result.Success == false {
-			resultType = ResultTypeFailed
-		}
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultType)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultTypeOf(result))
 
 		if result.Error != nil {
 			slog.Error("destructive command failed", "command_id", cmd.ID, "type", payload.CommandType, "error", result.Error)
@@ -232,11 +228,7 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 			Params: payload.Params,
 		})
 
-		resultType := ResultTypeCompleted
-		if result.Success == false {
-			resultType = ResultTypeFailed
-		}
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultType)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultTypeOf(result))
 
 		if result.Error != nil {
 			slog.Error("command execution failed", "command_id", cmd.ID, "type", payload.CommandType, "error", result.Error)
@@ -244,4 +236,17 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 			slog.Info("command executed", "command_id", cmd.ID, "type", payload.CommandType, "message", result.Message)
 		}
 	}
+}
+
+// resultTypeOf maps an execution result to the result type acknowledged to the server: completed, failed, or
+// rejected for a command the executor refused before doing anything.
+func resultTypeOf(result Result) int32 {
+	switch {
+	case result.Success:
+		return ResultTypeCompleted
+	case result.Rejected:
+		return ResultTypeRejected
+	}
+
+	return ResultTypeFailed
 }

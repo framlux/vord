@@ -21,6 +21,8 @@ import (
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/grpcclient"
 	"github.com/framlux/vord/internal/jitter"
+	"github.com/framlux/vord/internal/kubelocal"
+	"github.com/framlux/vord/internal/kubereporter"
 	"github.com/framlux/vord/internal/pause"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/registration"
@@ -122,15 +124,6 @@ func main() {
 		slog.Warn("failed to fetch initial configuration, using defaults", "error", err)
 	}
 
-	// Initialize command processor if remote commands are enabled.
-	var cmdProcessor *commands.Processor
-	if cfg.AllowRemoteCommands {
-		cmdHandler := commands.NewHandler()
-		nonceAdapter := &storeNonceAdapter{store: store}
-		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
-		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
-	}
-
 	// The pause coordinator is built before the sender and the scheduler that gate on it. Its hooks reach the
 	// SSH collector and the sender, which need the coordinator themselves, so both are declared here and
 	// assigned below. Every goroutine that can trigger a transition is started after that assignment.
@@ -141,6 +134,28 @@ func main() {
 		func(c context.Context, s *db.Store) error { return sshCollector.ResetToNow(c, s) },
 	))
 
+	// Initialize command processor if remote commands are enabled. The cluster reporter commands report a state
+	// change through a hook that runs the local Kubernetes collector, which the scheduler also runs, so the
+	// collector is shared.
+	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir)
+
+	var cmdProcessor *commands.Processor
+	if cfg.AllowRemoteCommands {
+		kubeReporter := kubereporter.New(kubereporter.Options{
+			DataDir:  cfg.DataDir,
+			Facts:    kubelocal.Detector{Root: "/"}.Detect,
+			Releaser: kubereporter.NoopLeaseReleaser{},
+			OnStateChanged: newReporterStateHook(
+				func(c context.Context) error { return kubeCollector.Collect(c, store) },
+				pauseCoordinator.Paused,
+			),
+		})
+		cmdHandler := commands.NewHandler(commands.HandlerDeps{KubeReporter: kubeReporter})
+		nonceAdapter := &storeNonceAdapter{store: store}
+		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
+		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
+	}
+
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
 	// handled by FastTick and SlowTick inside the scheduler.
@@ -150,7 +165,7 @@ func main() {
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
 	registry.Register(collector.NewAgentVersionCollector(version))
-	registry.Register(collector.NewKubernetesCollector(cfg.DataDir))
+	registry.Register(kubeCollector)
 	registry.RegisterDynamic(collector.NewServicesCollector(runtimeState), runtimeState.ServiceStatusInterval)
 
 	telemetrySender = sender.New(store, grpcClient.Telemetry, runtimeState, jit, pauseCoordinator)

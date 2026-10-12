@@ -72,9 +72,10 @@ func (m *mockLooker) LookPath(file string) (string, error) {
 
 // --- Handler tests ---
 
-// Intent: Handler has executors for all 5 command types.
+// Intent: Handler has executors for all 8 command types: the five machine commands and the three cluster
+// reporter commands.
 func TestNewHandler_AllExecutorsRegistered(t *testing.T) {
-	h := NewHandler()
+	h := NewHandler(HandlerDeps{})
 
 	expectedTypes := []CommandType{
 		CommandReboot,
@@ -82,6 +83,9 @@ func TestNewHandler_AllExecutorsRegistered(t *testing.T) {
 		CommandKillSession,
 		CommandCheckUpdate,
 		CommandInstallUpdate,
+		CommandK8sReporterEnrol,
+		CommandK8sReporterUnenrol,
+		CommandK8sReporterUninstall,
 	}
 
 	for _, ct := range expectedTypes {
@@ -97,7 +101,7 @@ func TestNewHandler_AllExecutorsRegistered(t *testing.T) {
 
 // Intent: Unknown command type returns error result.
 func TestExecute_UnknownCommand(t *testing.T) {
-	h := NewHandler()
+	h := NewHandler(HandlerDeps{})
 
 	result := h.Execute(context.Background(), Command{
 		Type:   "nonexistent_command",
@@ -117,7 +121,7 @@ func TestExecute_UnknownCommand(t *testing.T) {
 
 // Intent: Each command type routes to its registered executor (verified by returning known error for missing params).
 func TestExecute_DispatchesToCorrectExecutor(t *testing.T) {
-	h := NewHandler()
+	h := NewHandler(HandlerDeps{})
 
 	tests := []struct {
 		cmdType     CommandType
@@ -843,6 +847,9 @@ func TestIsValid_AllDefinedTypes(t *testing.T) {
 		CommandKillSession,
 		CommandCheckUpdate,
 		CommandInstallUpdate,
+		CommandK8sReporterEnrol,
+		CommandK8sReporterUnenrol,
+		CommandK8sReporterUninstall,
 	}
 
 	for _, ct := range validTypes {
@@ -883,7 +890,14 @@ func TestIsDestructive_RebootAndInstallUpdate(t *testing.T) {
 
 // Intent: Other commands are not destructive.
 func TestIsDestructive_OtherCommands(t *testing.T) {
-	nonDestructive := []CommandType{CommandKillProcess, CommandKillSession, CommandCheckUpdate}
+	nonDestructive := []CommandType{
+		CommandKillProcess,
+		CommandKillSession,
+		CommandCheckUpdate,
+		CommandK8sReporterEnrol,
+		CommandK8sReporterUnenrol,
+		CommandK8sReporterUninstall,
+	}
 	for _, ct := range nonDestructive {
 		if ct.IsDestructive() {
 			t.Errorf("expected %s to NOT be destructive", ct)
