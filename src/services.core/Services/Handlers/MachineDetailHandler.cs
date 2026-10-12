@@ -17,8 +17,6 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// </summary>
 public sealed class MachineDetailHandler
 {
-    private const ulong CapabilityRemoteCommands = 1UL;
-
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly IMachinePingService _pingService;
@@ -96,7 +94,7 @@ public sealed class MachineDetailHandler
             LastPing = lastPing,
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,
-            CommandsEnabled = (capabilities & CapabilityRemoteCommands) != 0,
+            CommandsEnabled = AgentCapabilities.HasRemoteCommands(capabilities),
         };
 
         return ServiceResult<MachineDto>.Ok(dto);
@@ -151,7 +149,7 @@ public sealed class MachineDetailHandler
             IsOnline = isOnline,
             IsPaused = cutoff.IsPaused(machineId),
             LastPing = lastPing,
-            CommandsEnabled = (capabilities & CapabilityRemoteCommands) != 0,
+            CommandsEnabled = AgentCapabilities.HasRemoteCommands(capabilities),
             HealthStatus = healthStatus,
         };
 

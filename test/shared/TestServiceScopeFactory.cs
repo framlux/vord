@@ -79,6 +79,7 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
             typeof(IIntegrationRepository),
             typeof(IIntegrationDeliveryAttemptRepository),
             typeof(IAlertConditionStateRepository),
+            typeof(IKubernetesInventoryRepository),
         ];
 
         private const string DefaultSecurityStamp = "test-stamp";

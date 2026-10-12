@@ -43,6 +43,8 @@ message TelemetryItem {
     PackageUpdatesRecord package_updates = 20;
     ServiceStatusRecord service_status = 21;
     AgentVersionRecord agent_version = 22;
+    KubernetesNodeRecord kubernetes_node = 23;
+    KubernetesClusterRecord kubernetes_cluster = 24;
   }
 }
 
@@ -70,6 +72,8 @@ enum TelemetryTypes {
     PACKAGE_UPDATES_TYPE = 11;
     SERVICE_STATUS_TYPE = 12;
     AGENT_VERSION_TYPE = 13;
+    KUBERNETES_NODE_TYPE = 14;
+    KUBERNETES_CLUSTER_TYPE = 15;
 }
 
 message SystemInfoRecord {
@@ -248,6 +252,65 @@ message ServiceEntry {
 
 message AgentVersionRecord {
     string version = 1;
+}
+
+// Identity of a Kubernetes node, read from local files on the host.
+message KubernetesNodeRecord {
+    string distro = 1;
+    string kubelet_version = 2;
+    string node_name = 3;
+    string node_name_source = 4;
+    bool has_kubelet = 5;
+    bool control_plane = 6;
+    string ca_fingerprint = 7;
+    bool admin_credential_present = 8;
+    bool reporter_enrolled = 9;
+    // Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed. Empty
+    // when the last Lease call worked or none has been made.
+    string reporter_error = 10;
+}
+
+// One condition of a node that is not in its healthy state, such as MemoryPressure being True.
+message KubernetesNodeCondition {
+    string type = 1;
+    string status = 2;
+    string last_transition_time = 3;
+}
+
+// One node of a cluster as the cluster itself reports it.
+message KubernetesClusterNode {
+    string name = 1;
+    repeated string roles = 2;
+    string ready_status = 3;
+    string ready_since = 4;
+    repeated KubernetesNodeCondition conditions = 5;
+    bool unschedulable = 6;
+    string machine_id = 7;
+    string kubelet_version = 8;
+    string container_runtime_version = 9;
+    int32 pod_count = 10;
+    int32 pod_capacity = 11;
+}
+
+// A cluster snapshot, sent only by the host that holds the cluster's reporter Lease. A snapshot that carries a
+// reporter_error lists no nodes.
+message KubernetesClusterRecord {
+    string kube_system_uid = 1;
+    string cluster_version = 2;
+    int32 role_version = 3;
+    bool role_outdated = 4;
+    string ca_fingerprint = 5;
+    // The Lease's leaseTransitions when the snapshot was taken, which fences snapshots of an earlier holder.
+    int64 lease_transitions = 6;
+    // credentials_rejected, tls_ca_changed, api_unreachable or namespace_terminating, else empty.
+    string reporter_error = 7;
+    // True when nodes were left out to keep the snapshot within its size cap.
+    bool truncated = 8;
+    repeated KubernetesClusterNode nodes = 9;
+    // The Lease's metadata.uid and creationTimestamp, which tell one Lease from the next one created after the
+    // reporter was disabled and enabled again.
+    string lease_uid = 10;
+    string lease_created_at = 11;
 }
 
 message SshSessionRecord {

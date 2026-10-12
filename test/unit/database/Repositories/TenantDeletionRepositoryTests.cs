@@ -462,6 +462,86 @@ public sealed class TenantDeletionRepositoryTests
         await Assert.That(remainingRows).IsEqualTo(0);
     }
 
+    private static async Task SeedKubernetesInventoryAsync(DatabaseContext db, int tenantId, long machineId, string nodeName)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = nodeName,
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = $"{nodeName}-unlinked",
+        });
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = seenAt,
+        });
+    }
+
+    [Test]
+    public async Task Purge_RemovesKubernetesRowsForTenantOnly()
+    {
+        // Intent: the purge removes every Kubernetes cluster, node and reporter candidate of the purged
+        // tenant, linked to a machine or not, leaves another tenant's inventory and the global
+        // projection cursor alone, and is a no-op the second time.
+        using TestDatabaseFactory dbFactory = new();
+        ITenantDeletionRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+
+        int userId = await db.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int purgedTenantId = await db.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int keptTenantId = await db.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long purgedMachineId = await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: purgedTenantId));
+        long keptMachineId = await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: keptTenantId));
+        await SeedKubernetesInventoryAsync(db, purgedTenantId, purgedMachineId, "purged-node");
+        await SeedKubernetesInventoryAsync(db, keptTenantId, keptMachineId, "kept-node");
+        await db.InsertAsync(new KubernetesInventoryProjectionCursor
+        {
+            Id = 1,
+            Position = 42,
+            UpdatedAt = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero),
+        });
+
+        await repo.PurgeTenantOperationalDataAsync(purgedTenantId, CancellationToken.None);
+        await repo.PurgeTenantOperationalDataAsync(purgedTenantId, CancellationToken.None);
+
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == purgedTenantId)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == purgedTenantId)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.TenantId == purgedTenantId)).IsEqualTo(0);
+        await Assert.That(await db.Machines.CountAsync(m => m.TenantId == purgedTenantId)).IsEqualTo(0);
+
+        List<KubernetesNode> keptNodes = await db.KubernetesNodes.Where(n => n.TenantId == keptTenantId).OrderBy(n => n.NodeName).ToListAsync();
+        await Assert.That(keptNodes.Count).IsEqualTo(2);
+        await Assert.That(keptNodes[0].NodeName).IsEqualTo("kept-node");
+        await Assert.That(keptNodes[0].MachineId).IsEqualTo(keptMachineId);
+        await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == keptTenantId)).IsEqualTo(1);
+        await Assert.That((await db.KubernetesClusters.SingleAsync(c => c.TenantId == keptTenantId)).ActiveReporterMachineId).IsEqualTo(keptMachineId);
+        KubernetesReporterCandidate keptCandidate = await db.KubernetesReporterCandidates.SingleAsync(c => c.TenantId == keptTenantId);
+        await Assert.That(keptCandidate.MachineId).IsEqualTo(keptMachineId);
+        await Assert.That(await db.Machines.CountAsync(m => m.TenantId == keptTenantId)).IsEqualTo(1);
+        await Assert.That((await db.KubernetesInventoryProjectionCursors.SingleAsync()).Position).IsEqualTo(42L);
+    }
+
     [Test]
     public async Task SetTenantActiveAsync_Deactivates_UpdatesIsActiveDisabledAtAndDisabledByUserId()
     {

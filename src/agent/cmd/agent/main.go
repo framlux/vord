@@ -21,6 +21,8 @@ import (
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/grpcclient"
 	"github.com/framlux/vord/internal/jitter"
+	"github.com/framlux/vord/internal/kubelocal"
+	"github.com/framlux/vord/internal/kubereporter"
 	"github.com/framlux/vord/internal/pause"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/registration"
@@ -122,15 +124,6 @@ func main() {
 		slog.Warn("failed to fetch initial configuration, using defaults", "error", err)
 	}
 
-	// Initialize command processor if remote commands are enabled.
-	var cmdProcessor *commands.Processor
-	if cfg.AllowRemoteCommands {
-		cmdHandler := commands.NewHandler()
-		nonceAdapter := &storeNonceAdapter{store: store}
-		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
-		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
-	}
-
 	// The pause coordinator is built before the sender and the scheduler that gate on it. Its hooks reach the
 	// SSH collector and the sender, which need the coordinator themselves, so both are declared here and
 	// assigned below. Every goroutine that can trigger a transition is started after that assignment.
@@ -141,6 +134,46 @@ func main() {
 		func(c context.Context, s *db.Store) error { return sshCollector.ResetToNow(c, s) },
 	))
 
+	// The reporter runtime elects one enrolled control-plane host per cluster to report the cluster, and runs on
+	// every enrolled host whether or not remote commands are allowed. The holder reads the cluster and queues its
+	// snapshot, replacing any that has not been sent. Its health gate reads the sender's last acknowledgement, and
+	// the sender is built below, so the gate reaches it through the variable declared above.
+	reporterRuntime := kubereporter.NewRuntime(kubereporter.RuntimeOptions{
+		DataDir: cfg.DataDir,
+		Gate: newReporterGate(
+			pauseCoordinator.Paused,
+			func() time.Time { return telemetrySender.LastAckAt() },
+			newOldestPendingSnapshot(store.OldestQueuedTelemetry),
+			runtimeState.TelemetrySendSlowInterval,
+			time.Now(),
+		),
+		OnLost:    newSnapshotFence(store.DeleteTelemetryByType),
+		Snapshots: store,
+		Facts:     kubelocal.Detector{Root: "/"}.Detect,
+	})
+
+	// Initialize command processor if remote commands are enabled. The cluster reporter commands report a state
+	// change through a hook that runs the local Kubernetes collector, which the scheduler also runs, so the
+	// collector is shared. The collector reports why the reporter cannot use its credentials, if it cannot.
+	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir, reporterRuntime.ReporterError)
+
+	var cmdProcessor *commands.Processor
+	if cfg.AllowRemoteCommands {
+		kubeReporter := kubereporter.New(kubereporter.Options{
+			DataDir:  cfg.DataDir,
+			Facts:    kubelocal.Detector{Root: "/"}.Detect,
+			Releaser: reporterRuntime,
+			OnStateChanged: newReporterStateHook(
+				func(c context.Context) error { return kubeCollector.Collect(c, store) },
+				pauseCoordinator.Paused,
+			),
+		})
+		cmdHandler := commands.NewHandler(commands.HandlerDeps{KubeReporter: kubeReporter})
+		nonceAdapter := &storeNonceAdapter{store: store}
+		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
+		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
+	}
+
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
 	// handled by FastTick and SlowTick inside the scheduler.
@@ -150,6 +183,7 @@ func main() {
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
 	registry.Register(collector.NewAgentVersionCollector(version))
+	registry.Register(kubeCollector)
 	registry.RegisterDynamic(collector.NewServicesCollector(runtimeState), runtimeState.ServiceStatusInterval)
 
 	telemetrySender = sender.New(store, grpcClient.Telemetry, runtimeState, jit, pauseCoordinator)
@@ -179,6 +213,15 @@ func main() {
 		defer wg.Done()
 		defer recoverPanic("config-refresh")
 		runConfigRefresh(ctx, regManager, runtimeState, jit)
+	}()
+
+	// Start the cluster reporter runtime in background. On shutdown it hands the reporter Lease back, so a
+	// standby on another host takes over without waiting for it to expire.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer recoverPanic("cluster-reporter")
+		reporterRuntime.Run(ctx)
 	}()
 
 	// Start command poll loop in background (opt-in only).

@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 
 const { deleteMachine, goto } = vi.hoisted(() => ({ deleteMachine: vi.fn(), goto: vi.fn() }));
@@ -29,9 +29,14 @@ vi.mock('$lib/api/client', () => {
 import { ApiError } from '$lib/api/client';
 import RemoveMachineControl from './RemoveMachineControl.svelte';
 
-function renderControl() {
-	return render(RemoveMachineControl, { props: { machineId: 7, machineName: 'web-01', csrfToken: 'csrf' } });
+function renderControl(reporterClusterId: number | null = null) {
+	return render(RemoveMachineControl, {
+		props: { machineId: 7, machineName: 'web-01', csrfToken: 'csrf', reporterClusterId }
+	});
 }
+
+const REPORTER_WARNING =
+	'This machine is a cluster reporter. Its token and the cluster objects remain until you disable reporting on the cluster page.';
 
 describe('RemoveMachineControl', () => {
 	beforeEach(() => {
@@ -119,5 +124,51 @@ describe('RemoveMachineControl', () => {
 
 		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Network down'));
 		expect(screen.queryByRole('link', { name: 'Back to machines' })).not.toBeInTheDocument();
+	});
+
+	describe('when the machine is a cluster reporter', () => {
+		it('warns, in the confirmation, that its token and the cluster objects remain', async () => {
+			renderControl(12);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+			expect(screen.getByTestId('reporter-warning')).toHaveTextContent(REPORTER_WARNING);
+		});
+
+		it('links the cluster page named in the warning', async () => {
+			renderControl(12);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+			expect(within(screen.getByTestId('reporter-warning')).getByRole('link', { name: 'cluster page' })).toHaveAttribute(
+				'href',
+				'/clusters/12'
+			);
+		});
+
+		it('says nothing before the user asks to remove the host', () => {
+			renderControl(12);
+
+			expect(screen.queryByTestId('reporter-warning')).not.toBeInTheDocument();
+		});
+
+		it('still removes the host when the user confirms anyway', async () => {
+			deleteMachine.mockResolvedValue(undefined);
+			renderControl(12);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+			await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
+
+			await waitFor(() => expect(deleteMachine).toHaveBeenCalledWith(7));
+		});
+	});
+
+	it('does not warn about a reporter for a machine that is not one', async () => {
+		renderControl(null);
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+		expect(screen.queryByTestId('reporter-warning')).not.toBeInTheDocument();
+		expect(screen.queryByText(/cluster reporter/)).not.toBeInTheDocument();
 	});
 });

@@ -584,11 +584,15 @@ func TestParseMeminfoData_ValidInput(t *testing.T) {
 	input := "MemTotal:       16384000 kB\nMemFree:         2048000 kB\nMemAvailable:    8192000 kB\n"
 	result := parseMeminfoData(input)
 
-	if result["MemTotal"] != 16384000*1024 {
-		t.Errorf("expected MemTotal=%d, got %d", 16384000*1024, result["MemTotal"])
+	// Typed constants: untyped ones passed to Errorf default to int, and 16384000*1024 overflows int on 32-bit targets.
+	const wantMemTotal int64 = 16384000 * 1024
+	const wantMemFree int64 = 2048000 * 1024
+
+	if result["MemTotal"] != wantMemTotal {
+		t.Errorf("expected MemTotal=%d, got %d", wantMemTotal, result["MemTotal"])
 	}
-	if result["MemFree"] != 2048000*1024 {
-		t.Errorf("expected MemFree=%d, got %d", 2048000*1024, result["MemFree"])
+	if result["MemFree"] != wantMemFree {
+		t.Errorf("expected MemFree=%d, got %d", wantMemFree, result["MemFree"])
 	}
 }
 

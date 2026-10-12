@@ -12,6 +12,7 @@ import (
 	"math"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -45,12 +46,24 @@ var SlowTypes = []db.TelemetryType{
 	db.TelemetryHardwareHealth,
 	db.TelemetryPackageUpdates,
 	db.TelemetryAgentVersion,
+	db.TelemetryKubernetesNode,
+	db.TelemetryKubernetesCluster,
 }
 
 const (
 	maxBatchSize   = 50
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 1 * time.Second
+
+	// maxEnvelopeBytes is the most item data one envelope carries. The server refuses any message over 1 MB, and
+	// the margin below that covers the envelope's own fields.
+	maxEnvelopeBytes = 768 * 1024
+	// maxItemBytes is the largest single item the sender puts on the wire. Anything bigger could never be
+	// accepted and would block its tier forever if left queued, so it is discarded instead.
+	maxItemBytes = 900 * 1024
+	// itemFramingBytes bounds the field tag and length prefix added when an item is placed in an envelope,
+	// which proto.Size of the item alone does not count.
+	itemFramingBytes = 8
 )
 
 // tierStream holds a per-tier gRPC stream and its mutex. The mutex is held for the whole of a send, from writing
@@ -74,6 +87,9 @@ type Sender struct {
 	// clock supplies the current time for stamping the envelope's AgentTimestamp. Defaults to
 	// time.Now in production; tests inject a fixed closure for deterministic timestamp assertions.
 	clock func() time.Time
+	// lastAck is when the server last acknowledged an envelope with success, nil before the first. It is read by
+	// other goroutines, such as the cluster reporter's health gate, so it is an atomic pointer.
+	lastAck atomic.Pointer[time.Time]
 
 	streams map[string]*tierStream
 }
@@ -194,6 +210,18 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 	}
 }
 
+// LastAckAt returns when the server last acknowledged an envelope with success, or the zero time when it has not
+// yet. Only an acknowledgement that reports success counts: a rejected batch, a batch that never reached the
+// server and an acknowledgement that says the host is paused or its subscription inactive do not.
+func (s *Sender) LastAckAt() time.Time {
+	acked := s.lastAck.Load()
+	if acked == nil {
+		return time.Time{}
+	}
+
+	return *acked
+}
+
 // CloseStreams closes every tier's cached stream so the next send opens a fresh one. A pause calls it to stop
 // holding a stream open to a server that is discarding what it receives.
 //
@@ -225,11 +253,56 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 		return
 	}
 
-	envelope := s.buildEnvelope(items)
-	ids := make([]string, len(items))
-	for i, item := range items {
-		ids[i] = item.ID
+	chunks, oversized := splitByBudget(s.buildItems(items), maxEnvelopeBytes, maxItemBytes)
+	if len(oversized) > 0 {
+		for _, item := range oversized {
+			s.logger.Error("discarding telemetry item too large for the server to accept",
+				"tier", tier, "type", item.Type, "event_id", item.EventId, "bytes", proto.Size(item), "limit", maxItemBytes)
+		}
+		if _, err := s.store.DiscardTelemetry(eventIDs(oversized)); err != nil {
+			s.logger.Error("failed to discard oversized telemetry", "tier", tier, "error", err)
+		}
 	}
+
+	for i, chunk := range chunks {
+		// A pause can begin while an earlier envelope is in flight, for instance when a heartbeat ping reports
+		// it. By then the queue has been cleared and the streams closed, so sending on would put pre-pause data
+		// on the wire and reopen a stream that nothing would close until the pause ends.
+		if i > 0 && s.pause.Paused() {
+			s.markUnsentPending(chunks[i:])
+
+			return
+		}
+
+		if s.sendEnvelope(ctx, tier, chunk) {
+			continue
+		}
+
+		// Stop at the first envelope that was not delivered, or that left the host paused.
+		s.markUnsentPending(chunks[i+1:])
+
+		return
+	}
+}
+
+// markUnsentPending puts the items of envelopes that were never sent back to pending so the next tick retries
+// them in order. If a pause cleared the queue, these ids are already gone and marking them changes nothing.
+func (s *Sender) markUnsentPending(unsentChunks [][]*pb.TelemetryItem) {
+	var unsent []string
+	for _, chunk := range unsentChunks {
+		unsent = append(unsent, eventIDs(chunk)...)
+	}
+	if markErr := s.store.MarkTelemetryPending(unsent); markErr != nil {
+		s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
+	}
+}
+
+// sendEnvelope sends one envelope and settles its items in the queue: completed when the server accepts them,
+// pending when it does not. It reports whether the caller may go on to send the next envelope, which it may not
+// after a failure or once the server has reported the host paused.
+func (s *Sender) sendEnvelope(ctx context.Context, tier string, items []*pb.TelemetryItem) bool {
+	envelope := s.newEnvelope(items)
+	ids := eventIDs(items)
 
 	s.logger.Debug("sending telemetry batch", "tier", tier, "count", len(items), "batch_id", envelope.BatchId)
 
@@ -245,10 +318,22 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 		if markErr := s.store.MarkTelemetryPending(ids); markErr != nil {
 			s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
 		}
-		return
+
+		return false
 	}
 
-	if ack.Success {
+	// An ack that carries a pause reason reports success so the batch is dropped, but it says the server is
+	// discarding this host's data. It must not count as the server taking it, or a paused host would look healthy
+	// to whatever reads LastAckAt.
+	pauseReason := pause.FromProto(ack.Reason)
+
+	delivered := ack.Success
+	if delivered {
+		if pauseReason == pause.None {
+			acked := s.clock()
+			s.lastAck.Store(&acked)
+		}
+
 		if err := s.store.MarkTelemetryCompleted(ids); err != nil {
 			s.logger.Error("failed to mark telemetry completed", "error", err)
 		}
@@ -265,17 +350,18 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 	// released the tier lock, because entering the pause runs hooks that close the streams and take it again.
 	// An ack only ever starts or renews a pause: a reason this agent does not know is ignored rather than
 	// read as "resumed", and a plain ack proves nothing about a pause that is already in force.
-	if reason := pause.FromProto(ack.Reason); reason != pause.None {
-		s.pause.Observe(reason)
+	if pauseReason != pause.None {
+		s.pause.Observe(pauseReason)
+
+		return false
 	}
+
+	return delivered
 }
 
-func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvelope {
-	envelope := &pb.TelemetryEnvelope{
-		BatchId:        id.NewV7(),
-		AgentTimestamp: timestamppb.New(s.clock()),
-	}
-
+// buildItems converts queued rows into wire items, keeping their order.
+func (s *Sender) buildItems(items []db.TelemetryQueueItem) []*pb.TelemetryItem {
+	telItems := make([]*pb.TelemetryItem, 0, len(items))
 	for _, item := range items {
 		telItem := &pb.TelemetryItem{
 			EventId:     item.ID,
@@ -284,10 +370,61 @@ func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvel
 		}
 
 		s.setPayload(telItem, item)
-		envelope.Items = append(envelope.Items, telItem)
+		telItems = append(telItems, telItem)
 	}
 
-	return envelope
+	return telItems
+}
+
+// newEnvelope wraps wire items in a freshly identified, timestamped envelope.
+func (s *Sender) newEnvelope(items []*pb.TelemetryItem) *pb.TelemetryEnvelope {
+	return &pb.TelemetryEnvelope{
+		BatchId:        id.NewV7(),
+		AgentTimestamp: timestamppb.New(s.clock()),
+		Items:          items,
+	}
+}
+
+// buildEnvelope converts queued rows into a single envelope.
+func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvelope {
+	return s.newEnvelope(s.buildItems(items))
+}
+
+// splitByBudget groups items, in order, into envelopes whose summed encoded size stays within budget. An item
+// larger than the budget but within maxItem goes in an envelope of its own. An item larger than maxItem can
+// never be accepted by the server, so it is returned as oversized and placed in no envelope.
+func splitByBudget(items []*pb.TelemetryItem, budget, maxItem int) (chunks [][]*pb.TelemetryItem, oversized []*pb.TelemetryItem) {
+	var current []*pb.TelemetryItem
+	currentSize := 0
+	for _, item := range items {
+		size := proto.Size(item) + itemFramingBytes
+		if size > maxItem {
+			oversized = append(oversized, item)
+
+			continue
+		}
+		if len(current) > 0 && currentSize+size > budget {
+			chunks = append(chunks, current)
+			current = nil
+			currentSize = 0
+		}
+		current = append(current, item)
+		currentSize += size
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+
+	return chunks, oversized
+}
+
+func eventIDs(items []*pb.TelemetryItem) []string {
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.EventId
+	}
+
+	return ids
 }
 
 // payloadEntry describes how to unmarshal a telemetry type's JSON payload and wrap it in a TelemetryItem oneof.
@@ -374,6 +511,18 @@ var payloadDispatch = map[db.TelemetryType]payloadEntry{
 		newMsg: func() proto.Message { return &pb.AgentVersionRecord{} },
 		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
 			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_AgentVersion{AgentVersion: m.(*pb.AgentVersionRecord)}}
+		},
+	},
+	db.TelemetryKubernetesNode: {
+		newMsg: func() proto.Message { return &pb.KubernetesNodeRecord{} },
+		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
+			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_KubernetesNode{KubernetesNode: m.(*pb.KubernetesNodeRecord)}}
+		},
+	},
+	db.TelemetryKubernetesCluster: {
+		newMsg: func() proto.Message { return &pb.KubernetesClusterRecord{} },
+		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
+			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_KubernetesCluster{KubernetesCluster: m.(*pb.KubernetesClusterRecord)}}
 		},
 	},
 }

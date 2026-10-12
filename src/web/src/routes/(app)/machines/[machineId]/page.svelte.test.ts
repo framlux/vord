@@ -3,13 +3,14 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineType, OperatingSystem, UserAccountRole } from '$lib/api/types';
 import type {
 	AlertRuleDto,
 	MachineDetailDto,
 	MachineDto,
+	MachineKubernetesDto,
 	SubscriptionDto,
 	UserDto
 } from '$lib/api/types';
@@ -395,6 +396,7 @@ function makeDetail(overrides: Partial<MachineDetailDto> = {}): MachineDetailDto
 		recentSshSessions: [],
 		telemetryLastUpdated: '2026-08-28T10:00:00Z',
 		agentVersion: null,
+		kubernetes: null,
 		...overrides
 	};
 }
@@ -406,6 +408,41 @@ function renderWithDetail(detail: MachineDetailDto) {
 		}
 	});
 }
+
+describe('machine detail Kubernetes identity', () => {
+	it('shows the Kubernetes section for a machine that reported Kubernetes state', () => {
+		renderWithDetail(
+			makeDetail({
+				kubernetes: {
+					local: {
+						distro: 'k3s',
+						kubeletVersion: 'v1.31.4+k3s1',
+						nodeName: 'cp-1',
+						nodeNameSource: 'certificate',
+						hasKubelet: true,
+						controlPlane: true,
+						adminCredentialPresent: true,
+						reporterEnrolled: false
+					},
+					node: null,
+					clusterId: 12,
+					clusterName: 'Production',
+					grouping: 'grouped',
+					candidate: null
+				}
+			})
+		);
+
+		expect(screen.getByTestId('kubernetes-section')).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Production' })).toHaveAttribute('href', '/clusters/12');
+	});
+
+	it('shows no Kubernetes section for a machine that is not a Kubernetes node', () => {
+		renderWithDetail(makeDetail({ kubernetes: null }));
+
+		expect(screen.queryByTestId('kubernetes-section')).not.toBeInTheDocument();
+	});
+});
 
 describe('machine detail CPU breakdown', () => {
 	it('shows the user, system and iowait components of the CPU figure', () => {
@@ -531,6 +568,54 @@ describe('machine detail removal', () => {
 		render(MachinePage, { props: { data } });
 
 		expect(screen.queryByRole('button', { name: 'Remove host' })).not.toBeInTheDocument();
+	});
+});
+
+describe('machine detail removal of a cluster reporter', () => {
+	const REPORTER_WARNING =
+		'This machine is a cluster reporter. Its token and the cluster objects remain until you disable reporting on the cluster page.';
+
+	function renderWithCandidate(candidate: MachineKubernetesDto['candidate']) {
+		return renderWithDetail(
+			makeDetail({
+				kubernetes: {
+					local: null,
+					node: null,
+					clusterId: 12,
+					clusterName: 'Production',
+					grouping: 'grouped',
+					candidate
+				}
+			})
+		);
+	}
+
+	it('warns in the removal confirmation when the machine is a candidate of a cluster', async () => {
+		renderWithCandidate({ clusterId: 12, isHolder: false, reporterError: null, lastReportAt: '2026-08-28T09:00:00Z' });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+		expect(screen.getByTestId('reporter-warning')).toHaveTextContent(REPORTER_WARNING);
+		expect(within(screen.getByTestId('reporter-warning')).getByRole('link', { name: 'cluster page' })).toHaveAttribute(
+			'href',
+			'/clusters/12'
+		);
+	});
+
+	it('does not warn about a Kubernetes machine that is not a candidate', async () => {
+		renderWithCandidate(null);
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+		expect(screen.queryByTestId('reporter-warning')).not.toBeInTheDocument();
+	});
+
+	it('does not warn about a machine with no Kubernetes state at all', async () => {
+		renderWithDetail(makeDetail({ kubernetes: null }));
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+
+		expect(screen.queryByTestId('reporter-warning')).not.toBeInTheDocument();
 	});
 });
 

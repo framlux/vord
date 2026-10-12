@@ -14,6 +14,7 @@ using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Jobs;
+using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Observability;
@@ -178,6 +179,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IPartitionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITenantDeletionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IKubernetesInventoryRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddSingleton<IServerSettingsReader, ServerSettingsReader>();
 
         return services;
@@ -357,9 +359,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RegistrationTokenHandler>();
         services.AddScoped<UserHandler>();
         services.AddScoped<MachineDetailHandler>();
+        services.AddScoped<KubernetesClusterHandler>();
+        services.AddScoped<KubernetesReporterMachineReader>();
         services.AddScoped<IDataExportHandler, DataExportHandler>();
         services.AddScoped<ISigningKeyService, SigningKeyService>();
         services.AddScoped<MachineAuthorizedKeyService>();
+        services.AddScoped<IKubernetesCommandEligibility, KubernetesCommandEligibility>();
         services.AddScoped<RemoteCommandService>();
 
         if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)
@@ -501,6 +506,16 @@ public static class ServiceCollectionExtensions
                 streamingOptions: sp.GetRequiredService<IOptions<StreamingOptions>>(),
                 projectionMetrics: sp.GetRequiredService<ProjectionMetrics>()));
         }
+
+        // The Kubernetes inventory projection reads its own stream under one global lock, so a single
+        // instance is registered however many shards the state projection uses. It is a separate
+        // service so a report it cannot apply never holds back the machine state projection.
+        services.AddSingleton<IHostedService>(sp => new KubernetesInventoryProjectionService(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<IAdvisoryLockProvider>(),
+            sp.GetRequiredService<ILogger<KubernetesInventoryProjectionService>>(),
+            sp.GetRequiredService<IOptions<StreamingOptions>>(),
+            sp.GetRequiredService<KubernetesInventoryMetrics>()));
 
         services.AddHangfireJobTypes(
             isSaas: isSaas,

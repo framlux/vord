@@ -5,7 +5,6 @@
 package commands
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"time"
@@ -65,6 +64,7 @@ type Processor struct {
 	ack              CommandAcknowledger
 	destructiveDelay time.Duration
 	maxTimestampAge  time.Duration
+	now              func() time.Time
 }
 
 // NewProcessor creates a command processor.
@@ -75,6 +75,7 @@ func NewProcessor(handler *Handler, store NonceStore, ack CommandAcknowledger, d
 		ack:              ack,
 		destructiveDelay: destructiveDelay,
 		maxTimestampAge:  5 * time.Minute,
+		now:              time.Now,
 	}
 }
 
@@ -125,8 +126,27 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		return
 	}
 
-	// 2. Rebuild canonical payload from individual fields and verify Ed25519 signature.
-	rebuiltPayload, err := crypto.BuildCanonicalPayload(crypto.CanonicalPayload{
+	// 2. Verify the Ed25519 signature over the exact bytes the server delivered, before reading anything in them.
+	signedBytes := []byte(cmd.CanonicalPayload)
+	if crypto.VerifySignature(key.PublicKey, signedBytes, cmd.Signature) == false {
+		slog.Error("invalid signature, rejecting command", "command_id", cmd.ID)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "invalid signature", ResultTypeRejected)
+
+		return
+	}
+
+	// 2a. Decode the signed bytes strictly, so what is read is unambiguous.
+	payload, err := crypto.ParseCanonicalPayload(signedBytes)
+	if err != nil {
+		slog.Error("canonical payload could not be parsed, rejecting command", "command_id", cmd.ID, "error", err)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "canonical payload error", ResultTypeRejected)
+
+		return
+	}
+
+	// 2b. Every signed field must describe the command that was delivered. The signed timestamps are compared as
+	// instants because the web client and the server render them differently.
+	if payload.BindsTo(crypto.BoundCommand{
 		CommandID:   cmd.ID,
 		CommandType: cmd.Type,
 		ExpiresAt:   cmd.ExpiresAt,
@@ -136,31 +156,15 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		TenantID:    cmd.TenantID,
 		Timestamp:   cmd.Timestamp,
 		UserID:      cmd.UserID,
-	})
-	if err != nil {
-		slog.Error("failed to build canonical payload, rejecting command", "command_id", cmd.ID, "error", err)
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "canonical payload error", ResultTypeRejected)
-
-		return
-	}
-
-	// Verify the server-supplied canonical payload matches the locally rebuilt one.
-	if bytes.Equal(rebuiltPayload, []byte(cmd.CanonicalPayload)) == false {
-		slog.Error("canonical payload mismatch, rejecting command", "command_id", cmd.ID)
+	}) == false {
+		slog.Error("canonical payload does not match the delivered command, rejecting command", "command_id", cmd.ID)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "canonical payload mismatch", ResultTypeRejected)
 
 		return
 	}
 
-	if crypto.VerifySignature(key.PublicKey, rebuiltPayload, cmd.Signature) == false {
-		slog.Error("invalid signature, rejecting command", "command_id", cmd.ID)
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "invalid signature", ResultTypeRejected)
-
-		return
-	}
-
-	// 3. Validate timestamps.
-	if err := crypto.ValidateTimestamps(cmd.Timestamp, cmd.ExpiresAt, p.maxTimestampAge); err != nil {
+	// 3. Validate the signed timestamps.
+	if err := crypto.ValidateTimestamps(p.now().UTC(), payload.Timestamp, payload.ExpiresAt, p.maxTimestampAge); err != nil {
 		slog.Error("timestamp validation failed, rejecting command", "command_id", cmd.ID, "error", err)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", err.Error(), ResultTypeRejected)
 
@@ -168,7 +172,7 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 	}
 
 	// 4. Check nonce.
-	used, err := p.store.IsNonceUsed(cmd.Nonce)
+	used, err := p.store.IsNonceUsed(payload.Nonce)
 	if err != nil {
 		slog.Error("nonce check failed", "command_id", cmd.ID, "error", err)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "nonce check error", ResultTypeRejected)
@@ -176,22 +180,24 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		return
 	}
 	if used {
-		slog.Warn("nonce already used, rejecting replay", "command_id", cmd.ID, "nonce", cmd.Nonce)
+		slog.Warn("nonce already used, rejecting replay", "command_id", cmd.ID, "nonce", payload.Nonce)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "nonce already used", ResultTypeRejected)
 
 		return
 	}
 
 	// 5. Record nonce — reject the command if recording fails to prevent replay.
-	if err := p.store.RecordNonce(cmd.Nonce); err != nil {
+	if err := p.store.RecordNonce(payload.Nonce); err != nil {
 		slog.Error("failed to record nonce, rejecting command", "command_id", cmd.ID, "error", err)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "nonce recording failed", ResultTypeRejected)
 
 		return
 	}
 
-	// 6. Execute command, handling destructive commands with a delay.
-	if cmdType.IsDestructive() {
+	// 6. Execute the signed type with the signed params. Binding made them equal to the command's own, and they
+	// are the ones read from the bytes the signature covers.
+	signedType := CommandType(payload.CommandType)
+	if signedType.IsDestructive() {
 		// ACK with Initiated before executing destructive command.
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, true, 0, "", "", "will execute in 10s", ResultTypeInitiated)
 
@@ -203,39 +209,44 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		}
 
 		result := p.handler.Execute(ctx, Command{
-			Type:   cmdType,
-			Params: cmd.Params,
+			Type:   signedType,
+			Params: payload.Params,
 		})
 
 		// Always ACK destructive command results so the server knows the outcome.
-		resultType := ResultTypeCompleted
-		if result.Success == false {
-			resultType = ResultTypeFailed
-		}
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultType)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultTypeOf(result))
 
 		if result.Error != nil {
-			slog.Error("destructive command failed", "command_id", cmd.ID, "type", cmd.Type, "error", result.Error)
+			slog.Error("destructive command failed", "command_id", cmd.ID, "type", payload.CommandType, "error", result.Error)
 		} else {
-			slog.Info("destructive command executed", "command_id", cmd.ID, "type", cmd.Type, "message", result.Message)
+			slog.Info("destructive command executed", "command_id", cmd.ID, "type", payload.CommandType, "message", result.Message)
 		}
 	} else {
 		// Execute immediately and ACK with full result.
 		result := p.handler.Execute(ctx, Command{
-			Type:   cmdType,
-			Params: cmd.Params,
+			Type:   signedType,
+			Params: payload.Params,
 		})
 
-		resultType := ResultTypeCompleted
-		if result.Success == false {
-			resultType = ResultTypeFailed
-		}
-		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultType)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, result.Success, 0, "", "", result.Message, resultTypeOf(result))
 
 		if result.Error != nil {
-			slog.Error("command execution failed", "command_id", cmd.ID, "type", cmd.Type, "error", result.Error)
+			slog.Error("command execution failed", "command_id", cmd.ID, "type", payload.CommandType, "error", result.Error)
 		} else {
-			slog.Info("command executed", "command_id", cmd.ID, "type", cmd.Type, "message", result.Message)
+			slog.Info("command executed", "command_id", cmd.ID, "type", payload.CommandType, "message", result.Message)
 		}
 	}
+}
+
+// resultTypeOf maps an execution result to the result type acknowledged to the server: completed, failed, or
+// rejected for a command the executor refused before doing anything.
+func resultTypeOf(result Result) int32 {
+	switch {
+	case result.Success:
+		return ResultTypeCompleted
+	case result.Rejected:
+		return ResultTypeRejected
+	}
+
+	return ResultTypeFailed
 }

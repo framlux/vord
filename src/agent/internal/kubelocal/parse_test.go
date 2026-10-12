@@ -1,0 +1,1084 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+package kubelocal
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"strings"
+	"testing"
+	"time"
+)
+
+// commonBadInputs are inputs no parser may panic on. The files read here come from arbitrary hosts, so they can
+// hold truncated data, binary garbage, NUL bytes or oversized lines.
+var commonBadInputs = []string{
+	"",                         // empty
+	"\x00\x01\x02\xff\xfe",     // binary garbage
+	"\x00\x00\x00\x00",         // NUL-filled
+	strings.Repeat("a", 1<<20), // extremely long single line (1MB)
+	"   \n\t\n  ",              // only whitespace
+	"\n\n\n\n",                 // only newlines
+	"\r\n\r\n",                 // Windows line endings
+	"\t\t\t\t",                 // tab-heavy
+	"cpu \xf0\x9f\x94\xa5 100", // Unicode/emoji
+	"-1",                       // negative number
+	"99999999999999999999",     // overflow number
+}
+
+// truncatedInput returns the first line of a format with more data after it.
+func truncatedInput(fullInput string) string {
+	idx := strings.Index(fullInput, "\n")
+	if idx < 0 {
+		return fullInput
+	}
+
+	return fullInput[:idx]
+}
+
+// testCert is a self-signed certificate built in the test, with the key material needed to
+// write it as the PEM blocks a Kubernetes node keeps on disk.
+type testCert struct {
+	cert    *x509.Certificate
+	certPEM []byte
+	keyPEM  []byte
+}
+
+// newTestCert builds a self-signed ECDSA certificate with the given common name. Validity uses
+// fixed dates so the output never depends on the wall clock.
+func newTestCert(t *testing.T, commonName string, serial int64) testCert {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: commonName},
+		NotBefore:    time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2036, time.January, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+
+	return testCert{
+		cert:    parsed,
+		certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		keyPEM:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	}
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+
+	return hex.EncodeToString(sum[:])
+}
+
+// --- CAFingerprint ---
+
+// Intent: the fingerprint is the lowercase hex SHA-256 of the DER bytes of the first certificate,
+// so two nodes of one cluster agree on it however many certificates follow in the bundle.
+func TestCaFingerprintUsesFirstCertificateOfBundle(t *testing.T) {
+	first := newTestCert(t, "kubernetes-ca", 1)
+	second := newTestCert(t, "front-proxy-ca", 2)
+
+	bundle := append(append([]byte{}, first.certPEM...), second.certPEM...)
+
+	got, err := CAFingerprint(bundle)
+	if err != nil {
+		t.Fatalf("CAFingerprint returned error: %v", err)
+	}
+
+	want := sha256Hex(first.cert.Raw)
+	if got != want {
+		t.Errorf("CAFingerprint = %q, want %q", got, want)
+	}
+
+	if got != strings.ToLower(got) {
+		t.Errorf("CAFingerprint = %q, want lowercase hex", got)
+	}
+
+	if got == sha256Hex(second.cert.Raw) {
+		t.Errorf("CAFingerprint matched the second certificate of the bundle")
+	}
+}
+
+// Intent: a private key is never a CA: a PEM file holding only a key yields an error, so a
+// misconfigured path cannot produce a fingerprint from key material.
+func TestCaFingerprintRejectsFileWithOnlyPrivateKey(t *testing.T) {
+	c := newTestCert(t, "kubernetes-ca", 1)
+
+	got, err := CAFingerprint(c.keyPEM)
+	if err == nil {
+		t.Errorf("CAFingerprint accepted a key-only file and returned %q", got)
+	}
+
+	if got != "" {
+		t.Errorf("CAFingerprint = %q on error, want empty", got)
+	}
+}
+
+// Intent: a key block ahead of the certificate is walked past without being decoded, and the
+// fingerprint is still taken from the certificate.
+func TestCaFingerprintSkipsPrivateKeyBlockBeforeCertificate(t *testing.T) {
+	c := newTestCert(t, "kubernetes-ca", 1)
+
+	garbageKey := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not a der structure")})
+	input := append(append([]byte{}, garbageKey...), c.certPEM...)
+
+	got, err := CAFingerprint(input)
+	if err != nil {
+		t.Fatalf("CAFingerprint returned error: %v", err)
+	}
+
+	if want := sha256Hex(c.cert.Raw); got != want {
+		t.Errorf("CAFingerprint = %q, want %q", got, want)
+	}
+}
+
+// Intent: a CERTIFICATE block whose bytes are not a certificate is an error rather than a
+// fingerprint of garbage.
+func TestCaFingerprintRejectsInvalidCertificateBlock(t *testing.T) {
+	input := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a der structure")})
+
+	got, err := CAFingerprint(input)
+	if err == nil {
+		t.Errorf("CAFingerprint accepted an invalid certificate and returned %q", got)
+	}
+}
+
+// Intent: hostile or truncated files on a node never crash the agent: every bad input yields an error and no fingerprint.
+func TestCaFingerprintNoPanic(t *testing.T) {
+	c := newTestCert(t, "kubernetes-ca", 1)
+
+	inputs := append([]string{}, commonBadInputs...)
+	inputs = append(inputs,
+		"-----BEGIN CERTIFICATE-----",                                  // header with no body
+		"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----", // body that is not base64
+		"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----", // base64 that is not a certificate
+		string(c.certPEM[:len(c.certPEM)/2]),                           // certificate cut off mid-body
+		truncatedInput(string(c.certPEM)),                              // only the BEGIN line
+		string(c.keyPEM),                                               // key block only
+	)
+
+	for _, input := range inputs {
+		t.Run("", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("CAFingerprint panicked on input %q: %v", input[:min(len(input), 50)], r)
+				}
+			}()
+
+			got, err := CAFingerprint([]byte(input))
+			if (err == nil) && (got != "") {
+				t.Errorf("CAFingerprint returned %q without an error for input %q", got, input[:min(len(input), 50)])
+			}
+		})
+	}
+}
+
+// --- NodeNameFromCert ---
+
+// Intent: the kubelet client certificate identifies the node by its CN system:node:<name>, and
+// that name is what the collector reports as the node name.
+func TestNodeNameFromCertReadsNodeCommonName(t *testing.T) {
+	c := newTestCert(t, "system:node:node-1", 1)
+
+	got, err := NodeNameFromCert(c.certPEM)
+	if err != nil {
+		t.Fatalf("NodeNameFromCert returned error: %v", err)
+	}
+
+	if got != "node-1" {
+		t.Errorf("NodeNameFromCert = %q, want %q", got, "node-1")
+	}
+}
+
+// Intent: kubelet-client-current.pem combines the certificate and its key in one file, in either
+// order, and the name is read in both layouts.
+func TestNodeNameFromCertReadsCombinedFileWithKeyBeforeAndAfter(t *testing.T) {
+	c := newTestCert(t, "system:node:worker-7", 1)
+
+	layouts := map[string][]byte{
+		"key before certificate": append(append([]byte{}, c.keyPEM...), c.certPEM...),
+		"key after certificate":  append(append([]byte{}, c.certPEM...), c.keyPEM...),
+	}
+
+	for name, input := range layouts {
+		t.Run(name, func(t *testing.T) {
+			got, err := NodeNameFromCert(input)
+			if err != nil {
+				t.Fatalf("NodeNameFromCert returned error: %v", err)
+			}
+
+			if got != "worker-7" {
+				t.Errorf("NodeNameFromCert = %q, want %q", got, "worker-7")
+			}
+		})
+	}
+}
+
+// Intent: private key blocks are skipped without being decoded, so a key block that is not valid
+// DER neither fails the read nor is ever parsed.
+func TestNodeNameFromCertSkipsKeyBlocksWithoutDecodingThem(t *testing.T) {
+	c := newTestCert(t, "system:node:node-1", 1)
+
+	garbageKey := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte("not a der structure")})
+	input := append(append([]byte{}, garbageKey...), c.certPEM...)
+
+	got, err := NodeNameFromCert(input)
+	if err != nil {
+		t.Fatalf("NodeNameFromCert returned error: %v", err)
+	}
+
+	if got != "node-1" {
+		t.Errorf("NodeNameFromCert = %q, want %q", got, "node-1")
+	}
+}
+
+// Intent: only a node certificate names a node: the admin credential's CN is rejected so an
+// admin client certificate is never mistaken for a kubelet identity.
+func TestNodeNameFromCertRejectsNonNodeCommonName(t *testing.T) {
+	for _, commonName := range []string{"kubernetes-admin", "system:node:", "system:nodes", "node-1", ""} {
+		t.Run(commonName, func(t *testing.T) {
+			c := newTestCert(t, commonName, 1)
+
+			got, err := NodeNameFromCert(c.certPEM)
+			if err == nil {
+				t.Errorf("NodeNameFromCert accepted CN %q and returned %q", commonName, got)
+			}
+
+			if got != "" {
+				t.Errorf("NodeNameFromCert = %q on error, want empty", got)
+			}
+		})
+	}
+}
+
+// Intent: a file holding only a private key has no node identity, and the key is never read to
+// find one.
+func TestNodeNameFromCertRejectsFileWithOnlyKeyBlock(t *testing.T) {
+	c := newTestCert(t, "system:node:node-1", 1)
+
+	got, err := NodeNameFromCert(c.keyPEM)
+	if err == nil {
+		t.Errorf("NodeNameFromCert accepted a key-only file and returned %q", got)
+	}
+
+	if got != "" {
+		t.Errorf("NodeNameFromCert = %q on error, want empty", got)
+	}
+}
+
+// Intent: only the first certificate names the node: a file whose first certificate is the admin
+// identity is rejected even when a later certificate is a node identity, so the collector never
+// picks a name from a certificate that is not the file's client certificate.
+func TestNodeNameFromCertUsesFirstCertificateOnly(t *testing.T) {
+	admin := newTestCert(t, "kubernetes-admin", 1)
+	node := newTestCert(t, "system:node:x", 2)
+
+	input := append(append([]byte{}, admin.certPEM...), node.certPEM...)
+
+	got, err := NodeNameFromCert(input)
+	if err == nil {
+		t.Errorf("NodeNameFromCert read a later certificate and returned %q", got)
+	}
+
+	if got != "" {
+		t.Errorf("NodeNameFromCert = %q on error, want empty", got)
+	}
+}
+
+// Intent: the node name travels to the server in a string field, so only a valid RFC 1123 subdomain
+// of at most 253 characters is accepted; anything else is rejected rather than reported.
+func TestNodeNameFromCertRejectsInvalidNodeNames(t *testing.T) {
+	cases := map[string]string{
+		"uppercase":           "Worker-7",
+		"underscore":          "node_1",
+		"space":               "has space",
+		"leading hyphen":      "-node",
+		"trailing hyphen":     "node-",
+		"leading dot":         ".node",
+		"trailing dot":        "node.",
+		"empty label":         "a..b",
+		"slash":               "a/b",
+		"non ascii":           "n\u00f6de",
+		"too long":            strings.Repeat("a", 254),
+		"too long with dots":  strings.Repeat("ab.", 90) + "ab",
+		"control character":   "node\x01",
+		"colon inside":        "node:1",
+		"wildcard":            "*.example.com",
+		"percent":             "node%41",
+		"only a hyphen":       "-",
+		"only a dot":          ".",
+		"trailing whitespace": "node ",
+	}
+
+	for name, nodeName := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
+
+			got, err := NodeNameFromCert(c.certPEM)
+			if err == nil {
+				t.Errorf("NodeNameFromCert accepted node name %q and returned %q", nodeName, got)
+			}
+
+			if got != "" {
+				t.Errorf("NodeNameFromCert = %q on error, want empty", got)
+			}
+		})
+	}
+}
+
+// Intent: ordinary and boundary-length node names, including dotted FQDNs and a name of exactly
+// 253 characters, are reported unchanged.
+func TestNodeNameFromCertAcceptsValidNodeNames(t *testing.T) {
+	longest := strings.Repeat("a", 253)
+
+	for _, nodeName := range []string{"node-1", "n", "0", "worker.example.com", "a-b.c-d", "10.0.0.5", longest} {
+		t.Run(nodeName[:min(len(nodeName), 20)], func(t *testing.T) {
+			c := newTestCert(t, nodeCertCommonNamePrefix+nodeName, 1)
+
+			got, err := NodeNameFromCert(c.certPEM)
+			if err != nil {
+				t.Fatalf("NodeNameFromCert returned error for %q: %v", nodeName, err)
+			}
+
+			if got != nodeName {
+				t.Errorf("NodeNameFromCert = %q, want %q", got, nodeName)
+			}
+		})
+	}
+}
+
+// Intent: hostile or truncated certificate files never crash the agent: every bad input yields an error and no name.
+func TestNodeNameFromCertNoPanic(t *testing.T) {
+	c := newTestCert(t, "system:node:node-1", 1)
+
+	inputs := append([]string{}, commonBadInputs...)
+	inputs = append(inputs,
+		"-----BEGIN CERTIFICATE-----",                                  // header with no body
+		"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----", // body that is not base64
+		"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----", // base64 that is not a certificate
+		string(c.certPEM[:len(c.certPEM)/2]),                           // certificate cut off mid-body
+		truncatedInput(string(c.certPEM)),                              // only the BEGIN line
+		string(c.keyPEM),                                               // key block only
+	)
+
+	for _, input := range inputs {
+		t.Run("", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("NodeNameFromCert panicked on input %q: %v", input[:min(len(input), 50)], r)
+				}
+			}()
+
+			got, err := NodeNameFromCert([]byte(input))
+			if (err == nil) && (got != "") {
+				t.Errorf("NodeNameFromCert returned %q without an error for input %q", got, input[:min(len(input), 50)])
+			}
+		})
+	}
+}
+
+// --- ParseKubeconfig ---
+
+const kubeconfigEmbeddedTemplate = `apiVersion: v1
+kind: Config
+current-context: default
+clusters:
+- name: kubernetes
+  cluster:
+    server: https://10.0.0.1:6443
+    certificate-authority-data: %s
+contexts:
+- name: default
+  context:
+    cluster: kubernetes
+    user: kubelet
+users:
+- name: kubelet
+  user:
+    client-certificate-data: %s
+    client-key-data: %s
+`
+
+func refsAreEmpty(refs KubeconfigRefs) bool {
+	return (refs.CAData == nil) && (refs.CAPath == "") && (refs.CertData == nil) && (refs.CertPath == "")
+}
+
+// Intent: certificates embedded in the kubeconfig are base64 on disk and must come back as the
+// original bytes, so the collector fingerprints and reads the same certificate the cluster uses.
+func TestParseKubeconfigDecodesEmbeddedData(t *testing.T) {
+	ca := newTestCert(t, "kubernetes-ca", 1)
+	client := newTestCert(t, "system:node:node-1", 2)
+
+	data := fmt.Sprintf(kubeconfigEmbeddedTemplate,
+		base64.StdEncoding.EncodeToString(ca.certPEM),
+		base64.StdEncoding.EncodeToString(client.certPEM),
+		base64.StdEncoding.EncodeToString(client.keyPEM))
+
+	refs, err := ParseKubeconfig([]byte(data))
+	if err != nil {
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
+	}
+
+	if bytes.Equal(refs.CAData, ca.certPEM) == false {
+		t.Errorf("CAData did not decode to the original certificate bytes")
+	}
+
+	if bytes.Equal(refs.CertData, client.certPEM) == false {
+		t.Errorf("CertData did not decode to the original certificate bytes")
+	}
+
+	if (refs.CAPath != "") || (refs.CertPath != "") {
+		t.Errorf("paths = (%q, %q), want both empty for an embedded kubeconfig", refs.CAPath, refs.CertPath)
+	}
+}
+
+// Intent: a kubeconfig that points at files returns those paths exactly as written, because the
+// collector, not the parser, decides how to resolve and read them.
+func TestParseKubeconfigReturnsPathsVerbatim(t *testing.T) {
+	data := `apiVersion: v1
+kind: Config
+current-context: default
+clusters:
+- name: kubernetes
+  cluster:
+    server: https://127.0.0.1:6443
+    certificate-authority: /etc/kubernetes/pki/ca.crt
+contexts:
+- name: default
+  context:
+    cluster: kubernetes
+    user: kubelet
+users:
+- name: kubelet
+  user:
+    client-certificate: pki/../kubelet-client-current.pem
+    client-key: /var/lib/kubelet/pki/kubelet-client-current.pem
+`
+
+	refs, err := ParseKubeconfig([]byte(data))
+	if err != nil {
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
+	}
+
+	if refs.CAPath != "/etc/kubernetes/pki/ca.crt" {
+		t.Errorf("CAPath = %q, want %q", refs.CAPath, "/etc/kubernetes/pki/ca.crt")
+	}
+
+	if refs.CertPath != "pki/../kubelet-client-current.pem" {
+		t.Errorf("CertPath = %q, want it returned verbatim", refs.CertPath)
+	}
+
+	if (refs.CAData != nil) || (refs.CertData != nil) {
+		t.Errorf("embedded data present for a path-based kubeconfig: CAData=%v CertData=%v", refs.CAData, refs.CertData)
+	}
+}
+
+// Intent: a user that authenticates by token or password has no client certificate, so the parse
+// succeeds, reports no certificate reference, and still returns the cluster CA.
+func TestParseKubeconfigTokenAndPasswordUsersHaveNoCertificate(t *testing.T) {
+	ca := newTestCert(t, "kubernetes-ca", 1)
+	caB64 := base64.StdEncoding.EncodeToString(ca.certPEM)
+
+	users := map[string]string{
+		"token":    "    token: abcdef0123456789\n",
+		"password": "    username: admin\n    password: s3cret\n",
+	}
+
+	for name, userBody := range users {
+		t.Run(name, func(t *testing.T) {
+			data := "apiVersion: v1\nkind: Config\ncurrent-context: default\n" +
+				"clusters:\n- name: kubernetes\n  cluster:\n    server: https://10.0.0.1:6443\n    certificate-authority-data: " + caB64 + "\n" +
+				"contexts:\n- name: default\n  context:\n    cluster: kubernetes\n    user: admin\n" +
+				"users:\n- name: admin\n  user:\n" + userBody
+
+			refs, err := ParseKubeconfig([]byte(data))
+			if err != nil {
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
+			}
+
+			if (refs.CertData != nil) || (refs.CertPath != "") {
+				t.Errorf("certificate reference = (%v, %q), want none for a %s user", refs.CertData, refs.CertPath, name)
+			}
+
+			if bytes.Equal(refs.CAData, ca.certPEM) == false {
+				t.Errorf("CAData lost for a %s user", name)
+			}
+		})
+	}
+}
+
+// Intent: corrupt base64 is a hard error rather than a silently empty reference, so a damaged
+// kubeconfig is reported instead of being treated as a host without a CA.
+func TestParseKubeconfigRejectsInvalidBase64(t *testing.T) {
+	valid := base64.StdEncoding.EncodeToString([]byte("some certificate bytes"))
+
+	cases := map[string]string{
+		"certificate-authority-data": fmt.Sprintf(kubeconfigEmbeddedTemplate, "***not-base64***", valid, valid),
+		"client-certificate-data":    fmt.Sprintf(kubeconfigEmbeddedTemplate, valid, "***not-base64***", valid),
+	}
+
+	for field, data := range cases {
+		t.Run(field, func(t *testing.T) {
+			_, err := ParseKubeconfig([]byte(data))
+			if err == nil {
+				t.Errorf("ParseKubeconfig accepted invalid base64 in %s", field)
+			}
+		})
+	}
+}
+
+// Intent: malformed YAML is an error, not an empty result that would look like a node with no
+// certificate references.
+func TestParseKubeconfigRejectsMalformedYaml(t *testing.T) {
+	cases := []string{
+		"clusters: [unterminated",
+		"clusters:\n- name: a\n  cluster: {server: \"https://x",
+		"current-context: [a, b\nusers: ]",
+		"apiVersion: v1\n\tkind: Config",
+	}
+
+	for _, data := range cases {
+		t.Run("", func(t *testing.T) {
+			_, err := ParseKubeconfig([]byte(data))
+			if err == nil {
+				t.Errorf("ParseKubeconfig accepted malformed YAML %q", data)
+			}
+		})
+	}
+}
+
+// Intent: a parse failure never echoes file content: the yaml library quotes part of the scalar it
+// choked on, and a kubeconfig scalar can be a token or key, so the returned message is fixed text.
+func TestParseKubeconfigErrorDoesNotEchoFileContent(t *testing.T) {
+	const secret = "SUPERSECRETTOKENVALUE"
+
+	cases := map[string]string{
+		"scalar where a list is expected":    "clusters: " + secret + "\n",
+		"scalar where a mapping is expected": "clusters:\n- name: a\n  cluster: " + secret + "\n",
+		"scalar in a string list":            "users:\n- " + secret + "\n",
+		"scalar after unterminated flow":     "users: [" + secret + "\nclusters: ]",
+	}
+
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseKubeconfig([]byte(data))
+			if err == nil {
+				t.Fatalf("ParseKubeconfig accepted %q", data)
+			}
+
+			if strings.Contains(err.Error(), "SUPERSE") {
+				t.Errorf("error text %q echoes part of the file content", err.Error())
+			}
+		})
+	}
+}
+
+const kubeconfigTwoContexts = `apiVersion: v1
+kind: Config
+%s
+clusters:
+- name: first-cluster
+  cluster:
+    certificate-authority: /pki/first-ca.crt
+- name: second-cluster
+  cluster:
+    certificate-authority: /pki/second-ca.crt
+contexts:
+- name: first
+  context:
+    cluster: first-cluster
+    user: first-user
+- name: second
+  context:
+    cluster: second-cluster
+    user: second-user
+users:
+- name: first-user
+  user:
+    client-certificate: /pki/first-client.pem
+- name: second-user
+  user:
+    client-certificate: /pki/second-client.pem
+`
+
+// Intent: current-context decides which cluster and user the node really uses, so a kubeconfig
+// that lists several contexts yields the selected pair and not merely the first entries.
+func TestParseKubeconfigFollowsCurrentContext(t *testing.T) {
+	refs, err := ParseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, "current-context: second")))
+	if err != nil {
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
+	}
+
+	if refs.CAPath != "/pki/second-ca.crt" {
+		t.Errorf("CAPath = %q, want the cluster of the current context", refs.CAPath)
+	}
+
+	if refs.CertPath != "/pki/second-client.pem" {
+		t.Errorf("CertPath = %q, want the user of the current context", refs.CertPath)
+	}
+}
+
+// Intent: with no usable current-context the first cluster and the first user are used, which is
+// what single-cluster node kubeconfigs rely on.
+func TestParseKubeconfigFallsBackToFirstClusterAndUser(t *testing.T) {
+	cases := map[string]string{
+		"absent current-context":  "",
+		"current-context missing": "current-context: not-a-context",
+		"empty current-context":   "current-context: \"\"",
+	}
+
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			refs, err := ParseKubeconfig([]byte(fmt.Sprintf(kubeconfigTwoContexts, line)))
+			if err != nil {
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
+			}
+
+			if refs.CAPath != "/pki/first-ca.crt" {
+				t.Errorf("CAPath = %q, want the first cluster", refs.CAPath)
+			}
+
+			if refs.CertPath != "/pki/first-client.pem" {
+				t.Errorf("CertPath = %q, want the first user", refs.CertPath)
+			}
+		})
+	}
+}
+
+// Intent: a context that names a cluster or user the file does not define yields no reference for
+// that side instead of guessing another entry, since guessing would fingerprint the wrong CA.
+func TestParseKubeconfigDoesNotGuessWhenContextTargetIsMissing(t *testing.T) {
+	data := `current-context: broken
+clusters:
+- name: first-cluster
+  cluster:
+    certificate-authority: /pki/first-ca.crt
+contexts:
+- name: broken
+  context:
+    cluster: undefined-cluster
+    user: undefined-user
+users:
+- name: first-user
+  user:
+    client-certificate: /pki/first-client.pem
+`
+
+	refs, err := ParseKubeconfig([]byte(data))
+	if err != nil {
+		t.Fatalf("ParseKubeconfig returned error: %v", err)
+	}
+
+	if refsAreEmpty(refs) == false {
+		t.Errorf("ParseKubeconfig guessed references for a context with undefined targets: %+v", refs)
+	}
+}
+
+// Intent: private key material in a kubeconfig is never mistaken for a certificate: a user that
+// carries only a client key, inline or by path, yields no certificate reference.
+func TestParseKubeconfigIgnoresClientKeyWithoutCertificate(t *testing.T) {
+	client := newTestCert(t, "system:node:node-1", 1)
+	keyB64 := base64.StdEncoding.EncodeToString(client.keyPEM)
+
+	users := map[string]string{
+		"client-key-data": "    client-key-data: " + keyB64 + "\n",
+		"client-key":      "    client-key: /var/lib/kubelet/pki/kubelet-client-current.pem\n",
+	}
+
+	for name, userBody := range users {
+		t.Run(name, func(t *testing.T) {
+			data := "current-context: default\n" +
+				"clusters:\n- name: kubernetes\n  cluster:\n    server: https://10.0.0.1:6443\n" +
+				"contexts:\n- name: default\n  context:\n    cluster: kubernetes\n    user: kubelet\n" +
+				"users:\n- name: kubelet\n  user:\n" + userBody
+
+			refs, err := ParseKubeconfig([]byte(data))
+			if err != nil {
+				t.Fatalf("ParseKubeconfig returned error: %v", err)
+			}
+
+			if refsAreEmpty(refs) == false {
+				t.Errorf("ParseKubeconfig returned references %+v for a user with only %s", refs, name)
+			}
+		})
+	}
+}
+
+// Intent: arbitrary file content never crashes the agent: every bad input yields an error or no references at all.
+func TestParseKubeconfigNoPanic(t *testing.T) {
+	validKubeconfig := fmt.Sprintf(kubeconfigEmbeddedTemplate, "QUJD", "QUJD", "QUJD")
+
+	inputs := append([]string{}, commonBadInputs...)
+	inputs = append(inputs,
+		"clusters:",               // key with no value
+		"clusters: 5",             // wrong type for a list
+		"clusters:\n- cluster: 5", // wrong type for the nested object
+		"clusters:\n- name: a\n  cluster:\n    certificate-authority-data: [1, 2]", // wrong type for a string
+		"users:\n- user:\n    client-certificate-data: !!!",                        // invalid base64
+		"contexts:\n- name: a\n  context: null\ncurrent-context: a",                // null context body
+		"current-context: a\ncontexts: [{name: a}]",                                // context without cluster or user
+		"- just\n- a\n- list",                    // document is a sequence
+		"just a scalar",                          // document is a scalar
+		"clusters:\n- name: a\n  name: b",        // duplicate key
+		truncatedInput(validKubeconfig),          // only the first line
+		validKubeconfig[:len(validKubeconfig)/2], // cut off mid-document
+	)
+
+	for _, input := range inputs {
+		t.Run("", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("ParseKubeconfig panicked on input %q: %v", input[:min(len(input), 50)], r)
+				}
+			}()
+
+			refs, err := ParseKubeconfig([]byte(input))
+			if (err == nil) && (refsAreEmpty(refs) == false) {
+				t.Errorf("ParseKubeconfig returned references %+v without an error for input %q", refs, input[:min(len(input), 50)])
+			}
+		})
+	}
+}
+
+// --- distro version parsers ---
+
+type versionParserCase struct {
+	name   string
+	parse  func(string) string
+	sample string
+	want   string
+	// split is a valid sample whose first line is cut short, leaving the version on a later line.
+	split string
+	// truncated are inputs cut off partway through the first line of a valid sample.
+	truncated []string
+}
+
+func versionParserCases() []versionParserCase {
+	return []versionParserCase{
+		{
+			name:      "parseK3sVersion",
+			parse:     parseK3sVersion,
+			sample:    "k3s version v1.30.1+k3s1 (a1b2c3d4)\ngo version go1.22.2\n",
+			want:      "v1.30.1+k3s1",
+			split:     "k3s version\nv1.30.1+k3s1 (a1b2c3d4)\n",
+			truncated: []string{"k3s", "k3s version", "k3s version v", "k3s version vx1.30"},
+		},
+		{
+			name:      "parseRke2Version",
+			parse:     parseRke2Version,
+			sample:    "rke2 version v1.30.1+rke2r1 (a1b2c3d4)\ngo version go1.22.2 X:boringcrypto\n",
+			want:      "v1.30.1+rke2r1",
+			split:     "rke2 version\nv1.30.1+rke2r1 (a1b2c3d4)\n",
+			truncated: []string{"rke2", "rke2 version", "rke2 version v", "rke2 version vx1.30"},
+		},
+		{
+			name:      "parseKubeletVersion",
+			parse:     parseKubeletVersion,
+			sample:    "Kubernetes v1.30.1\n",
+			want:      "v1.30.1",
+			split:     "Kubernetes\nv1.30.1\n",
+			truncated: []string{"Kubernetes", "Kubernetes v", "Kubernetes vx1.30"},
+		},
+		{
+			name:      "parseK0sVersion",
+			parse:     parseK0sVersion,
+			sample:    "v1.30.1+k0s.0\n",
+			want:      "v1.30.1+k0s.0",
+			split:     "\nv1.30.1+k0s.0\n",
+			truncated: []string{"v", "vx1.30"},
+		},
+	}
+}
+
+// Intent: each distro's version output yields the bare version string the server shows, including
+// the distro suffix ("+k3s1", "-eks-abc") that tells releases apart.
+func TestKubeDistroVersionParsersReadSampleOutput(t *testing.T) {
+	for _, tc := range versionParserCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.parse(tc.sample); got != tc.want {
+				t.Errorf("%s(%q) = %q, want %q", tc.name, tc.sample, got, tc.want)
+			}
+		})
+	}
+
+	if got := parseKubeletVersion("Kubernetes v1.30.1-eks-abc"); got != "v1.30.1-eks-abc" {
+		t.Errorf("parseKubeletVersion = %q, want %q", got, "v1.30.1-eks-abc")
+	}
+}
+
+// Intent: command output captured from Windows-style or padded sources parses identically to the
+// clean output, so line endings and stray whitespace never change the reported version.
+func TestKubeDistroVersionParsersTolerateCrlfAndWhitespace(t *testing.T) {
+	for _, tc := range versionParserCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			variants := map[string]string{
+				"crlf":       strings.ReplaceAll(tc.sample, "\n", "\r\n"),
+				"padded":     "  " + strings.Replace(tc.sample, "\n", "  \t\n", 1),
+				"no newline": truncatedInput(tc.sample),
+			}
+
+			for variant, input := range variants {
+				if got := tc.parse(input); got != tc.want {
+					t.Errorf("%s(%s %q) = %q, want %q", tc.name, variant, input, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// Intent: only the first line is read: a later line that looks like a version never rescues a
+// first line that is not one.
+func TestKubeDistroVersionParsersReadOnlyFirstLine(t *testing.T) {
+	for _, tc := range versionParserCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, input := range []string{"some unrelated banner\n" + tc.sample, tc.split} {
+				if got := tc.parse(input); got != "" {
+					t.Errorf("%s(%q) = %q, want empty", tc.name, input, got)
+				}
+			}
+		})
+	}
+}
+
+// Intent: a string that is not a version (no leading v and digit) is rejected rather than echoed,
+// so error text printed by a failing binary is never reported as a version.
+func TestKubeDistroVersionParsersRejectNonVersionValues(t *testing.T) {
+	inputs := map[string][]string{
+		"parseK3sVersion":     {"k3s version 1.30.1+k3s1 (a1b2c3d4)", "k3s version vnext (abc)", "k3s: command not found"},
+		"parseRke2Version":    {"rke2 version 1.30.1+rke2r1 (a1b2c3d4)", "rke2 version vnext (abc)", "rke2: command not found"},
+		"parseKubeletVersion": {"Kubernetes 1.30.1", "Kubernetes vnext", "kubelet: command not found"},
+		"parseK0sVersion":     {"1.30.1+k0s.0", "vnext", "k0s: command not found", "v1.30.1 extra words"},
+	}
+
+	for _, tc := range versionParserCases() {
+		for _, input := range inputs[tc.name] {
+			if got := tc.parse(input); got != "" {
+				t.Errorf("%s(%q) = %q, want empty", tc.name, input, got)
+			}
+		}
+	}
+
+	if got := parseK3sVersion("rke2 version v1.30.1+rke2r1 (a1b2c3d4)"); got != "" {
+		t.Errorf("parseK3sVersion accepted rke2 output and returned %q", got)
+	}
+
+	if got := parseRke2Version("k3s version v1.30.1+k3s1 (a1b2c3d4)"); got != "" {
+		t.Errorf("parseRke2Version accepted k3s output and returned %q", got)
+	}
+}
+
+// Intent: garbage or half-written command output never crashes the agent and never yields a version.
+func TestKubeDistroVersionParsersNoPanic(t *testing.T) {
+	for _, tc := range versionParserCases() {
+		inputs := append([]string{}, commonBadInputs...)
+		inputs = append(inputs, tc.truncated...)
+
+		for _, input := range inputs {
+			t.Run("", func(t *testing.T) {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("%s panicked on input %q: %v", tc.name, input[:min(len(input), 50)], r)
+					}
+				}()
+
+				if got := tc.parse(input); got != "" {
+					t.Errorf("%s(%q) = %q, want empty", tc.name, input[:min(len(input), 50)], got)
+				}
+			})
+		}
+	}
+}
+
+// Intent: a version string is sent to the server in a protobuf string field, so a token with bytes
+// outside [0-9A-Za-z.+_-], including invalid UTF-8 or control bytes, is rejected rather than reported.
+func TestKubeDistroVersionParsersRejectTokensOutsideTheVersionCharset(t *testing.T) {
+	tokens := map[string]string{
+		"invalid utf-8":     "v1\xff\x01bad",
+		"control byte":      "v1.30.\x01",
+		"nul byte":          "v1.30.1\x00",
+		"non ascii letter":  "v1.30.1\u00e9",
+		"semicolon":         "v1.30.1;rm",
+		"slash":             "v1.30.1/x",
+		"equals":            "v1.30.1=x",
+		"colon":             "v1.30.1:x",
+		"unicode lookalike": "v1.30.1\u2011k3s1",
+	}
+
+	for _, tc := range versionParserCases() {
+		for name, token := range tokens {
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				input := strings.Replace(tc.sample, tc.want, token, 1)
+
+				if got := tc.parse(input); got != "" {
+					t.Errorf("%s(%q) = %q, want empty", tc.name, input, got)
+				}
+			})
+		}
+	}
+
+	if got := parseK3sVersion("k3s version v1\xff\x01bad (x)"); got != "" {
+		t.Errorf("parseK3sVersion = %q for invalid UTF-8, want empty", got)
+	}
+
+	if got := parseSnapVersion("version: v1\xff\x01bad\n"); got != "" {
+		t.Errorf("parseSnapVersion = %q for invalid UTF-8, want empty", got)
+	}
+}
+
+// Intent: a version longer than 64 characters is not a real release string, so it is dropped and an
+// unbounded value from a hostile binary never reaches the telemetry payload.
+func TestKubeDistroVersionParsersCapVersionLength(t *testing.T) {
+	atLimit := "v" + strings.Repeat("1", 63)
+	overLimit := "v" + strings.Repeat("1", 64)
+	huge := "v" + strings.Repeat("1", 100000)
+
+	for _, tc := range versionParserCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			for token, want := range map[string]string{atLimit: atLimit, overLimit: "", huge: ""} {
+				input := strings.Replace(tc.sample, tc.want, token, 1)
+
+				if got := tc.parse(input); got != want {
+					t.Errorf("%s with a %d character version = %q, want %q", tc.name, len(token), got[:min(len(got), 20)], want[:min(len(want), 20)])
+				}
+			}
+		})
+	}
+
+	if got := parseSnapVersion("version: " + atLimit + "\n"); got != atLimit {
+		t.Errorf("parseSnapVersion rejected a 64 character version")
+	}
+
+	if got := parseSnapVersion("version: " + huge + "\n"); got != "" {
+		t.Errorf("parseSnapVersion accepted a %d character version", len(huge))
+	}
+}
+
+// --- parseSnapVersion ---
+
+// Intent: snap.yaml is hand-edited and generated by different tools, so the version is read
+// whichever way it is quoted.
+func TestParseSnapVersionHandlesQuotingStyles(t *testing.T) {
+	cases := map[string]string{
+		"bare":          "name: microk8s\nversion: v1.30.1\nsummary: Kubernetes\n",
+		"single quoted": "name: microk8s\nversion: 'v1.30.1'\nsummary: Kubernetes\n",
+		"double quoted": "name: microk8s\nversion: \"v1.30.1\"\nsummary: Kubernetes\n",
+		"crlf":          "name: microk8s\r\nversion: v1.30.1\r\nsummary: Kubernetes\r\n",
+		"padded":        "name: microk8s\nversion:   v1.30.1   \nsummary: Kubernetes\n",
+		"only line":     "version: v1.30.1",
+	}
+
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := parseSnapVersion(input); got != "v1.30.1" {
+				t.Errorf("parseSnapVersion(%q) = %q, want %q", input, got, "v1.30.1")
+			}
+		})
+	}
+}
+
+// Intent: a version: key nested under another key (an app or part) is not the snap's version, so
+// only the top-level line counts, wherever it appears.
+func TestParseSnapVersionIgnoresIndentedVersionKey(t *testing.T) {
+	nestedOnly := "name: microk8s\napps:\n  kubelet:\n    version: v9.9.9\n"
+	if got := parseSnapVersion(nestedOnly); got != "" {
+		t.Errorf("parseSnapVersion read a nested version and returned %q", got)
+	}
+
+	nestedFirst := "apps:\n  kubelet:\n    version: v9.9.9\nversion: v1.30.1\n"
+	if got := parseSnapVersion(nestedFirst); got != "v1.30.1" {
+		t.Errorf("parseSnapVersion = %q, want the top-level version %q", got, "v1.30.1")
+	}
+}
+
+// Intent: the first top-level version line wins and is not skipped when it is invalid, so a later
+// well-formed line cannot override what the file declares first.
+func TestParseSnapVersionUsesFirstTopLevelLine(t *testing.T) {
+	if got := parseSnapVersion("version: v1.30.1\nversion: v2.0.0\n"); got != "v1.30.1" {
+		t.Errorf("parseSnapVersion = %q, want the first version %q", got, "v1.30.1")
+	}
+
+	if got := parseSnapVersion("version: latest\nversion: v2.0.0\n"); got != "" {
+		t.Errorf("parseSnapVersion = %q, want empty when the first version line is not a version", got)
+	}
+}
+
+// Intent: a key that merely starts with the word version, or a value that is not a v-prefixed
+// version, is not reported.
+func TestParseSnapVersionRejectsNonVersionValues(t *testing.T) {
+	cases := []string{
+		"versions: v1.30.1",
+		"version-info: v1.30.1",
+		"version: 1.30.1",
+		"version: 'latest'",
+		"version:",
+		"version: \"\"",
+		"version: v",
+		"version: vnext",
+		"version: 'v1.30.1\"",
+	}
+
+	for _, input := range cases {
+		if got := parseSnapVersion(input); got != "" {
+			t.Errorf("parseSnapVersion(%q) = %q, want empty", input, got)
+		}
+	}
+}
+
+// Intent: garbage or truncated snap.yaml content never crashes the agent and never yields a version.
+func TestParseSnapVersionNoPanic(t *testing.T) {
+	inputs := append([]string{}, commonBadInputs...)
+	inputs = append(inputs,
+		"version",      // key without colon
+		"version:\x00", // NUL after the key
+		"version: '",   // lone quote
+		"version: \"",  // lone quote
+		"version: ''",  // empty quoted value
+		truncatedInput("name: microk8s\nversion: v1.30.1\n"), // only the line before the version
+	)
+
+	for _, input := range inputs {
+		t.Run("", func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("parseSnapVersion panicked on input %q: %v", input[:min(len(input), 50)], r)
+				}
+			}()
+
+			if got := parseSnapVersion(input); got != "" {
+				t.Errorf("parseSnapVersion(%q) = %q, want empty", input[:min(len(input), 50)], got)
+			}
+		})
+	}
+}

@@ -7,12 +7,14 @@ package sender
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/jitter"
@@ -221,6 +223,8 @@ func TestPayloadDispatch_AllTypesRegistered(t *testing.T) {
 		db.TelemetryPackageUpdates,
 		db.TelemetryServiceStatus,
 		db.TelemetryAgentVersion,
+		db.TelemetryKubernetesNode,
+		db.TelemetryKubernetesCluster,
 	}
 
 	for _, tt := range allTypes {
@@ -365,6 +369,141 @@ func TestSetPayload_AgentVersion(t *testing.T) {
 	}
 	if versionPayload.Version != "1.16.0" {
 		t.Errorf("expected Version=1.16.0, got %q", versionPayload.Version)
+	}
+}
+
+// Intent: Kubernetes node JSON correctly maps to the proto KubernetesNode payload so the server receives
+// the node identity on the slow tier instead of an empty oneof.
+func TestSetPayload_KubernetesNode(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	telItem := &pb.TelemetryItem{}
+	item := db.TelemetryQueueItem{
+		ID:       "test-kubernetes-node",
+		ItemType: db.TelemetryKubernetesNode,
+		Payload: `{"distro": "k3s", "kubeletVersion": "v1.31.4+k3s1", "nodeName": "cp-1", "nodeNameSource": "certificate", ` +
+			`"hasKubelet": true, "controlPlane": true, "caFingerprint": "ab", "adminCredentialPresent": true, "reporterEnrolled": true}`,
+	}
+
+	s.setPayload(telItem, item)
+
+	node := telItem.GetKubernetesNode()
+	if node == nil {
+		t.Fatal("expected KubernetesNode payload, got nil")
+	}
+	if node.Distro != "k3s" || node.KubeletVersion != "v1.31.4+k3s1" || node.NodeName != "cp-1" || node.NodeNameSource != "certificate" {
+		t.Errorf("unexpected string fields: %+v", node)
+	}
+	if node.HasKubelet == false || node.ControlPlane == false || node.AdminCredentialPresent == false || node.ReporterEnrolled == false {
+		t.Errorf("expected every bool field true, got %+v", node)
+	}
+	if node.CaFingerprint != "ab" {
+		t.Errorf("expected CaFingerprint=ab, got %q", node.CaFingerprint)
+	}
+}
+
+// Intent: the reason a reporter cannot use its Lease credentials reaches the server in the node report, under the
+// snake_case key the local collector writes.
+func TestSetPayload_KubernetesNode_CarriesReporterError(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+	telItem := &pb.TelemetryItem{}
+	s.setPayload(telItem, db.TelemetryQueueItem{
+		ID:       "test-kubernetes-node-error",
+		ItemType: db.TelemetryKubernetesNode,
+		Payload:  `{"distro": "k3s", "node_name": "cp-1", "reporter_enrolled": true, "reporter_error": "credentials_rejected"}`,
+	})
+
+	node := telItem.GetKubernetesNode()
+	if node == nil {
+		t.Fatal("expected KubernetesNode payload, got nil")
+	}
+
+	if node.ReporterError != "credentials_rejected" {
+		t.Errorf("ReporterError = %q, want credentials_rejected", node.ReporterError)
+	}
+}
+
+// Intent: a cluster snapshot queued as JSON reaches the server as the KubernetesCluster payload with every field
+// intact, including the nested nodes and conditions and the 64-bit transition count, which protojson writes as a
+// string and a hand-written payload may write as a number.
+func TestSetPayload_KubernetesCluster(t *testing.T) {
+	for name, transitions := range map[string]string{"string": `"7"`, "number": `7`} {
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+			telItem := &pb.TelemetryItem{}
+			s.setPayload(telItem, db.TelemetryQueueItem{
+				ID:       "test-kubernetes-cluster",
+				ItemType: db.TelemetryKubernetesCluster,
+				Payload: `{"kube_system_uid": "uid-1", "cluster_version": "v1.31.4+k3s1", "role_version": 1, "role_outdated": true, ` +
+					`"ca_fingerprint": "ab", "lease_transitions": ` + transitions + `, "reporter_error": "", "truncated": true, ` +
+					`"lease_uid": "lease-uid", "lease_created_at": "2026-10-11T12:00:00Z", "nodes": [` +
+					`{"name": "cp-1", "roles": ["control-plane", "master"], "ready_status": "True", "ready_since": "2026-10-11T10:00:00Z", ` +
+					`"conditions": [{"type": "MemoryPressure", "status": "True", "last_transition_time": "2026-10-11T11:00:00Z"}], ` +
+					`"unschedulable": true, "machine_id": "m-1", "kubelet_version": "v1.31.4", "container_runtime_version": "containerd://1.7.1", ` +
+					`"pod_count": 12, "pod_capacity": 110}]}`,
+			})
+
+			cluster := telItem.GetKubernetesCluster()
+			if cluster == nil {
+				t.Fatal("expected KubernetesCluster payload, got nil")
+			}
+
+			if cluster.KubeSystemUid != "uid-1" || cluster.ClusterVersion != "v1.31.4+k3s1" || cluster.CaFingerprint != "ab" ||
+				cluster.LeaseUid != "lease-uid" || cluster.LeaseCreatedAt != "2026-10-11T12:00:00Z" {
+				t.Errorf("unexpected string fields: %+v", cluster)
+			}
+
+			if cluster.RoleVersion != 1 || cluster.RoleOutdated == false || cluster.LeaseTransitions != 7 || cluster.Truncated == false {
+				t.Errorf("unexpected scalar fields: %+v", cluster)
+			}
+
+			if len(cluster.Nodes) != 1 {
+				t.Fatalf("nodes = %d, want 1", len(cluster.Nodes))
+			}
+
+			node := cluster.Nodes[0]
+			if node.Name != "cp-1" || len(node.Roles) != 2 || node.ReadyStatus != "True" || node.ReadySince != "2026-10-11T10:00:00Z" ||
+				node.Unschedulable == false || node.MachineId != "m-1" || node.KubeletVersion != "v1.31.4" ||
+				node.ContainerRuntimeVersion != "containerd://1.7.1" || node.PodCount != 12 || node.PodCapacity != 110 {
+				t.Errorf("unexpected node: %+v", node)
+			}
+
+			if len(node.Conditions) != 1 || node.Conditions[0].Type != "MemoryPressure" || node.Conditions[0].Status != "True" ||
+				node.Conditions[0].LastTransitionTime != "2026-10-11T11:00:00Z" {
+				t.Errorf("unexpected conditions: %+v", node.Conditions)
+			}
+		})
+	}
+}
+
+// Intent: the cluster snapshot is sent on the slow tier with the other once-in-a-while telemetry, and a snapshot
+// the sender dequeues is wrapped in the wire item of its own type.
+func TestBuildItems_KubernetesClusterCarriesTheClusterTypeAndPayload(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+	items := s.buildItems([]db.TelemetryQueueItem{{
+		ID:       "snapshot",
+		ItemType: db.TelemetryKubernetesCluster,
+		Payload:  `{"kube_system_uid": "uid-1"}`,
+	}})
+
+	if len(items) != 1 || items[0].Type != pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE {
+		t.Fatalf("items = %+v, want one of type KUBERNETES_CLUSTER_TYPE", items)
+	}
+
+	if items[0].GetKubernetesCluster().GetKubeSystemUid() != "uid-1" {
+		t.Errorf("payload = %+v, want the snapshot", items[0].GetPayload())
+	}
+
+	if int32(db.TelemetryKubernetesCluster) != int32(pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE) {
+		t.Errorf("agent type %d and wire type %d disagree", db.TelemetryKubernetesCluster, pb.TelemetryTypes_KUBERNETES_CLUSTER_TYPE)
 	}
 }
 
@@ -594,6 +733,135 @@ func TestSendBatch_ServerReject(t *testing.T) {
 	}
 }
 
+// Intent: the cluster reporter's health gate counts from the last time the server accepted a batch, so the
+// timestamp must come from the sender's clock at the moment an ack reports success, and from nowhere else.
+func TestLastAckAt_SetOnSuccessfulAck(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnqueueTelemetry("ack-time", db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	client := &mockTelemetryClient{
+		submitFunc: func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: true}, nil
+		},
+	}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	fixed := time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC)
+	s.clock = func() time.Time { return fixed }
+
+	if got := s.LastAckAt(); got.IsZero() == false {
+		t.Fatalf("LastAckAt before any ack = %v, want the zero time", got)
+	}
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if got := s.LastAckAt(); got.Equal(fixed) == false {
+		t.Errorf("LastAckAt = %v, want %v", got, fixed)
+	}
+}
+
+// Intent: a batch the server rejects, or one that never reached it, is not an acknowledgement, so it must not make
+// a broken delivery path look healthy to the reporter's health gate.
+func TestLastAckAt_NotSetOnRejectionOrFailure(t *testing.T) {
+	cases := map[string]func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error){
+		"rejected": func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
+		},
+		"unreachable": func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return nil, fmt.Errorf("server unreachable")
+		},
+	}
+
+	for name, submit := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			if err := store.EnqueueTelemetry("no-ack", db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+
+			s := New(store, &mockTelemetryClient{submitFunc: submit}, state.New(), jitter.NewDefault(), neverPaused())
+			s.clock = func() time.Time { return time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC) }
+
+			// A cancelled context stops the unary retries from backing off, so the failure case ends at once.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			s.sendBatch(ctx, "fast", FastTypes)
+
+			if got := s.LastAckAt(); got.IsZero() == false {
+				t.Errorf("LastAckAt = %v after a %s batch, want the zero time", got, name)
+			}
+		})
+	}
+}
+
+// Intent: an ack that tells the host it is paused or its subscription is inactive proves the server is not taking
+// this host's data, so it must not make a stalled delivery path look healthy to the reporter's health gate, even
+// though the ack reports success. A reason this agent does not know says nothing about a pause, so it still counts.
+func TestLastAckAt_NotSetForAnAckThatCarriesAPauseReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		reason     pb.IngestRejectionReason
+		wantRecord bool
+	}{
+		{"host paused", pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED, false},
+		{"subscription inactive", pb.IngestRejectionReason_INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE, false},
+		{"no reason", pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED, true},
+		{"unknown reason", pb.IngestRejectionReason(99), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			enqueueCpu(t, store, "ack-reason")
+			client := unaryOnlyClient(func(*pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+				return &pb.TelemetryAck{Success: true, Reason: tc.reason}, nil
+			})
+			s := New(store, client, state.New(), jitter.NewDefault(), newPauseRecorder(nil).coord)
+
+			fixed := time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC)
+			s.clock = func() time.Time { return fixed }
+
+			s.sendBatch(context.Background(), "fast", FastTypes)
+
+			got := s.LastAckAt()
+			if tc.wantRecord && got.Equal(fixed) == false {
+				t.Errorf("LastAckAt = %v, want %v", got, fixed)
+			}
+
+			if tc.wantRecord == false && got.IsZero() == false {
+				t.Errorf("LastAckAt = %v for an ack carrying a pause reason, want the zero time", got)
+			}
+		})
+	}
+}
+
+// Intent: a later acknowledgement replaces an earlier one, so the gate measures from the newest.
+func TestLastAckAt_AdvancesWithEachSuccessfulAck(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	s.clock = func() time.Time { return now }
+
+	for i, offset := range []time.Duration{0, 7 * time.Minute} {
+		now = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC).Add(offset)
+
+		if err := store.EnqueueTelemetry(fmt.Sprintf("ack-%d", i), db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+
+		s.sendBatch(context.Background(), "fast", FastTypes)
+
+		if got := s.LastAckAt(); got.Equal(now) == false {
+			t.Errorf("after ack %d LastAckAt = %v, want %v", i, got, now)
+		}
+	}
+}
+
 // Intent: Stream RPC fails → falls back to unary, items still sent successfully.
 func TestSendBatch_StreamFallbackToUnary(t *testing.T) {
 	store := newTestStore(t)
@@ -762,14 +1030,16 @@ func TestRunTier_FastTypes(t *testing.T) {
 // Intent: Slow tier processes only slow telemetry types.
 func TestRunTier_SlowTypes(t *testing.T) {
 	expectedSlow := map[db.TelemetryType]bool{
-		db.TelemetrySystemInfo:     true,
-		db.TelemetryOsVersion:      true,
-		db.TelemetryCpuInfo:        true,
-		db.TelemetryMemoryInfo:     true,
-		db.TelemetryDiskInfo:       true,
-		db.TelemetryHardwareHealth: true,
-		db.TelemetryPackageUpdates: true,
-		db.TelemetryAgentVersion:   true,
+		db.TelemetrySystemInfo:        true,
+		db.TelemetryOsVersion:         true,
+		db.TelemetryCpuInfo:           true,
+		db.TelemetryMemoryInfo:        true,
+		db.TelemetryDiskInfo:          true,
+		db.TelemetryHardwareHealth:    true,
+		db.TelemetryPackageUpdates:    true,
+		db.TelemetryAgentVersion:      true,
+		db.TelemetryKubernetesNode:    true,
+		db.TelemetryKubernetesCluster: true,
 	}
 
 	for _, tt := range SlowTypes {
@@ -1075,5 +1345,403 @@ func TestRunTier_ShutdownFlush_SkippedWhilePaused(t *testing.T) {
 	}
 	if got := flushedItems(t, true); got != 0 {
 		t.Errorf("expected no shutdown flush while paused, got %d RPC(s)", got)
+	}
+}
+
+// --- byte budget tests ---
+
+// osVersionItem builds a telemetry item whose encoded size is roughly size bytes, carried in a free-text field.
+func osVersionItem(id string, size int) *pb.TelemetryItem {
+	return &pb.TelemetryItem{
+		EventId: id,
+		Type:    pb.TelemetryTypes(db.TelemetryOsVersion),
+		Payload: &pb.TelemetryItem_OsVersion{OsVersion: &pb.OsVersionRecord{Extra: strings.Repeat("x", size)}},
+	}
+}
+
+// Intent: small items that fit the budget together travel in a single envelope.
+func TestSplitByBudget_SmallItemsShareOneEnvelope(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("a", 100), osVersionItem("b", 100), osVersionItem("c", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	if len(chunks) != 1 || len(chunks[0]) != 3 {
+		t.Fatalf("expected one envelope of 3 items, got %v", chunks)
+	}
+}
+
+// Intent: items are split at the budget, and their order is kept across envelopes, so the server sees them in
+// the order they were collected.
+func TestSplitByBudget_SplitsAtBudgetAndKeepsOrder(t *testing.T) {
+	items := []*pb.TelemetryItem{
+		osVersionItem("1", 4_000), osVersionItem("2", 4_000), osVersionItem("3", 4_000), osVersionItem("4", 4_000),
+	}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	want := [][]string{{"1", "2"}, {"3", "4"}}
+	if len(chunks) != len(want) {
+		t.Fatalf("expected %d envelopes, got %d", len(want), len(chunks))
+	}
+	for i := range want {
+		got := eventIDs(chunks[i])
+		if strings.Join(got, ",") != strings.Join(want[i], ",") {
+			t.Errorf("envelope %d: expected %v, got %v", i, want[i], got)
+		}
+		size := 0
+		for _, item := range chunks[i] {
+			size += proto.Size(item) + itemFramingBytes
+		}
+		if size > 10_000 {
+			t.Errorf("envelope %d is %d bytes, over the 10000 budget", i, size)
+		}
+	}
+}
+
+// Intent: an item bigger than the budget but under the item limit is still sendable. It goes alone, and it
+// neither drags its neighbours over the budget nor is discarded.
+func TestSplitByBudget_ItemOverBudgetGoesAlone(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("small-1", 100), osVersionItem("big", 15_000), osVersionItem("small-2", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 0 {
+		t.Fatalf("expected nothing oversized, got %d", len(oversized))
+	}
+	want := [][]string{{"small-1"}, {"big"}, {"small-2"}}
+	if len(chunks) != len(want) {
+		t.Fatalf("expected %d envelopes, got %d: %v", len(want), len(chunks), chunks)
+	}
+	for i := range want {
+		if strings.Join(eventIDs(chunks[i]), ",") != strings.Join(want[i], ",") {
+			t.Errorf("envelope %d: expected %v, got %v", i, want[i], eventIDs(chunks[i]))
+		}
+	}
+}
+
+// Intent: an item over the item limit can never be accepted, so it is reported as oversized and left out of
+// every envelope, while the items around it are still sent.
+func TestSplitByBudget_ItemOverLimitIsSetAside(t *testing.T) {
+	items := []*pb.TelemetryItem{osVersionItem("ok-1", 100), osVersionItem("huge", 25_000), osVersionItem("ok-2", 100)}
+
+	chunks, oversized := splitByBudget(items, 10_000, 20_000)
+
+	if len(oversized) != 1 || oversized[0].EventId != "huge" {
+		t.Fatalf("expected only %q oversized, got %v", "huge", oversized)
+	}
+	if len(chunks) != 1 || strings.Join(eventIDs(chunks[0]), ",") != "ok-1,ok-2" {
+		t.Fatalf("expected one envelope [ok-1 ok-2], got %v", chunks)
+	}
+}
+
+// Intent: nothing in means nothing out, with no empty envelope that would make a pointless RPC.
+func TestSplitByBudget_Empty(t *testing.T) {
+	chunks, oversized := splitByBudget(nil, 10_000, 20_000)
+
+	if len(chunks) != 0 || len(oversized) != 0 {
+		t.Fatalf("expected no envelopes and nothing oversized, got %v and %v", chunks, oversized)
+	}
+}
+
+// enqueueOsVersion queues an OS version payload of roughly size bytes.
+func enqueueOsVersion(t *testing.T, store *db.Store, id string, size int) {
+	t.Helper()
+	payload := fmt.Sprintf(`{"extra":"%s"}`, strings.Repeat("x", size))
+	if err := store.EnqueueTelemetry(id, db.TelemetryOsVersion, payload); err != nil {
+		t.Fatalf("enqueue %s: %v", id, err)
+	}
+}
+
+// Intent: a backlog bigger than the server's limit, such as one built up during an outage, is delivered in one
+// tick across several envelopes. Each envelope is under the 1 MB limit, and the items arrive in order.
+func TestSendBatch_SplitsBacklogIntoEnvelopesUnderBudget(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("backlog-%d", i), 300*1024)
+	}
+
+	var envelopes []*pb.TelemetryEnvelope
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		envelopes = append(envelopes, in)
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if len(envelopes) < 3 {
+		t.Fatalf("expected the 1.8 MB backlog to need at least 3 envelopes, got %d", len(envelopes))
+	}
+	var delivered []string
+	for i, env := range envelopes {
+		if size := proto.Size(env); size >= 1024*1024 {
+			t.Errorf("envelope %d is %d bytes, at or over the server's 1 MB limit", i, size)
+		}
+		for _, item := range env.Items {
+			delivered = append(delivered, item.EventId)
+		}
+	}
+	want := "backlog-0,backlog-1,backlog-2,backlog-3,backlog-4,backlog-5"
+	if strings.Join(delivered, ",") != want {
+		t.Errorf("expected items delivered in order %s, got %s", want, strings.Join(delivered, ","))
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected every item completed, %d still pending", len(remaining))
+	}
+}
+
+// Intent: an item queued by an older agent, before the enqueue cap existed, that is too large for the server is
+// dropped instead of blocking its tier forever. The items queued with it are still delivered.
+func TestSendBatch_DiscardsItemTooLargeToSend(t *testing.T) {
+	store := newTestStore(t)
+	enqueueOsVersion(t, store, "before", 100)
+	// Insert directly, as an older agent without the cap would have.
+	huge := fmt.Sprintf(`{"extra":"%s"}`, strings.Repeat("x", 950*1024))
+	if _, err := store.DB().Exec(
+		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)`,
+		"legacy-huge", int(db.TelemetryOsVersion), huge, "2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z",
+	); err != nil {
+		t.Fatalf("insert legacy item: %v", err)
+	}
+	// Invalidate the cached count so the direct insert is seen.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	var sent []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		for _, item := range in.Items {
+			sent = append(sent, item.EventId)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if strings.Join(sent, ",") != "before" {
+		t.Errorf("expected only %q sent, got %v", "before", sent)
+	}
+	// The oversized item must be gone, so a restart cannot bring it back either.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected the oversized item discarded, found %d items", len(remaining))
+	}
+}
+
+// Intent: one item bigger than the envelope budget but within the item limit is delivered on its own, not
+// discarded.
+func TestSendBatch_DeliversLoneItemBetweenBudgetAndLimit(t *testing.T) {
+	store := newTestStore(t)
+	enqueueOsVersion(t, store, "big-but-legal", 800*1024)
+
+	var sent []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		if size := proto.Size(in); size >= 1024*1024 {
+			t.Errorf("envelope is %d bytes, at or over the 1 MB limit", size)
+		}
+		for _, item := range in.Items {
+			sent = append(sent, item.EventId)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if strings.Join(sent, ",") != "big-but-legal" {
+		t.Errorf("expected the item delivered, got %v", sent)
+	}
+}
+
+// Intent: when a later envelope in a tick fails, the envelopes already acknowledged stay completed. The failed
+// envelope and every envelope after it return to pending, unsent, so the next tick retries them in order.
+func TestSendBatch_LaterEnvelopeFails_RemainingItemsReturnToPending(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("item-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var acked []string
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			for _, item := range in.Items {
+				acked = append(acked, item.EventId)
+			}
+
+			return &pb.TelemetryAck{Success: true}, nil
+		}
+
+		return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 2 {
+		t.Errorf("expected sending to stop after the rejected envelope (2 calls), got %d", calls)
+	}
+	remaining, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if len(acked)+len(remaining) != 6 {
+		t.Fatalf("expected acked plus pending to cover all 6 items, got %d acked and %d pending", len(acked), len(remaining))
+	}
+	for _, item := range remaining {
+		for _, done := range acked {
+			if item.ID == done {
+				t.Errorf("item %s was acknowledged but is pending again", item.ID)
+			}
+		}
+	}
+}
+
+// Intent: once an ack says the host is paused, the sender stops sending the rest of the tick's envelopes. The
+// server would discard them anyway, and a paused host must go quiet.
+func TestSendBatch_PauseAckStopsRemainingEnvelopes(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("p-%d", i), 300*1024)
+	}
+
+	calls := 0
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+
+		return &pb.TelemetryAck{Success: true, Reason: pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED}, nil
+	})
+	recorder := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected exactly one envelope before the pause stopped sending, got %d", calls)
+	}
+	if recorder.pauses.Load() != 1 {
+		t.Errorf("expected the host to enter pause once, got %d", recorder.pauses.Load())
+	}
+	// The recorder's pause hook does not clear the queue, so the items of the envelopes that were never sent
+	// must have been returned to pending rather than left in processing.
+	if got := countByStatus(t, store, db.QueueStatusCompleted); got != 2 {
+		t.Errorf("expected the 2 items of the acknowledged envelope to be completed, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending); got != 4 {
+		t.Errorf("expected the 4 items of the unsent envelopes to be pending again, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected nothing left in processing, got %d", got)
+	}
+}
+
+// countByStatus counts the queued rows in one status.
+func countByStatus(t *testing.T, store *db.Store, status db.QueueStatus) int {
+	t.Helper()
+	var n int
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM telemetry_queue WHERE status = ?", int(status)).Scan(&n); err != nil {
+		t.Fatalf("count status %d: %v", status, err)
+	}
+
+	return n
+}
+
+// Intent: a pause that begins while an envelope is in flight, for example from a heartbeat ping, stops the
+// remaining envelopes of the tick even though that envelope's own ack was plain. The envelope that was in flight
+// stays completed and the ones not yet sent go back to pending.
+func TestSendBatch_PauseDuringEnvelopeStopsRemainingEnvelopes(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("mid-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var recorder *pauseRecorder
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			recorder.coord.Observe(pause.HostPaused)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	recorder = newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected sending to stop after the envelope that was in flight when the pause began, got %d calls", calls)
+	}
+	if recorder.pauses.Load() != 1 {
+		t.Errorf("expected the host to enter pause once, got %d", recorder.pauses.Load())
+	}
+	if got := countByStatus(t, store, db.QueueStatusCompleted); got != 2 {
+		t.Errorf("expected the 2 items of the sent envelope to be completed, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending); got != 4 {
+		t.Errorf("expected the 4 items of the unsent envelopes to be pending again, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected nothing left in processing, got %d", got)
+	}
+}
+
+// Intent: when the pause clears the queue, as the real pause hook does, the envelopes that were not sent are not
+// resurrected by being marked pending: the queue stays empty.
+func TestSendBatch_PauseDuringEnvelopeWithClearedQueue_StaysEmpty(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("cleared-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var recorder *pauseRecorder
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			recorder.coord.Observe(pause.HostPaused)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	recorder = newPauseRecorder(func(pause.Reason) {
+		if err := store.ClearTelemetryQueue(); err != nil {
+			t.Errorf("clear queue: %v", err)
+		}
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected exactly one envelope sent, got %d", calls)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected an empty queue after the pause cleared it, got %d pending (err %v)", n, err)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending) + countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected no rows left in the queue, got %d", got)
 	}
 }

@@ -96,6 +96,15 @@ public sealed class AuditEnumValuesTests
         await Assert.That(actual).IsEqualTo(expected);
     }
 
+    [Test]
+    public async Task AuditAction_KubernetesClusterRenamed_HasValue149()
+    {
+        short actual = (short)AuditAction.KubernetesClusterRenamed;
+        short expected = 149;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
     // ========== AuditResourceType — new values added for Task C audit coverage ==========
 
     [Test]
@@ -112,6 +121,15 @@ public sealed class AuditEnumValuesTests
     {
         short actual = (short)AuditResourceType.TenantOidcConfig;
         short expected = 16;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task AuditResourceType_KubernetesCluster_HasValue17()
+    {
+        short actual = (short)AuditResourceType.KubernetesCluster;
+        short expected = 17;
 
         await Assert.That(actual).IsEqualTo(expected);
     }

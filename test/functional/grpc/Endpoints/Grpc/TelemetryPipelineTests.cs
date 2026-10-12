@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -20,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 
@@ -386,6 +388,244 @@ public sealed class TelemetryPipelineTests
         MachineStateDetail? detail = await db.MachineStateDetails
             .FirstOrDefaultAsync(d => d.MachineId == machineId);
         await Assert.That(detail!.AgentVersion).IsEqualTo("1.15.3");
+    }
+
+    [Test]
+    public async Task Pipeline_KubernetesNode_StoresSnakeCasePayloadUnderTelemetryType14()
+    {
+        // Intent: a Kubernetes node report must be retained in MachineTelemetry under type 14 with the
+        // snake_case field names the read side deserializes, so every property survives the trip.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-kubernetes-node-key";
+        await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.KubernetesNodeType,
+                    KubernetesNode = new KubernetesNodeRecord
+                    {
+                        Distro = "k3s",
+                        KubeletVersion = "v1.31.4+k3s1",
+                        NodeName = "cp-1",
+                        NodeNameSource = "certificate",
+                        HasKubelet = true,
+                        ControlPlane = true,
+                        CaFingerprint = "ab",
+                        AdminCredentialPresent = true,
+                        ReporterEnrolled = true,
+                        ReporterError = "tls_ca_changed"
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.TelemetryType).IsEqualTo((short)14);
+        await Assert.That(row.TelemetryType).IsEqualTo(TelemetryTypeIds.KubernetesNode);
+        await Assert.That(row.Payload).Contains("\"node_name\"");
+
+        KubernetesNodePayload? payload = JsonSerializer.Deserialize<KubernetesNodePayload>(row.Payload, JsonDefaults.SnakeCase);
+        await Assert.That(payload).IsNotNull();
+        await Assert.That(payload!.Distro).IsEqualTo("k3s");
+        await Assert.That(payload.KubeletVersion).IsEqualTo("v1.31.4+k3s1");
+        await Assert.That(payload.NodeName).IsEqualTo("cp-1");
+        await Assert.That(payload.NodeNameSource).IsEqualTo("certificate");
+        await Assert.That(payload.HasKubelet).IsTrue();
+        await Assert.That(payload.ControlPlane).IsTrue();
+        await Assert.That(payload.CaFingerprint).IsEqualTo("ab");
+        await Assert.That(payload.AdminCredentialPresent).IsTrue();
+        await Assert.That(payload.ReporterEnrolled).IsTrue();
+        await Assert.That(row.Payload).Contains("\"reporter_error\"");
+        await Assert.That(payload.ReporterError).IsEqualTo("tls_ca_changed");
+    }
+
+    [Test]
+    public async Task Pipeline_KubernetesCluster_StoresSnakeCasePayloadUnderTelemetryType15()
+    {
+        // Intent: a cluster snapshot must be retained in MachineTelemetry under type 15 with the snake_case
+        // field names the read side deserializes, so the cluster fields, the lease epoch that fences it, the
+        // nested nodes and their conditions, and the 64-bit transition count all survive the trip.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-kubernetes-cluster-key";
+        await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        KubernetesClusterNode controlPlane = new()
+        {
+            Name = "cp-1",
+            ReadyStatus = "True",
+            ReadySince = "2026-10-11T10:00:00Z",
+            Unschedulable = true,
+            MachineId = "machine-cp-1",
+            KubeletVersion = "v1.31.4+k3s1",
+            ContainerRuntimeVersion = "containerd://1.7.23-k3s2",
+            PodCount = 12,
+            PodCapacity = 110
+        };
+        controlPlane.Roles.Add("control-plane");
+        controlPlane.Roles.Add("master");
+        controlPlane.Conditions.Add(new KubernetesNodeCondition
+        {
+            Type = "MemoryPressure",
+            Status = "True",
+            LastTransitionTime = "2026-10-11T11:00:00Z"
+        });
+
+        KubernetesClusterRecord record = new()
+        {
+            KubeSystemUid = "11111111-2222-3333-4444-555555555555",
+            ClusterVersion = "v1.31.4+k3s1",
+            RoleVersion = 1,
+            RoleOutdated = true,
+            CaFingerprint = "ab",
+            LeaseTransitions = 5_000_000_000,
+            ReporterError = "",
+            Truncated = true,
+            LeaseUid = "lease-uid-1",
+            LeaseCreatedAt = "2026-10-11T08:00:00Z"
+        };
+        record.Nodes.Add(controlPlane);
+        record.Nodes.Add(new KubernetesClusterNode { Name = "worker-1", ReadyStatus = "False" });
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.KubernetesClusterType,
+                    KubernetesCluster = record
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.TelemetryType).IsEqualTo((short)15);
+        await Assert.That(row.TelemetryType).IsEqualTo(TelemetryTypeIds.KubernetesCluster);
+        await Assert.That(row.Payload).Contains("\"kube_system_uid\"");
+        await Assert.That(row.Payload).Contains("\"lease_created_at\"");
+
+        KubernetesClusterPayload? payload = JsonSerializer.Deserialize<KubernetesClusterPayload>(row.Payload, JsonDefaults.SnakeCase);
+        await Assert.That(payload).IsNotNull();
+        await Assert.That(payload!.KubeSystemUid).IsEqualTo("11111111-2222-3333-4444-555555555555");
+        await Assert.That(payload.ClusterVersion).IsEqualTo("v1.31.4+k3s1");
+        await Assert.That(payload.RoleVersion).IsEqualTo(1);
+        await Assert.That(payload.RoleOutdated).IsTrue();
+        await Assert.That(payload.CaFingerprint).IsEqualTo("ab");
+        await Assert.That(payload.LeaseTransitions).IsEqualTo(5_000_000_000);
+        await Assert.That(payload.Truncated).IsTrue();
+        await Assert.That(payload.LeaseUid).IsEqualTo("lease-uid-1");
+        await Assert.That(payload.LeaseCreatedAt).IsEqualTo("2026-10-11T08:00:00Z");
+        await Assert.That(string.IsNullOrEmpty(payload.ReporterError)).IsTrue();
+
+        await Assert.That(payload.Nodes.Count).IsEqualTo(2);
+        KubernetesClusterNodeDto first = payload.Nodes[0];
+        await Assert.That(first.Name).IsEqualTo("cp-1");
+        await Assert.That(string.Join(",", first.Roles)).IsEqualTo("control-plane,master");
+        await Assert.That(first.ReadyStatus).IsEqualTo("True");
+        await Assert.That(first.ReadySince).IsEqualTo("2026-10-11T10:00:00Z");
+        await Assert.That(first.Unschedulable).IsTrue();
+        await Assert.That(first.MachineId).IsEqualTo("machine-cp-1");
+        await Assert.That(first.KubeletVersion).IsEqualTo("v1.31.4+k3s1");
+        await Assert.That(first.ContainerRuntimeVersion).IsEqualTo("containerd://1.7.23-k3s2");
+        await Assert.That(first.PodCount).IsEqualTo(12);
+        await Assert.That(first.PodCapacity).IsEqualTo(110);
+        await Assert.That(first.Conditions.Count).IsEqualTo(1);
+        await Assert.That(first.Conditions[0].Type).IsEqualTo("MemoryPressure");
+        await Assert.That(first.Conditions[0].Status).IsEqualTo("True");
+        await Assert.That(first.Conditions[0].LastTransitionTime).IsEqualTo("2026-10-11T11:00:00Z");
+        await Assert.That(payload.Nodes[1].Name).IsEqualTo("worker-1");
+        await Assert.That(payload.Nodes[1].ReadyStatus).IsEqualTo("False");
+    }
+
+    [Test]
+    public async Task Pipeline_KubernetesClusterError_StoresTheReasonAndNoNodes()
+    {
+        // Intent: an error snapshot (a reason and no nodes) is retained as sent, with the reason under the key the
+        // read side deserializes and an empty node list, so the projection can tell it from a cluster with no nodes.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-kubernetes-cluster-error-key";
+        await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.KubernetesClusterType,
+                    KubernetesCluster = new KubernetesClusterRecord
+                    {
+                        ReporterError = "credentials_rejected",
+                        CaFingerprint = "ab",
+                        LeaseTransitions = 3,
+                        LeaseUid = "lease-uid-1",
+                        LeaseCreatedAt = "2026-10-11T08:00:00Z"
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.TelemetryType).IsEqualTo(TelemetryTypeIds.KubernetesCluster);
+
+        KubernetesClusterPayload? payload = JsonSerializer.Deserialize<KubernetesClusterPayload>(row.Payload, JsonDefaults.SnakeCase);
+        await Assert.That(payload).IsNotNull();
+        await Assert.That(payload!.ReporterError).IsEqualTo("credentials_rejected");
+        await Assert.That(payload.Nodes.Count).IsEqualTo(0);
+        await Assert.That(payload.LeaseTransitions).IsEqualTo(3L);
+        await Assert.That(payload.Truncated).IsFalse();
     }
 
     [Test]

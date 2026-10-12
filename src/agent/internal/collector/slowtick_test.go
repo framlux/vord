@@ -34,11 +34,11 @@ func TestSlowTickCollectMemoryInfo(t *testing.T) {
 	if err := json.Unmarshal([]byte(items[0].Payload), &payload); err != nil {
 		t.Fatalf("failed to unmarshal payload: %v", err)
 	}
-	if payload.MemoryTotal != 32768000*1024 {
-		t.Errorf("expected MemoryTotal=%d, got %d", 32768000*1024, payload.MemoryTotal)
+	if payload.MemoryTotal != slowMemoryTotalBytes {
+		t.Errorf("expected MemoryTotal=%d, got %d", slowMemoryTotalBytes, payload.MemoryTotal)
 	}
-	if payload.SwapTotal != 8192000*1024 {
-		t.Errorf("expected SwapTotal=%d, got %d", 8192000*1024, payload.SwapTotal)
+	if payload.SwapTotal != slowSwapTotalBytes {
+		t.Errorf("expected SwapTotal=%d, got %d", slowSwapTotalBytes, payload.SwapTotal)
 	}
 }
 
@@ -139,6 +139,14 @@ func TestSlowTickCollectMemoryInfoReadError(t *testing.T) {
 }
 
 // Test fixtures.
+
+// Byte totals of fixtureSlowMeminfo. They are typed so that passing them to Errorf does not default them to int,
+// which overflows on 32-bit targets.
+const (
+	slowMemoryTotalBytes int64 = 32768000 * 1024
+	slowSwapTotalBytes   int64 = 8192000 * 1024
+)
+
 const fixtureSlowMeminfo = `MemTotal:       32768000 kB
 MemFree:         4096000 kB
 MemAvailable:   16384000 kB
@@ -240,8 +248,8 @@ func TestSlowTickCollectSystemInfo_ParseHelpers(t *testing.T) {
 
 	// Test memTotalBytesFromData
 	memTotal := memTotalBytesFromData(fixtureSlowMeminfo)
-	if memTotal != 32768000*1024 {
-		t.Errorf("expected memTotal=%d, got %d", 32768000*1024, memTotal)
+	if memTotal != slowMemoryTotalBytes {
+		t.Errorf("expected memTotal=%d, got %d", slowMemoryTotalBytes, memTotal)
 	}
 
 	// Test uptimeSecondsFromData
@@ -296,8 +304,8 @@ func TestSlowTickSafeCollectSystemInfo_ValidData(t *testing.T) {
 	if payload.CPUBrand != "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz" {
 		t.Errorf("unexpected CPUBrand: %q", payload.CPUBrand)
 	}
-	if payload.PhysicalMemory != 32768000*1024 {
-		t.Errorf("expected PhysicalMemory=%d, got %d", 32768000*1024, payload.PhysicalMemory)
+	if payload.PhysicalMemory != slowMemoryTotalBytes {
+		t.Errorf("expected PhysicalMemory=%d, got %d", slowMemoryTotalBytes, payload.PhysicalMemory)
 	}
 	if payload.UptimeSeconds != 123456 {
 		t.Errorf("expected UptimeSeconds=123456, got %d", payload.UptimeSeconds)

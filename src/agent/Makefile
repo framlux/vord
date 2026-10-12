@@ -8,7 +8,7 @@ VERSION ?= $(patsubst agent-v%,%,$(shell git describe --tags --match 'agent-v*' 
 BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
 
-.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-armv7 build-linux-386 build-all clean test proto fmt vet
+.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-armv7 build-linux-386 build-all clean test test-k3s proto fmt vet
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY_NAME) ./cmd/agent/
@@ -32,6 +32,11 @@ clean:
 
 test:
 	go test -v ./...
+
+# The cluster reporter against a real k3s in a Podman container. It is built only with the k3s_integration tag, so
+# `make test` and a plain go test never start it; it needs Podman running and takes a few minutes.
+test-k3s:
+	go test -tags k3s_integration -run TestK3sIntegration -count=1 -v -timeout 20m ./internal/kubereporter/
 
 proto:
 	protoc \

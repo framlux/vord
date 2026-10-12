@@ -57,6 +57,18 @@ public interface ISigningKeyRepository
     Task<List<UserSigningKey>> GetActiveSigningKeysForMachineAsync(long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets, for each of the given machines, the ids of the signing keys that are authorized for it:
+    /// the authorization and the key itself must both be unrevoked. The ids of each machine are in
+    /// ascending order. A machine with no such key is absent from the result, and only the tenant's
+    /// own authorizations are read.
+    /// </summary>
+    /// <param name="tenantId">The tenant the authorizations must belong to.</param>
+    /// <param name="machineIds">The machines whose keys are wanted.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<IReadOnlyDictionary<long, IReadOnlyList<int>>> GetActiveSigningKeyIdsForMachinesAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks if a signing key has an active authorization for a machine.
     /// </summary>
     Task<bool> IsKeyAuthorizedForMachineAsync(int signingKeyId, long machineId, CancellationToken cancellationToken = default);

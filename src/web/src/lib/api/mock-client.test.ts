@@ -67,3 +67,32 @@ describe('MockApiClient fleet queries', () => {
 		expect(page.pageSize).toBe(100);
 	});
 });
+
+// The clusters pages are reachable in mock mode, so each cluster call needs an answer there. The mock
+// fleet has no clusters, so the list is empty and a lookup or rename of any id is a 404, as the API
+// answers for an unknown cluster.
+describe('MockApiClient clusters', () => {
+	it('lists no clusters', async () => {
+		const client = new MockApiClient();
+
+		await expect(client.getClusters()).resolves.toEqual([]);
+	});
+
+	it('answers a cluster lookup with 404', async () => {
+		const client = new MockApiClient();
+
+		const attempt = client.getCluster(12);
+
+		await expect(attempt).rejects.toBeInstanceOf(ApiError);
+		await expect(attempt).rejects.toMatchObject({ status: 404 });
+	});
+
+	it('answers a rename with 404', async () => {
+		const client = new MockApiClient();
+
+		const attempt = client.renameCluster(12, 'Production');
+
+		await expect(attempt).rejects.toBeInstanceOf(ApiError);
+		await expect(attempt).rejects.toMatchObject({ status: 404 });
+	});
+});

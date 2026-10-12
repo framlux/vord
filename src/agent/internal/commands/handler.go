@@ -20,6 +20,12 @@ const (
 	CommandKillSession   CommandType = "kill_session"
 	CommandCheckUpdate   CommandType = "check_updates"
 	CommandInstallUpdate CommandType = "install_updates"
+
+	// The cluster reporter commands take no parameters. None of them is destructive: they change the cluster
+	// and the agent's own state file, never the machine.
+	CommandK8sReporterEnrol     CommandType = "k8s_reporter_enrol"
+	CommandK8sReporterUnenrol   CommandType = "k8s_reporter_unenrol"
+	CommandK8sReporterUninstall CommandType = "k8s_reporter_uninstall"
 )
 
 // validCommandTypes enumerates all recognized command types for validation.
@@ -29,6 +35,10 @@ var validCommandTypes = map[CommandType]bool{
 	CommandKillSession:   true,
 	CommandCheckUpdate:   true,
 	CommandInstallUpdate: true,
+
+	CommandK8sReporterEnrol:     true,
+	CommandK8sReporterUnenrol:   true,
+	CommandK8sReporterUninstall: true,
 }
 
 // IsValid returns true if the command type is a recognized, supported type.
@@ -52,6 +62,10 @@ type Result struct {
 	Success bool
 	Message string
 	Error   error
+
+	// Rejected marks a command that was refused before it did anything, such as one carrying parameters it
+	// does not accept. It is acknowledged as rejected rather than failed.
+	Rejected bool
 }
 
 // Handler dispatches and executes commands.
@@ -64,8 +78,14 @@ type Executor interface {
 	Execute(ctx context.Context, params map[string]string) Result
 }
 
+// HandlerDeps holds what the executors need that is not a command runner.
+type HandlerDeps struct {
+	// KubeReporter carries out the cluster reporter commands. Nil makes those commands fail as unavailable.
+	KubeReporter KubeReporter
+}
+
 // NewHandler creates a new command handler with all built-in executors registered.
-func NewHandler() *Handler {
+func NewHandler(deps HandlerDeps) *Handler {
 	h := &Handler{
 		executors: make(map[CommandType]Executor),
 	}
@@ -75,6 +95,9 @@ func NewHandler() *Handler {
 	h.executors[CommandKillSession] = &KillSessionExecutor{}
 	h.executors[CommandCheckUpdate] = &CheckUpdateExecutor{}
 	h.executors[CommandInstallUpdate] = &InstallUpdateExecutor{}
+	h.executors[CommandK8sReporterEnrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterEnrolTimeout, runEnrol)
+	h.executors[CommandK8sReporterUnenrol] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUnenrolTimeout, runUnenrol)
+	h.executors[CommandK8sReporterUninstall] = newKubeReporterExecutor(deps.KubeReporter, kubeReporterUninstallTimeout, runUninstall)
 
 	return h
 }

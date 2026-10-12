@@ -289,6 +289,80 @@ public sealed class TenantPurgeIntegrationTests
         await AssertZeroRowsForTenantAAsync(db, tenantA.Id, machineA.Id, alertRuleA.Id, alertEventA.Id, integrationA.Id);
     }
 
+    [Test]
+    public async Task Purge_WithKubernetesRows_DoesNotViolateMachineForeignKey()
+    {
+        // Intent: a node row, a reporter candidate row and a cluster's active reporter all point at a
+        // machine with plain foreign keys, so the purge must remove the Kubernetes rows before it
+        // removes the machines. SQLite runs the other purge tests with foreign keys off, so only real
+        // Postgres can show that the order is right and that a machine named by those rows does not
+        // stop the machine from being deleted.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepository(db);
+
+        UserAccount admin = await SeedUserAsync(db, "k8s-admin");
+        Tenant purged = await SeedTenantAsync(db, admin.Id, "K8s Purged");
+        Tenant kept = await SeedTenantAsync(db, admin.Id, "K8s Kept");
+        RegistrationToken purgedToken = await SeedRegistrationTokenAsync(db, purged.Id, admin.Id);
+        RegistrationToken keptToken = await SeedRegistrationTokenAsync(db, kept.Id, admin.Id);
+        Machine purgedMachine = await SeedMachineAsync(db, purged.Id, purgedToken.Id);
+        Machine keptMachine = await SeedMachineAsync(db, kept.Id, keptToken.Id);
+        await SeedKubernetesInventoryAsync(db, purged.Id, purgedMachine.Id);
+        await SeedKubernetesInventoryAsync(db, kept.Id, keptMachine.Id);
+
+        using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+        {
+            await repo.PurgeTenantOperationalDataAsync(purged.Id, CancellationToken.None);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        await Assert.That(await db.Machines.CountAsync(m => m.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.TenantId == purged.Id)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => (c.TenantId == kept.Id) && (c.MachineId == keptMachine.Id))).IsEqualTo(1);
+        await Assert.That(await db.Machines.CountAsync(m => m.TenantId == kept.Id)).IsEqualTo(1);
+        await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == kept.Id)).IsEqualTo(1);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => (n.TenantId == kept.Id) && (n.MachineId == keptMachine.Id))).IsEqualTo(1);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == kept.Id)).IsEqualTo(2);
+    }
+
+    private static async Task SeedKubernetesInventoryAsync(DatabaseContext db, int tenantId, long machineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "linked-node",
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "unlinked-node",
+        });
+        await db.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = seenAt,
+        });
+    }
+
     private static async Task AssertZeroRowsForTenantAAsync(
         DatabaseContext db, int tenantAId, long machineAId, int alertRuleAId, long alertEventAId, int integrationAId)
     {

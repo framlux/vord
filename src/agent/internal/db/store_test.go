@@ -5,6 +5,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -1667,5 +1668,603 @@ func TestMarkTelemetryPending_PartialOverlapCountsSurvivors(t *testing.T) {
 
 	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
 		t.Errorf("expected 1 pending (the one row that exists), got %d (err %v)", n, err)
+	}
+}
+
+// --- payload size cap tests ---
+
+// Intent: a payload larger than the cap is refused before it reaches the queue, so an item the server could
+// never accept cannot be queued at all.
+func TestEnqueueTelemetry_RejectsPayloadOverLimit(t *testing.T) {
+	store := newTestStore(t)
+	payload := strings.Repeat("x", MaxPayloadBytes+1)
+
+	err := store.EnqueueTelemetry("too-big", TelemetryOsVersion, payload)
+
+	if errors.Is(err, ErrPayloadTooLarge) == false {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected nothing pending after a refused enqueue, got %d", count)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected the refused item not to be stored, got %d items", len(items))
+	}
+}
+
+// Intent: the cap is inclusive, so a payload of exactly the maximum size is accepted.
+func TestEnqueueTelemetry_AcceptsPayloadAtLimit(t *testing.T) {
+	store := newTestStore(t)
+	payload := strings.Repeat("x", MaxPayloadBytes)
+
+	if err := store.EnqueueTelemetry("at-limit", TelemetryOsVersion, payload); err != nil {
+		t.Fatalf("expected a payload at the limit to be accepted, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 pending, got %d", count)
+	}
+}
+
+// Intent: a refused oversized payload must not push anything out of a full queue. The size check runs before the
+// eviction, so telemetry that is already queued is never sacrificed for an item that is not stored.
+func TestEnqueueTelemetry_OversizedPayloadOnFullQueueEvictsNothing(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	store := NewStore(database, 3)
+	for i := 1; i <= 3; i++ {
+		if enqErr := store.EnqueueTelemetry(fmt.Sprintf("full-%d", i), TelemetryCpuUsage, `{}`); enqErr != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, enqErr)
+		}
+	}
+
+	err = store.EnqueueTelemetry("too-big", TelemetryOsVersion, strings.Repeat("x", MaxPayloadBytes+1))
+
+	if errors.Is(err, ErrPayloadTooLarge) == false {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected the 3 queued items to remain pending, got %d", count)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	var ids []string
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if strings.Join(ids, ",") != "full-1,full-2,full-3" {
+		t.Errorf("expected the queue unchanged with its oldest item still first, got %v", ids)
+	}
+}
+
+// --- DiscardTelemetry tests ---
+
+// Intent: discarding removes dequeued items for good, so they are never sent and never come back on restart.
+func TestDiscardTelemetry_DeletesProcessingItems(t *testing.T) {
+	store := newTestStore(t)
+	for _, id := range []string{"keep", "drop"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+	if _, err := store.DequeueTelemetry(10); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+
+	deleted, err := store.DiscardTelemetry([]string{"drop"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 row deleted, got %d", deleted)
+	}
+
+	// A crash-recovery reset must bring back only the item that was not discarded.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("dequeue after reset: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "keep" {
+		t.Errorf("expected only %q to remain, got %+v", "keep", items)
+	}
+}
+
+// Intent: discarding is only for items the sender has taken off the queue, so a pending item with the same id is
+// left alone and the cached pending count stays correct.
+func TestDiscardTelemetry_LeavesPendingItemsAndCountUntouched(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnqueueTelemetry("pending", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	deleted, err := store.DiscardTelemetry([]string{"pending"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected no rows deleted for a pending item, got %d", deleted)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected pending count 1, got %d", count)
+	}
+}
+
+// Intent: an empty or nil id list is a no-op, not an error and not a malformed SQL statement.
+func TestDiscardTelemetry_EmptySlice(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, ids := range [][]string{nil, {}} {
+		deleted, err := store.DiscardTelemetry(ids)
+		if err != nil {
+			t.Errorf("DiscardTelemetry(%v): %v", ids, err)
+		}
+		if deleted != 0 {
+			t.Errorf("DiscardTelemetry(%v) deleted %d rows", ids, deleted)
+		}
+	}
+}
+
+// Intent: ids that no longer exist are ignored. For example, a pause may have cleared the queue while the
+// items were in flight.
+func TestDiscardTelemetry_UnknownIDs(t *testing.T) {
+	store := newTestStore(t)
+
+	deleted, err := store.DiscardTelemetry([]string{"never-existed"})
+	if err != nil {
+		t.Fatalf("DiscardTelemetry: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("expected 0 rows deleted, got %d", deleted)
+	}
+}
+
+// pendingCountOf returns the cached pending count, failing the test when it cannot be read.
+func pendingCountOf(t *testing.T, store *Store) int64 {
+	t.Helper()
+
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+
+	return count
+}
+
+// Intent: a holder that loses its Lease must discard every cluster snapshot it queued, pending or already taken
+// by the sender, while leaving every other kind of telemetry and the history of delivered snapshots alone.
+func TestDeleteTelemetryByType_DeletesPendingAndProcessingOfThatTypeOnly(t *testing.T) {
+	store := newTestStore(t)
+
+	enqueue := func(id string, itemType TelemetryType) {
+		t.Helper()
+
+		if err := store.EnqueueTelemetry(id, itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	enqueue("delivered", TelemetryKubernetesCluster)
+	enqueue("in-flight", TelemetryKubernetesCluster)
+
+	taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10)
+	if err != nil || len(taken) != 2 {
+		t.Fatalf("dequeue snapshots: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	enqueue("pending-1", TelemetryKubernetesCluster)
+	enqueue("pending-2", TelemetryKubernetesCluster)
+	enqueue("node", TelemetryKubernetesNode)
+	enqueue("cpu", TelemetryCpuUsage)
+
+	if got := pendingCountOf(t, store); got != 4 {
+		t.Fatalf("pending count before = %d, want 4", got)
+	}
+
+	deleted, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster)
+	if err != nil {
+		t.Fatalf("DeleteTelemetryByType: %v", err)
+	}
+
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3 (one processing and two pending)", deleted)
+	}
+
+	if got := pendingCountOf(t, store); got != 2 {
+		t.Errorf("pending count after = %d, want 2 (the node and cpu items)", got)
+	}
+
+	var remaining []string
+
+	rows, err := store.DB().Query("SELECT id FROM telemetry_queue ORDER BY id")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		remaining = append(remaining, id)
+	}
+
+	if want := "cpu,delivered,node"; strings.Join(remaining, ",") != want {
+		t.Errorf("rows left = %v, want %s", remaining, want)
+	}
+}
+
+// Intent: the cached pending count must follow the delete even when it was never loaded before, and a type with
+// nothing queued must delete nothing and leave the count alone.
+func TestDeleteTelemetryByType_KeepsCachedCountExact(t *testing.T) {
+	store := newTestStore(t)
+
+	deleted, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster)
+	if err != nil || deleted != 0 {
+		t.Fatalf("delete on an empty queue = %d, %v; want 0, nil", deleted, err)
+	}
+
+	if err := store.EnqueueTelemetry("snapshot", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("cpu", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if _, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster); err != nil {
+		t.Fatalf("DeleteTelemetryByType: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+
+	// The count must match the table, which a reload from the database proves.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after a reload = %d, want 1", got)
+	}
+}
+
+// queuedIDs lists the ids in the telemetry queue, sorted.
+func queuedIDs(t *testing.T, store *Store) string {
+	t.Helper()
+
+	rows, err := store.DB().Query("SELECT id FROM telemetry_queue ORDER BY id")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+
+	defer rows.Close()
+
+	var ids []string
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	return strings.Join(ids, ",")
+}
+
+// statusOf reads the status of one queued item.
+func statusOf(t *testing.T, store *Store, id string) QueueStatus {
+	t.Helper()
+
+	var status int
+	if err := store.DB().QueryRow("SELECT status FROM telemetry_queue WHERE id = ?", id).Scan(&status); err != nil {
+		t.Fatalf("status of %s: %v", id, err)
+	}
+
+	return QueueStatus(status)
+}
+
+// Intent: a cluster snapshot supersedes every older one that has not been delivered, whether it is waiting or the
+// sender has already taken it, and only those: other kinds of telemetry and the history of delivered snapshots
+// stay. The new snapshot is the one pending row of its type, and the cached count follows the table.
+func TestReplaceTelemetryOfType_ReplacesPendingAndProcessingOfThatTypeOnly(t *testing.T) {
+	store := newTestStore(t)
+
+	enqueue := func(id string, itemType TelemetryType) {
+		t.Helper()
+
+		if err := store.EnqueueTelemetry(id, itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	enqueue("delivered", TelemetryKubernetesCluster)
+	enqueue("in-flight", TelemetryKubernetesCluster)
+
+	taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10)
+	if err != nil || len(taken) != 2 {
+		t.Fatalf("dequeue snapshots: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	enqueue("pending-1", TelemetryKubernetesCluster)
+	enqueue("pending-2", TelemetryKubernetesCluster)
+	enqueue("node", TelemetryKubernetesNode)
+	enqueue("cpu", TelemetryCpuUsage)
+
+	if got := pendingCountOf(t, store); got != 4 {
+		t.Fatalf("pending count before = %d, want 4", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("fresh", TelemetryKubernetesCluster, `{"kube_system_uid":"u"}`); err != nil {
+		t.Fatalf("ReplaceTelemetryOfType: %v", err)
+	}
+
+	if got, want := queuedIDs(t, store), "cpu,delivered,fresh,node"; got != want {
+		t.Errorf("rows left = %s, want %s", got, want)
+	}
+
+	if got := statusOf(t, store, "fresh"); got != QueueStatusPending {
+		t.Errorf("status of the new snapshot = %d, want pending", got)
+	}
+
+	if got := statusOf(t, store, "delivered"); got != QueueStatusCompleted {
+		t.Errorf("status of the delivered snapshot = %d, want completed and untouched", got)
+	}
+
+	if got := pendingCountOf(t, store); got != 3 {
+		t.Errorf("pending count after = %d, want 3 (the node, cpu and new snapshot)", got)
+	}
+
+	var payload string
+	if err := store.DB().QueryRow("SELECT payload FROM telemetry_queue WHERE id = 'fresh'").Scan(&payload); err != nil || payload != `{"kube_system_uid":"u"}` {
+		t.Errorf("payload of the new snapshot = %q, %v", payload, err)
+	}
+}
+
+// Intent: the cached pending count must be exact whether or not it was loaded before the replace, with no
+// snapshot to replace and with one, and must equal a reload from the table.
+func TestReplaceTelemetryOfType_KeepsCachedCountExact(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.ReplaceTelemetryOfType("first", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Fatalf("pending count after the first snapshot = %d, want 1", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("second", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after replacing = %d, want 1", got)
+	}
+
+	if got := queuedIDs(t, store); got != "second" {
+		t.Errorf("rows = %s, want only the second snapshot", got)
+	}
+
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after a reload = %d, want 1", got)
+	}
+}
+
+// Intent: a snapshot the queue can never hold is refused before anything changes, so the snapshot it would have
+// replaced is still there to be delivered.
+func TestReplaceTelemetryOfType_RefusesAnOversizedPayloadAndKeepsTheOldSnapshot(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.EnqueueTelemetry("old", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	err := store.ReplaceTelemetryOfType("huge", TelemetryKubernetesCluster, strings.Repeat("x", MaxPayloadBytes+1))
+	if errors.Is(err, ErrPayloadTooLarge) == false {
+		t.Fatalf("error = %v, want ErrPayloadTooLarge", err)
+	}
+
+	if got := queuedIDs(t, store); got != "old" {
+		t.Errorf("rows = %s, want the old snapshot untouched", got)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+
+	if err := store.ReplaceTelemetryOfType("exact", TelemetryKubernetesCluster, strings.Repeat("x", MaxPayloadBytes)); err != nil {
+		t.Errorf("a payload of exactly the limit was refused: %v", err)
+	}
+}
+
+// Intent: the replace is one transaction. When the insert fails, here because the id is already a delivered
+// snapshot, the rows it deleted come back and the cached count is unchanged.
+func TestReplaceTelemetryOfType_RollsBackWholeWhenTheInsertFails(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.EnqueueTelemetry("taken-id", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"taken-id"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("waiting", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("taken-id", TelemetryKubernetesCluster, `{}`); err == nil {
+		t.Fatal("ReplaceTelemetryOfType succeeded with an id that is already in the queue")
+	}
+
+	if got, want := queuedIDs(t, store), "taken-id,waiting"; got != want {
+		t.Errorf("rows = %s, want %s: the failed replace must delete nothing", got, want)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+}
+
+// Intent: a replace obeys the same queue capacity as every other enqueue: when the queue is full the oldest
+// pending items of other kinds make room, and a snapshot never grows the queue past its limit.
+func TestReplaceTelemetryOfType_EvictsTheOldestPendingWhenTheQueueIsFull(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+
+	t.Cleanup(func() { database.Close() })
+
+	store := NewStore(database, 3)
+
+	for _, id := range []string{"a", "b"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	if err := store.EnqueueTelemetry("snap-1", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue snapshot: %v", err)
+	}
+
+	// Replacing the one snapshot keeps the queue at its limit, so nothing else is evicted.
+	if err := store.ReplaceTelemetryOfType("snap-2", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if got, want := queuedIDs(t, store), "a,b,snap-2"; got != want {
+		t.Errorf("rows = %s, want %s", got, want)
+	}
+
+	// With no snapshot to replace, the new one needs a place: the oldest pending item goes.
+	if _, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("c", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue c: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("snap-3", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace into a full queue: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 3 {
+		t.Errorf("pending count = %d, want the queue held to its limit of 3", got)
+	}
+
+	if got := queuedIDs(t, store); (strings.Contains(got, "snap-3") == false) || (strings.Count(got, ",") != 2) {
+		t.Errorf("rows = %s, want three rows including the new snapshot", got)
+	}
+}
+
+// Intent: the gate asks how long a cluster snapshot has been waiting, so the answer is the creation time of the
+// oldest snapshot that is pending or in flight, and nothing else counts: not other kinds, not delivered ones.
+func TestOldestQueuedTelemetry_ReportsTheOldestUndeliveredItemOfThatType(t *testing.T) {
+	store := newTestStore(t)
+
+	if _, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster); err != nil || found {
+		t.Fatalf("on an empty queue = found %v, err %v; want none", found, err)
+	}
+
+	setCreatedAt := func(id string, createdAt string) {
+		t.Helper()
+
+		if _, err := store.DB().Exec("UPDATE telemetry_queue SET created_at = ? WHERE id = ?", createdAt, id); err != nil {
+			t.Fatalf("set created_at: %v", err)
+		}
+	}
+
+	for _, row := range []struct {
+		id       string
+		itemType TelemetryType
+		created  string
+	}{
+		{"delivered", TelemetryKubernetesCluster, "2026-10-11T09:00:00Z"},
+		{"cpu", TelemetryCpuUsage, "2026-10-11T09:30:00Z"},
+		{"in-flight", TelemetryKubernetesCluster, "2026-10-11T10:00:00Z"},
+		{"waiting", TelemetryKubernetesCluster, "2026-10-11T11:00:00Z"},
+	} {
+		if err := store.EnqueueTelemetry(row.id, row.itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", row.id, err)
+		}
+
+		setCreatedAt(row.id, row.created)
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if err := store.UpdateTelemetryStatus("in-flight", QueueStatusProcessing); err != nil {
+		t.Fatalf("mark processing: %v", err)
+	}
+
+	created, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster)
+	if err != nil || found == false {
+		t.Fatalf("OldestQueuedTelemetry = found %v, err %v; want the in-flight snapshot", found, err)
+	}
+
+	if want := time.Date(2026, time.October, 11, 10, 0, 0, 0, time.UTC); created.Equal(want) == false {
+		t.Errorf("oldest = %v, want %v (the in-flight one: the delivered one is history)", created, want)
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"in-flight", "waiting"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if _, found, err := store.OldestQueuedTelemetry(TelemetryKubernetesCluster); err != nil || found {
+		t.Errorf("with every snapshot delivered = found %v, err %v; want none", found, err)
 	}
 }

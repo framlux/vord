@@ -159,4 +159,24 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// services-worker replicas.
     /// </summary>
     public ITable<DataProtectionKey> DataProtectionKeys => this.GetTable<DataProtectionKey>();
+
+    /// <summary>
+    /// Represents the Kubernetes clusters that tenants' machines belong to.
+    /// </summary>
+    public ITable<KubernetesCluster> KubernetesClusters => this.GetTable<KubernetesCluster>();
+
+    /// <summary>
+    /// Represents the nodes of the Kubernetes clusters.
+    /// </summary>
+    public ITable<KubernetesNode> KubernetesNodes => this.GetTable<KubernetesNode>();
+
+    /// <summary>
+    /// Represents the cursor for the Kubernetes inventory projection.
+    /// </summary>
+    public ITable<KubernetesInventoryProjectionCursor> KubernetesInventoryProjectionCursors => this.GetTable<KubernetesInventoryProjectionCursor>();
+
+    /// <summary>
+    /// Represents the machines that can report for a Kubernetes cluster, one row per machine.
+    /// </summary>
+    public ITable<KubernetesReporterCandidate> KubernetesReporterCandidates => this.GetTable<KubernetesReporterCandidate>();
 }

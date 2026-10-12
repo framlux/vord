@@ -21,7 +21,7 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 /// </remarks>
 public static class LockNames
 {
-    /// <summary>State-streaming singleton lock (one consumer per cluster).</summary>
+    /// <summary>State-streaming singleton lock (one consumer per deployment).</summary>
     public const string StateStreaming = "state-streaming";
 
     /// <summary>
@@ -38,10 +38,17 @@ public static class LockNames
     /// </summary>
     public const string HealthSweepTenantPrefix = "health-sweep:tenant:";
 
+    /// <summary>
+    /// Kubernetes inventory projection singleton lock (one projector per deployment). The projection
+    /// reads a single global stream, so one replica at a time applies it.
+    /// </summary>
+    public const string KubernetesInventoryProjection = "kubernetes-inventory-projection";
+
     /// <summary>Every fixed (non-prefixed) lock name. Used by the collision-audit test.</summary>
     public static IReadOnlyList<string> FixedNames { get; } = new[]
     {
         StateStreaming,
+        KubernetesInventoryProjection,
     };
 
     /// <summary>Every prefix used to compose tenant-scoped lock names.</summary>

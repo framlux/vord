@@ -52,7 +52,9 @@ import type {
 	HistoryResponse,
 	DiskHistoryResponse,
 	ServiceHistoryResponse,
-	SshHistoryResponse
+	SshHistoryResponse,
+	KubernetesClusterSummaryDto,
+	KubernetesClusterDetailDto
 } from './types';
 import { buildQueryString } from '$lib/utils/query';
 
@@ -414,6 +416,28 @@ export class ApiClient {
 
 	async updateMachine(id: number, data: UpdateMachineRequest): Promise<MachineDto> {
 		const resp = await this.patch<ApiResponse<MachineDto>>(`/api/v1/machines/${id}`, data);
+
+		return this.unwrap(resp);
+	}
+
+	// Kubernetes clusters
+	async getClusters(): Promise<KubernetesClusterSummaryDto[]> {
+		const resp = await this.get<ApiResponse<KubernetesClusterSummaryDto[]>>('/api/v1/clusters');
+
+		return this.unwrap(resp);
+	}
+
+	async getCluster(id: number): Promise<KubernetesClusterDetailDto> {
+		const resp = await this.get<ApiResponse<KubernetesClusterDetailDto>>(`/api/v1/clusters/${id}`);
+
+		return this.unwrap(resp);
+	}
+
+	// A null display name resets the cluster to its derived default name.
+	async renameCluster(id: number, displayName: string | null): Promise<KubernetesClusterSummaryDto> {
+		const resp = await this.patch<ApiResponse<KubernetesClusterSummaryDto>>(`/api/v1/clusters/${id}`, {
+			displayName
+		});
 
 		return this.unwrap(resp);
 	}

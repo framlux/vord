@@ -686,6 +686,65 @@ describe('ApiClient', () => {
             );
         });
 
+        it('should GET /api/v1/clusters and return the cluster list', async () => {
+            const clusters = [{ id: 4, name: 'k3s cp-1', displayName: null, distro: 'k3s', nodeCount: 3, managedNodeCount: 2, unmanagedNodeCount: 1, kubeletVersions: ['v1.31.4+k3s1'], reportingState: 'off', firstSeenAt: '2026-10-01T00:00:00Z', lastSeenAt: '2026-10-11T00:00:00Z' }];
+            mockSuccess(clusters);
+            const result = await client.getClusters();
+            expect(result).toEqual(clusters);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters',
+                expect.objectContaining({ method: 'GET' })
+            );
+        });
+
+        it('should GET /api/v1/clusters/{id} and return the cluster with its nodes', async () => {
+            const cluster = { id: 4, name: 'k3s cp-1', caFingerprint: 'ab12', hasFingerprintMismatch: false, nodes: [] };
+            mockSuccess(cluster);
+            const result = await client.getCluster(4);
+            expect(result).toEqual(cluster);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({ method: 'GET' })
+            );
+        });
+
+        it('should reject with a 404 ApiError when the cluster does not exist', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 404,
+                statusText: 'Not Found',
+                json: () => Promise.resolve({ success: false, data: null, message: 'Cluster not found', errors: null })
+            });
+
+            await expect(client.getCluster(99)).rejects.toMatchObject({ status: 404 });
+        });
+
+        it('should PATCH /api/v1/clusters/{id} with the display name and return the updated cluster', async () => {
+            const updated = { id: 4, name: 'Production', displayName: 'Production' };
+            mockSuccess(updated);
+            const result = await client.renameCluster(4, 'Production');
+            expect(result).toEqual(updated);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({
+                    method: 'PATCH',
+                    body: JSON.stringify({ displayName: 'Production' })
+                })
+            );
+        });
+
+        it('should PATCH a null display name to reset the cluster to its default name', async () => {
+            mockSuccess({ id: 4, name: 'k3s cp-1', displayName: null });
+            await client.renameCluster(4, null);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/clusters/4',
+                expect.objectContaining({
+                    method: 'PATCH',
+                    body: JSON.stringify({ displayName: null })
+                })
+            );
+        });
+
         it('should GET /api/v1/machines/{id}/status and return status data', async () => {
             const statusData = { isOnline: true, lastPing: '2026-03-15T10:00:00Z' };
             mockSuccess(statusData);
@@ -858,6 +917,30 @@ describe('ApiClient', () => {
                 'http://localhost:12233/api/v1/machines/7/authorized-keys/5',
                 expect.objectContaining({ method: 'DELETE' })
             );
+        });
+
+        it('should POST /api/v1/commands with a null Params as JSON null, not an empty string', async () => {
+            const command = { id: 1, commandId: 'c', machineId: 7, commandType: 'k8s_reporter_enrol', status: 'Pending' };
+            mockSuccess(command);
+            const request = {
+                commandId: 'c',
+                machineId: 7,
+                signingKeyId: 41,
+                commandType: 'k8s_reporter_enrol',
+                params: null,
+                nonce: 'n',
+                signature: 's',
+                canonicalPayload: '{"params":{}}',
+                timestamp: '2026-10-12T09:30:00.000Z',
+                expiresAt: '2026-10-12T09:40:00.000Z'
+            };
+            const result = await client.sendCommand(request);
+            expect(result).toEqual(command);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/commands',
+                expect.objectContaining({ method: 'POST', body: JSON.stringify(request) })
+            );
+            expect(JSON.parse(fetchFn.mock.calls[0][1].body).params).toBeNull();
         });
 
         it('should POST to /api/v1/auth/email-lookup and return the opaque sso result', async () => {

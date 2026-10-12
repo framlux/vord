@@ -77,6 +77,10 @@ public static class ObservabilityServiceCollectionExtensions
             AddObservable<FleetMetrics>(services);
         }
 
+        // The worker's projection records skipped rows into this class and the API server's cluster
+        // page records capability reads that fail, so both processes need it resolvable.
+        AddInitialisable<KubernetesInventoryMetrics>(services);
+
         // Registered in both processes because AddCoreServices registers AlertDeliveryService
         // unconditionally on both. A host-conditional registration here would leave one of them
         // unable to build its container at startup.

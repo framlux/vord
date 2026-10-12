@@ -41,4 +41,6 @@ public enum AuditResourceType : short
     ServerConfiguration = 15,
     /// <summary>A tenant OIDC configuration.</summary>
     TenantOidcConfig = 16,
+    /// <summary>A Kubernetes cluster.</summary>
+    KubernetesCluster = 17,
 }

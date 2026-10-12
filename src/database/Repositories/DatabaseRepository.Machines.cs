@@ -275,6 +275,26 @@ public partial class DatabaseRepository : IMachineRepository
                 .Where(s => s.MachineId == machineId)
                 .DeleteAsync(cancellationToken);
 
+            // A soft delete never fires the foreign keys from the Kubernetes tables to the machine, so
+            // everything that names it is cleared here. The node row stays, because the cluster still
+            // has that node; only its machine goes. The machine stops being a reporter candidate, and
+            // stops being the cluster's active reporter until another holder's snapshot says otherwise.
+            // The tenant's Kubernetes lock keeps this rewrite from interleaving with the projection,
+            // which may be linking the same node to a machine at this moment; the lock is held until
+            // the caller's transaction ends.
+            await AcquireKubernetesTenantLockAsync(tenantId, cancellationToken);
+            await _db.KubernetesNodes
+                .Where(n => (n.TenantId == tenantId) && (n.MachineId == machineId))
+                .Set(n => n.MachineId, (long?)null)
+                .UpdateAsync(cancellationToken);
+            await _db.KubernetesReporterCandidates
+                .Where(c => (c.TenantId == tenantId) && (c.MachineId == machineId))
+                .DeleteAsync(cancellationToken);
+            await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId) && (c.ActiveReporterMachineId == machineId))
+                .Set(c => c.ActiveReporterMachineId, (long?)null)
+                .UpdateAsync(cancellationToken);
+
             return deletedKeyHash;
         }
 

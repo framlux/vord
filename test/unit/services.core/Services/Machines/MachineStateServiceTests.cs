@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Models.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Observability;
@@ -15,6 +16,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -1107,5 +1109,502 @@ public class MachineStateServiceTests
         });
 
         await Assert.That(ex!.ParamName).IsEqualTo("logger");
+    }
+
+    // ========== GetMachineDetailAsync: Kubernetes block ==========
+
+    private const string KubernetesFingerprintA = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
+    private const string KubernetesFingerprintB = "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978";
+
+    private static string KubernetesPayload(
+        string fingerprint,
+        string nodeName = "cp-1",
+        bool hasKubelet = true,
+        bool controlPlane = true,
+        string nodeNameSource = "certificate")
+    {
+        return $$"""
+            {"distro":"k3s","kubelet_version":"v1.30.4+k3s1","node_name":"{{nodeName}}","node_name_source":"{{nodeNameSource}}","has_kubelet":{{(hasKubelet ? "true" : "false")}},"control_plane":{{(controlPlane ? "true" : "false")}},"ca_fingerprint":"{{fingerprint}}","admin_credential_present":true,"reporter_enrolled":false}
+            """;
+    }
+
+    private static async Task<long> SeedKubernetesMachineAsync(TestDatabaseFactory dbFactory, int tenantId = 1, string? name = null)
+    {
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId, hostname: name);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        return machine.Id;
+    }
+
+    private static async Task SeedKubernetesPayloadAsync(
+        TestDatabaseFactory dbFactory, long machineId, string payload, int tenantId = 1, DateTimeOffset? receivedAt = null)
+    {
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machineId,
+            tenantId: tenantId,
+            telemetryType: TelemetryTypeIds.KubernetesNode,
+            payload: payload,
+            receivedAt: receivedAt));
+    }
+
+    private static async Task<long> SeedKubernetesClusterAsync(
+        TestDatabaseFactory dbFactory, int tenantId, string fingerprint, string? displayName = null)
+    {
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = fingerprint,
+            DisplayName = displayName,
+            Distro = "k3s",
+            FirstSeenAt = DateTimeOffset.UtcNow,
+            LastSeenAt = DateTimeOffset.UtcNow,
+        });
+    }
+
+    private static async Task<long> SeedKubernetesNodeAsync(
+        TestDatabaseFactory dbFactory,
+        int tenantId,
+        long clusterId,
+        string nodeName,
+        long? machineId,
+        bool controlPlane = false,
+        bool mismatch = false)
+    {
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = nodeName,
+            MachineId = machineId,
+            LocalControlPlane = controlPlane,
+            FingerprintMismatch = mismatch,
+            KubeletVersion = "v1.30.4+k3s1",
+            LastLocalReportAt = DateTimeOffset.UtcNow,
+        });
+    }
+
+    private static MachineStateService CreateKubernetesDetailService(TestDatabaseFactory dbFactory)
+    {
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        return new MachineStateService(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_NoKubernetesPayloadOrNode_HasNoKubernetesBlock()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_LinkedNode_IsGroupedWithItsClusterAndLocalPayload()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory, name: "cp-host");
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        long nodeId = await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", machineId, controlPlane: true, mismatch: true);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "worker-1", null);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("grouped");
+        await Assert.That(kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.ClusterName).IsEqualTo("k3s cp-1");
+        await Assert.That(kubernetes.Node).IsNotNull();
+        await Assert.That(kubernetes.Node!.Id).IsEqualTo(nodeId);
+        await Assert.That(kubernetes.Node.NodeName).IsEqualTo("cp-1");
+        await Assert.That(kubernetes.Node.MachineId).IsEqualTo(machineId);
+        await Assert.That(kubernetes.Node.MachineName).IsEqualTo("cp-host");
+        await Assert.That(kubernetes.Node.ControlPlane).IsTrue();
+        await Assert.That(kubernetes.Node.FingerprintMismatch).IsTrue();
+        await Assert.That(kubernetes.Local).IsNotNull();
+        await Assert.That(kubernetes.Local!.Distro).IsEqualTo("k3s");
+        await Assert.That(kubernetes.Local.KubeletVersion).IsEqualTo("v1.30.4+k3s1");
+        await Assert.That(kubernetes.Local.NodeName).IsEqualTo("cp-1");
+        await Assert.That(kubernetes.Local.NodeNameSource).IsEqualTo("certificate");
+        await Assert.That(kubernetes.Local.HasKubelet).IsTrue();
+        await Assert.That(kubernetes.Local.ControlPlane).IsTrue();
+        await Assert.That(kubernetes.Local.AdminCredentialPresent).IsTrue();
+        await Assert.That(kubernetes.Local.ReporterEnrolled).IsFalse();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_LinkedNodeInRenamedCluster_UsesTheDisplayName()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA, displayName: "Production");
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", machineId, controlPlane: true);
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.ClusterName).IsEqualTo("Production");
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_LinkedNodeWithoutRecentPayload_KeepsTheNodeAndHasNoLocalBlock()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", machineId, controlPlane: true);
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Local).IsNull();
+        await Assert.That(kubernetes.Node).IsNotNull();
+        await Assert.That(kubernetes.Grouping).IsEqualTo("grouped");
+        await Assert.That(kubernetes.ClusterId).IsEqualTo(clusterId);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_LinkedNode_WinsOverAnotherClusterHoldingThePayloadFingerprint()
+    {
+        // Intent: established membership decides the cluster. A payload fingerprint that matches a
+        // different cluster is a mismatch for the node, not a reason to show the machine elsewhere.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long ownClusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintB);
+        await SeedKubernetesNodeAsync(dbFactory, 1, ownClusterId, "cp-1", machineId, controlPlane: true);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintB));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.Grouping).IsEqualTo("grouped");
+        await Assert.That(result.Kubernetes.ClusterId).IsEqualTo(ownClusterId);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_NoNodeAndExactlyOneClusterHoldsTheFingerprint_IsGroupedWithThatCluster()
+    {
+        // A host without a kubelet, such as a control-plane-only machine, is not a node but its CA
+        // still identifies the one cluster it belongs to.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "worker-1", null);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, nodeName: "", hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("grouped");
+        await Assert.That(kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.ClusterName).IsEqualTo("k3s worker-1");
+        await Assert.That(kubernetes.Node).IsNull();
+        await Assert.That(kubernetes.Local).IsNotNull();
+        await Assert.That(kubernetes.Local!.HasKubelet).IsFalse();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_NoNodeAndSeveralClustersHoldTheFingerprint_IsAmbiguous()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("ambiguous");
+        await Assert.That(kubernetes.ClusterId).IsNull();
+        await Assert.That(kubernetes.ClusterName).IsNull();
+        await Assert.That(kubernetes.Node).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadWithoutFingerprint_IsUnknown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(""));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("unknown");
+        await Assert.That(kubernetes.ClusterId).IsNull();
+        await Assert.That(kubernetes.ClusterName).IsNull();
+        await Assert.That(kubernetes.Local).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_NoClusterHoldsTheFingerprintYet_IsUngrouped()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintB);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("ungrouped");
+        await Assert.That(kubernetes.ClusterId).IsNull();
+        await Assert.That(kubernetes.ClusterName).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_ClusterOfAnotherTenantHoldingTheFingerprint_DoesNotGroupTheMachine()
+    {
+        // Intent: two tenants can report the same CA, and one must never be grouped into, or told the
+        // name of, the other's cluster.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 2, KubernetesFingerprintA, displayName: "Other tenant's cluster");
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("ungrouped");
+        await Assert.That(kubernetes.ClusterId).IsNull();
+        await Assert.That(kubernetes.ClusterName).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadOlderThanSevenDays_IsIgnored()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesPayloadAsync(
+            dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA), receivedAt: DateTimeOffset.UtcNow.AddDays(-8));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_UnreadableKubernetesPayloadAndNoNode_HasNoKubernetesBlock()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, "{ not json");
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_HostWithoutAKubelet_DoesNotShowItsReportedNodeName()
+    {
+        // Intent: a host without a kubelet is not a node, so the machine page gets no node name or name
+        // source for it, even though the host reported its hostname in the node name field.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "worker-1", null);
+        await SeedKubernetesPayloadAsync(
+            dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, nodeName: "cp-host", hasKubelet: false, nodeNameSource: "hostname"));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesLocalDto local = result!.Kubernetes!.Local!;
+        await Assert.That(local.HasKubelet).IsFalse();
+        await Assert.That(local.NodeName).IsNull();
+        await Assert.That(local.NodeNameSource).IsNull();
+        await Assert.That(local.ControlPlane).IsTrue();
+        await Assert.That(result.Kubernetes.Grouping).IsEqualTo("grouped");
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadWithAnInvalidNodeName_IsTreatedAsAbsent()
+    {
+        // Intent: a stored report the projection refuses to apply is not shown either. The machine keeps
+        // the node it is linked to, with no local part, and without a node there is nothing to show.
+        using TestDatabaseFactory dbFactory = new();
+        long linked = await SeedKubernetesMachineAsync(dbFactory);
+        long unlinked = await SeedKubernetesMachineAsync(dbFactory);
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", linked, controlPlane: true);
+        await SeedKubernetesPayloadAsync(dbFactory, linked, KubernetesPayload(KubernetesFingerprintA, nodeName: "Not_A_Node"));
+        await SeedKubernetesPayloadAsync(dbFactory, unlinked, KubernetesPayload(KubernetesFingerprintA, nodeName: "Not_A_Node"));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? linkedResult = await service.GetMachineDetailAsync(linked, 1, CancellationToken.None);
+        MachineDetailDto? unlinkedResult = await service.GetMachineDetailAsync(unlinked, 1, CancellationToken.None);
+
+        await Assert.That(linkedResult!.Kubernetes!.Local).IsNull();
+        await Assert.That(linkedResult.Kubernetes.Node).IsNotNull();
+        await Assert.That(linkedResult.Kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(unlinkedResult!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadWithoutADistro_IsTreatedAsAbsent()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, "{}");
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_PayloadFingerprintThatIsNotLowercaseHex_IsNotUsedToPlaceTheMachine()
+    {
+        // Intent: the page places a host by the same fingerprint the projection would store, so a
+        // malformed one groups nothing even when a cluster holds its lowercase form.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA.ToUpperInvariant(), hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.Grouping).IsEqualTo("unknown");
+        await Assert.That(result.Kubernetes.ClusterId).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_KubernetesLocalBlock_NeverCarriesTheCaFingerprint()
+    {
+        // Intent: the CA fingerprint is used to group machines but is not part of what the machine page
+        // shows or returns.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        string json = System.Text.Json.JsonSerializer.Serialize(result!.Kubernetes);
+        await Assert.That(json.Contains(KubernetesFingerprintA, StringComparison.Ordinal)).IsFalse();
+        await Assert.That(json.Contains("CaFingerprint", StringComparison.OrdinalIgnoreCase)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_ExcludesTheClusterSnapshotTypeFromTheTelemetryItLoads()
+    {
+        // Intent: the machine whose agent holds the cluster's reporter Lease has a cluster snapshot of up
+        // to 256 KB as its latest type-15 row, and its page has no use for it, so the telemetry read
+        // must leave that type out rather than load it and drop it.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        IMachineStateRepository stateRepo = Substitute.For<IMachineStateRepository>();
+        stateRepo.GetLatestTelemetryPerTypeAsync(
+                Arg.Any<long>(), Arg.Any<int>(), Arg.Any<IReadOnlyCollection<short>?>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<short, MachineTelemetry>());
+        stateRepo.GetRecentTelemetryAsync(Arg.Any<long>(), Arg.Any<short>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+        TestServiceScopeFactory scopeFactory = new(
+            dbFactory.Context, new Dictionary<Type, object> { [typeof(IMachineStateRepository)] = stateRepo });
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await stateRepo.Received(1).GetLatestTelemetryPerTypeAsync(
+            machineId, 7, Arg.Is<IReadOnlyCollection<short>?>(types => (types != null) && types.Contains(TelemetryTypeIds.KubernetesCluster)), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_HolderWithAStoredClusterSnapshot_StillShowsItsLocalKubernetesReport()
+    {
+        // Intent: leaving the snapshot out must not cost the page its other Kubernetes data. A holder has
+        // both a local node report and a snapshot, and only the local report is shown.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory, name: "cp-host");
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", machineId, controlPlane: true);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machineId, tenantId: 1, telemetryType: TelemetryTypeIds.KubernetesCluster, payload: new string('x', 4096)));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.Local).IsNotNull();
+        await Assert.That(result.Kubernetes.Node).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_CandidateWithoutANode_IsGroupedInTheCandidatesClusterWithItsCandidateState()
+    {
+        // Intent: a control-plane host with no kubelet is not a node, but once it is a reporter candidate
+        // its page places it in that cluster and shows whether it holds the Lease and what it last reported.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory, name: "k0s-controller");
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA, displayName: "Production");
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        DateTimeOffset reported = DateTimeOffset.UtcNow.AddMinutes(-4);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = 1,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            ReporterError = "credentials_rejected",
+            LastReportAt = reported,
+        });
+        await dbFactory.Context.KubernetesClusters.Where(c => c.Id == clusterId)
+            .Set(c => c.ActiveReporterMachineId, machineId).UpdateAsync();
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, nodeName: "", hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("grouped");
+        await Assert.That(kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.ClusterName).IsEqualTo("Production");
+        await Assert.That(kubernetes.Node).IsNull();
+        await Assert.That(kubernetes.Candidate).IsNotNull();
+        await Assert.That(kubernetes.Candidate!.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.Candidate.IsHolder).IsTrue();
+        await Assert.That(kubernetes.Candidate.ReporterError).IsEqualTo("credentials_rejected");
+        await Assert.That(kubernetes.Candidate.LastReportAt).IsEqualTo(reported);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_AnotherTenantsCandidateRow_IsNeverShown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long foreignClusterId = await SeedKubernetesClusterAsync(dbFactory, 2, KubernetesFingerprintA, displayName: "Other tenant's cluster");
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = 2,
+            ClusterId = foreignClusterId,
+            MachineId = machineId,
+            LastReportAt = DateTimeOffset.UtcNow,
+        });
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
     }
 }

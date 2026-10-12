@@ -186,8 +186,13 @@ public interface IMachineStateRepository
     /// </summary>
     /// <param name="machineId">The machine ID.</param>
     /// <param name="daysBack">Number of days to look back from now.</param>
+    /// <param name="excludedTypes">
+    /// Telemetry types to leave out of the query, so that a caller with no use for a large payload never loads it.
+    /// Null or empty excludes nothing.
+    /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryPerTypeAsync(long machineId, int daysBack, CancellationToken cancellationToken = default);
+    Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryPerTypeAsync(
+        long machineId, int daysBack, IReadOnlyCollection<short>? excludedTypes = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns recent telemetry rows of a specific type for a machine, ordered by most recent first.

@@ -299,6 +299,206 @@ public class MachineStateRepositoryTests
         await Assert.That(result[0].MachineId).IsEqualTo(activeMachineId);
     }
 
+    // ========== SoftDeleteMachineAsync Kubernetes node tests ==========
+
+    private static async Task<long> SeedKubernetesNodeAsync(
+        TestDatabaseFactory dbFactory, int tenantId, string nodeName, long? machineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+        });
+
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = nodeName,
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+    }
+
+    [Test]
+    public async Task SoftDelete_UnlinksKubernetesNode()
+    {
+        // Intent: a soft delete only flips IsDeleted, so the foreign key from the node to the machine
+        // never fires; the repository has to clear the link itself. The node row is inventory the
+        // cluster still owns, so it survives with no machine rather than being deleted.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long nodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "node-1", machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, userId, CancellationToken.None);
+
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync(n => n.Id == nodeId);
+        await Assert.That(deletedKeyHash).IsNotNull();
+        await Assert.That(node.MachineId).IsNull();
+        await Assert.That(node.NodeName).IsEqualTo("node-1");
+        await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync(c => c.Id == node.ClusterId)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SoftDelete_OtherTenantNodeUntouched()
+    {
+        // Intent: only the deleted machine's own node is unlinked. A node linked to another machine of
+        // the same tenant, a node of another tenant linked to that tenant's machine, and a node of
+        // another tenant that were ever to carry the deleted machine's id are all left as they were.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long otherTenantMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: otherTenantId));
+        long siblingNodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "sibling", siblingMachineId);
+        long otherTenantNodeId = await SeedKubernetesNodeAsync(dbFactory, otherTenantId, "other-tenant", otherTenantMachineId);
+        long foreignNodeId = await SeedKubernetesNodeAsync(dbFactory, otherTenantId, "foreign", doomedMachineId);
+        long ownNodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "own", null);
+
+        await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        Dictionary<long, long?> links = await dbFactory.Context.KubernetesNodes.ToDictionaryAsync(n => n.Id, n => n.MachineId);
+        await Assert.That(links[siblingNodeId]).IsEqualTo(siblingMachineId);
+        await Assert.That(links[otherTenantNodeId]).IsEqualTo(otherTenantMachineId);
+        await Assert.That(links[foreignNodeId]).IsEqualTo(doomedMachineId);
+        await Assert.That(links[ownNodeId]).IsNull();
+    }
+
+    [Test]
+    public async Task SoftDelete_MachineOfAnotherTenant_LeavesNodeLinked()
+    {
+        // Intent: a delete that matches no active machine of the caller's tenant changes nothing, the
+        // node link included, so a foreign machine id cannot be used to detach another tenant's node.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long nodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "node-1", machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, otherTenantId, userId, CancellationToken.None);
+
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync(n => n.Id == nodeId);
+        await Assert.That(deletedKeyHash).IsNull();
+        await Assert.That(node.MachineId).IsEqualTo(machineId);
+    }
+
+    private static async Task<long> SeedReportingClusterAsync(
+        TestDatabaseFactory dbFactory, int tenantId, long? activeReporterMachineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+            ActiveReporterMachineId = activeReporterMachineId,
+            LastSnapshotReceivedAt = activeReporterMachineId == null ? null : seenAt,
+        });
+    }
+
+    private static async Task SeedKubernetesCandidateAsync(
+        TestDatabaseFactory dbFactory, int tenantId, long clusterId, long machineId)
+    {
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            LastReportAt = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero),
+        });
+    }
+
+    [Test]
+    public async Task SoftDelete_RemovesTheMachinesReporterCandidateOnly()
+    {
+        // Intent: a soft delete never fires the foreign key from a candidate row to its machine, so the
+        // repository removes the row itself. Another machine's candidate in the same cluster, and a
+        // candidate of another tenant, stay.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long otherTenantMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: otherTenantId));
+        long clusterId = await SeedReportingClusterAsync(dbFactory, tenantId, null);
+        long otherClusterId = await SeedReportingClusterAsync(dbFactory, otherTenantId, null);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, doomedMachineId);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, siblingMachineId);
+        await SeedKubernetesCandidateAsync(dbFactory, otherTenantId, otherClusterId, otherTenantMachineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        await Assert.That(deletedKeyHash).IsNotNull();
+        List<long> remaining = await dbFactory.Context.KubernetesReporterCandidates.Select(c => c.MachineId).ToListAsync();
+        await Assert.That(remaining).IsEquivalentTo(new List<long> { siblingMachineId, otherTenantMachineId });
+        await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task SoftDelete_ClearsTheActiveReporterOfClustersThatNameTheMachine()
+    {
+        // Intent: a cluster whose latest snapshot came from the deleted machine stops naming it as the
+        // active reporter, while a cluster whose active reporter is another machine, and another
+        // tenant's cluster that was ever to carry the same id, keep theirs. The snapshot markers stay,
+        // because the snapshot itself is still the cluster's latest.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long activeCluster = await SeedReportingClusterAsync(dbFactory, tenantId, doomedMachineId);
+        long siblingCluster = await SeedReportingClusterAsync(dbFactory, tenantId, siblingMachineId);
+        long foreignCluster = await SeedReportingClusterAsync(dbFactory, otherTenantId, doomedMachineId);
+
+        await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        Dictionary<long, long?> active = await dbFactory.Context.KubernetesClusters.ToDictionaryAsync(c => c.Id, c => c.ActiveReporterMachineId);
+        await Assert.That(active[activeCluster]).IsNull();
+        await Assert.That(active[siblingCluster]).IsEqualTo(siblingMachineId);
+        await Assert.That(active[foreignCluster]).IsEqualTo(doomedMachineId);
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id == activeCluster)).LastSnapshotReceivedAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task SoftDelete_MachineOfAnotherTenant_LeavesCandidateAndActiveReporterAlone()
+    {
+        // Intent: a delete that matches no active machine of the caller's tenant changes nothing, so a
+        // foreign machine id cannot be used to strip another tenant's candidate or active reporter.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long clusterId = await SeedReportingClusterAsync(dbFactory, tenantId, machineId);
+        await SeedKubernetesCandidateAsync(dbFactory, tenantId, clusterId, machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, otherTenantId, userId, CancellationToken.None);
+
+        await Assert.That(deletedKeyHash).IsNull();
+        await Assert.That(await dbFactory.Context.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(1);
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id == clusterId)).ActiveReporterMachineId).IsEqualTo(machineId);
+    }
+
     // ========== GetHostnameMapAsync tests ==========
 
     [Test]
@@ -668,6 +868,67 @@ public class MachineStateRepositoryTests
 
         await Assert.That(result.Count).IsEqualTo(1);
         await Assert.That(result.ContainsKey(2)).IsTrue();
+    }
+
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_ExcludedTypes_AreNeverReturnedOrLoaded()
+    {
+        // Intent: a holder's cluster snapshot can be 256 KB, so a caller that has no use for it must be
+        // able to leave it out of the query, not just ignore it afterwards.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 14, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 70, tenantId: 1, telemetryType: type, payload: $$"""{"type":{{type}}}""");
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> result = await repo.GetLatestTelemetryPerTypeAsync(70, daysBack: 1, [15]);
+
+        await Assert.That(result.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 14 });
+    }
+
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_SeveralExcludedTypes_AreAllLeftOut()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 2, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 71, tenantId: 1, telemetryType: type);
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> result = await repo.GetLatestTelemetryPerTypeAsync(71, daysBack: 1, [2, 15]);
+
+        await Assert.That(result.Keys.ToArray()).IsEquivalentTo(new short[] { 1 });
+    }
+
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_NoExcludedTypes_ReturnsEveryType()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 72, tenantId: 1, telemetryType: type);
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> unspecified = await repo.GetLatestTelemetryPerTypeAsync(72, daysBack: 1);
+        Dictionary<short, MachineTelemetry> empty = await repo.GetLatestTelemetryPerTypeAsync(72, daysBack: 1, []);
+
+        await Assert.That(unspecified.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 15 });
+        await Assert.That(empty.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 15 });
     }
 
     // ========== GetRecentTelemetryAsync tests ==========

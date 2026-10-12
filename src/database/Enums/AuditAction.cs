@@ -111,4 +111,6 @@ public enum AuditAction : short
     EnterpriseAgreementApplied = 147,
     /// <summary>A change to a tenant's machine limit left some of its hosts paused.</summary>
     HostsPaused = 148,
+    /// <summary>An operator renamed a Kubernetes cluster or reset it to its derived name.</summary>
+    KubernetesClusterRenamed = 149,
 }

@@ -7,7 +7,9 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Models.Kubernetes;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Observability;
@@ -20,6 +22,8 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// </summary>
 public sealed class MachineStateService : IMachineStateService
 {
+    private static readonly short[] DetailExcludedTelemetryTypes = [TelemetryTypeIds.KubernetesCluster];
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly ILogger<MachineStateService> _logger;
@@ -173,6 +177,7 @@ public sealed class MachineStateService : IMachineStateService
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        IKubernetesInventoryRepository kubernetesRepo = scope.ServiceProvider.GetRequiredService<IKubernetesInventoryRepository>();
 
         Machine? machine = await machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
@@ -195,7 +200,10 @@ public sealed class MachineStateService : IMachineStateService
         DateTimeOffset? lastPing = MachineLiveness.LastSeen(state?.LastSeenAt, state?.LastHeartbeatAt);
 
         // Fetch latest raw telemetry per type for this machine.
-        Dictionary<short, MachineTelemetry> latestByType = await machineStateRepo.GetLatestTelemetryPerTypeAsync(machineId, 7, ct);
+        // The cluster snapshot a reporter holder sends can be 256 KB and nothing on this page shows it, so
+        // its type is left out of the query instead of being loaded and ignored.
+        Dictionary<short, MachineTelemetry> latestByType = await machineStateRepo.GetLatestTelemetryPerTypeAsync(
+            machineId, 7, DetailExcludedTelemetryTypes, ct);
 
         SystemInfoPayload? systemInfo = DeserializePayload<SystemInfoPayload>(latestByType, TelemetryTypeIds.SystemInfo);
         OsVersionPayload? osVersion = DeserializePayload<OsVersionPayload>(latestByType, TelemetryTypeIds.OsVersion);
@@ -207,6 +215,10 @@ public sealed class MachineStateService : IMachineStateService
         PackageUpdatesPayload? packages = DeserializePayload<PackageUpdatesPayload>(latestByType, TelemetryTypeIds.PackageUpdates);
         ServiceStatusPayload? services = DeserializePayload<ServiceStatusPayload>(latestByType, TelemetryTypeIds.ServiceStatus);
         AgentVersionPayload? agentVersion = DeserializePayload<AgentVersionPayload>(latestByType, TelemetryTypeIds.AgentVersion);
+        KubernetesNodePayload? kubernetesNode = DeserializePayload<KubernetesNodePayload>(latestByType, TelemetryTypeIds.KubernetesNode);
+
+        MachineKubernetesDto? kubernetes = await MachineKubernetesBuilder.BuildAsync(
+            kubernetesRepo, tenantId.Value, machine.Id, machine.Name, kubernetesNode, ct);
 
         List<ServiceEntryDto> failedServices = services?.Services
             .Where(s => string.Equals(s.ActiveState, "failed", StringComparison.OrdinalIgnoreCase))
@@ -254,6 +266,7 @@ public sealed class MachineStateService : IMachineStateService
             RecentSshSessions = sshSessions,
             TelemetryLastUpdated = state?.LastSeenAt,
             AgentVersion = NormalizeAgentVersion(agentVersion?.Version),
+            Kubernetes = kubernetes,
         };
     }
 
