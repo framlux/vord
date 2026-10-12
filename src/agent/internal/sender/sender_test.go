@@ -1091,15 +1091,6 @@ func osVersionItem(id string, size int) *pb.TelemetryItem {
 	}
 }
 
-func chunkIDs(chunk []*pb.TelemetryItem) []string {
-	ids := make([]string, len(chunk))
-	for i, item := range chunk {
-		ids[i] = item.EventId
-	}
-
-	return ids
-}
-
 // Intent: small items that fit the budget together travel in a single envelope.
 func TestSplitByBudget_SmallItemsShareOneEnvelope(t *testing.T) {
 	items := []*pb.TelemetryItem{osVersionItem("a", 100), osVersionItem("b", 100), osVersionItem("c", 100)}
@@ -1131,7 +1122,7 @@ func TestSplitByBudget_SplitsAtBudgetAndKeepsOrder(t *testing.T) {
 		t.Fatalf("expected %d envelopes, got %d", len(want), len(chunks))
 	}
 	for i := range want {
-		got := chunkIDs(chunks[i])
+		got := eventIDs(chunks[i])
 		if strings.Join(got, ",") != strings.Join(want[i], ",") {
 			t.Errorf("envelope %d: expected %v, got %v", i, want[i], got)
 		}
@@ -1160,8 +1151,8 @@ func TestSplitByBudget_ItemOverBudgetGoesAlone(t *testing.T) {
 		t.Fatalf("expected %d envelopes, got %d: %v", len(want), len(chunks), chunks)
 	}
 	for i := range want {
-		if strings.Join(chunkIDs(chunks[i]), ",") != strings.Join(want[i], ",") {
-			t.Errorf("envelope %d: expected %v, got %v", i, want[i], chunkIDs(chunks[i]))
+		if strings.Join(eventIDs(chunks[i]), ",") != strings.Join(want[i], ",") {
+			t.Errorf("envelope %d: expected %v, got %v", i, want[i], eventIDs(chunks[i]))
 		}
 	}
 }
@@ -1176,7 +1167,7 @@ func TestSplitByBudget_ItemOverLimitIsSetAside(t *testing.T) {
 	if len(oversized) != 1 || oversized[0].EventId != "huge" {
 		t.Fatalf("expected only %q oversized, got %v", "huge", oversized)
 	}
-	if len(chunks) != 1 || strings.Join(chunkIDs(chunks[0]), ",") != "ok-1,ok-2" {
+	if len(chunks) != 1 || strings.Join(eventIDs(chunks[0]), ",") != "ok-1,ok-2" {
 		t.Fatalf("expected one envelope [ok-1 ok-2], got %v", chunks)
 	}
 }
@@ -1383,5 +1374,106 @@ func TestSendBatch_PauseAckStopsRemainingEnvelopes(t *testing.T) {
 	}
 	if recorder.pauses.Load() != 1 {
 		t.Errorf("expected the host to enter pause once, got %d", recorder.pauses.Load())
+	}
+	// The recorder's pause hook does not clear the queue, so the items of the envelopes that were never sent
+	// must have been returned to pending rather than left in processing.
+	if got := countByStatus(t, store, db.QueueStatusCompleted); got != 2 {
+		t.Errorf("expected the 2 items of the acknowledged envelope to be completed, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending); got != 4 {
+		t.Errorf("expected the 4 items of the unsent envelopes to be pending again, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected nothing left in processing, got %d", got)
+	}
+}
+
+// countByStatus counts the queued rows in one status.
+func countByStatus(t *testing.T, store *db.Store, status db.QueueStatus) int {
+	t.Helper()
+	var n int
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM telemetry_queue WHERE status = ?", int(status)).Scan(&n); err != nil {
+		t.Fatalf("count status %d: %v", status, err)
+	}
+
+	return n
+}
+
+// Intent: a pause that begins while an envelope is in flight, for example from a heartbeat ping, stops the
+// remaining envelopes of the tick even though that envelope's own ack was plain. The envelope that was in flight
+// stays completed and the ones not yet sent go back to pending.
+func TestSendBatch_PauseDuringEnvelopeStopsRemainingEnvelopes(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("mid-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var recorder *pauseRecorder
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			recorder.coord.Observe(pause.HostPaused)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	recorder = newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected sending to stop after the envelope that was in flight when the pause began, got %d calls", calls)
+	}
+	if recorder.pauses.Load() != 1 {
+		t.Errorf("expected the host to enter pause once, got %d", recorder.pauses.Load())
+	}
+	if got := countByStatus(t, store, db.QueueStatusCompleted); got != 2 {
+		t.Errorf("expected the 2 items of the sent envelope to be completed, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending); got != 4 {
+		t.Errorf("expected the 4 items of the unsent envelopes to be pending again, got %d", got)
+	}
+	if got := countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected nothing left in processing, got %d", got)
+	}
+}
+
+// Intent: when the pause clears the queue, as the real pause hook does, the envelopes that were not sent are not
+// resurrected by being marked pending: the queue stays empty.
+func TestSendBatch_PauseDuringEnvelopeWithClearedQueue_StaysEmpty(t *testing.T) {
+	store := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		enqueueOsVersion(t, store, fmt.Sprintf("cleared-%d", i), 300*1024)
+	}
+
+	calls := 0
+	var recorder *pauseRecorder
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		calls++
+		if calls == 1 {
+			recorder.coord.Observe(pause.HostPaused)
+		}
+
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	recorder = newPauseRecorder(func(pause.Reason) {
+		if err := store.ClearTelemetryQueue(); err != nil {
+			t.Errorf("clear queue: %v", err)
+		}
+	})
+	s := New(store, client, state.New(), jitter.NewDefault(), recorder.coord)
+
+	s.sendBatch(context.Background(), "slow", SlowTypes)
+
+	if calls != 1 {
+		t.Errorf("expected exactly one envelope sent, got %d", calls)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected an empty queue after the pause cleared it, got %d pending (err %v)", n, err)
+	}
+	if got := countByStatus(t, store, db.QueueStatusPending) + countByStatus(t, store, db.QueueStatusProcessing); got != 0 {
+		t.Errorf("expected no rows left in the queue, got %d", got)
 	}
 }

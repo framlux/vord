@@ -97,8 +97,9 @@ func (s *Store) SetConfig(key, value string) error {
 
 // MaxPayloadBytes is the largest telemetry payload the queue accepts. The server refuses any gRPC message over
 // 1 MB, and an item that can never be accepted would be retried forever, so it is refused here instead. The
-// limit is measured on the JSON payload, which is never smaller than the proto encoding the sender puts on the
-// wire for the same record.
+// limit is measured on the JSON payload, which for these schemas is rarely smaller than the proto encoding the
+// sender puts on the wire for the same record. The sender checks the encoded size of every item it dequeues and
+// discards any that still slips through.
 const MaxPayloadBytes = 900 * 1024
 
 // ErrPayloadTooLarge is returned by EnqueueTelemetry for a payload over MaxPayloadBytes.

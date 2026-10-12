@@ -1717,6 +1717,46 @@ func TestEnqueueTelemetry_AcceptsPayloadAtLimit(t *testing.T) {
 	}
 }
 
+// Intent: a refused oversized payload must not push anything out of a full queue. The size check runs before the
+// eviction, so telemetry that is already queued is never sacrificed for an item that is not stored.
+func TestEnqueueTelemetry_OversizedPayloadOnFullQueueEvictsNothing(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	store := NewStore(database, 3)
+	for i := 1; i <= 3; i++ {
+		if enqErr := store.EnqueueTelemetry(fmt.Sprintf("full-%d", i), TelemetryCpuUsage, `{}`); enqErr != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, enqErr)
+		}
+	}
+
+	err = store.EnqueueTelemetry("too-big", TelemetryOsVersion, strings.Repeat("x", MaxPayloadBytes+1))
+
+	if errors.Is(err, ErrPayloadTooLarge) == false {
+		t.Fatalf("expected ErrPayloadTooLarge, got %v", err)
+	}
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected the 3 queued items to remain pending, got %d", count)
+	}
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	var ids []string
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if strings.Join(ids, ",") != "full-1,full-2,full-3" {
+		t.Errorf("expected the queue unchanged with its oldest item still first, got %v", ids)
+	}
+}
+
 // --- DiscardTelemetry tests ---
 
 // Intent: discarding removes dequeued items for good, so they are never sent and never come back on restart.

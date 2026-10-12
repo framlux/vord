@@ -247,22 +247,35 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 	}
 
 	for i, chunk := range chunks {
+		// A pause can begin while an earlier envelope is in flight, for instance when a heartbeat ping reports
+		// it. By then the queue has been cleared and the streams closed, so sending on would put pre-pause data
+		// on the wire and reopen a stream that nothing would close until the pause ends.
+		if i > 0 && s.pause.Paused() {
+			s.markUnsentPending(chunks[i:])
+
+			return
+		}
+
 		if s.sendEnvelope(ctx, tier, chunk) {
 			continue
 		}
 
-		// Stop at the first envelope that was not delivered, or that left the host paused. Everything not yet
-		// sent goes back to pending so the next tick retries it in order. If a pause cleared the queue, these
-		// ids are already gone and marking them changes nothing.
-		var unsent []string
-		for _, rest := range chunks[i+1:] {
-			unsent = append(unsent, eventIDs(rest)...)
-		}
-		if markErr := s.store.MarkTelemetryPending(unsent); markErr != nil {
-			s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
-		}
+		// Stop at the first envelope that was not delivered, or that left the host paused.
+		s.markUnsentPending(chunks[i+1:])
 
 		return
+	}
+}
+
+// markUnsentPending puts the items of envelopes that were never sent back to pending so the next tick retries
+// them in order. If a pause cleared the queue, these ids are already gone and marking them changes nothing.
+func (s *Sender) markUnsentPending(unsentChunks [][]*pb.TelemetryItem) {
+	var unsent []string
+	for _, chunk := range unsentChunks {
+		unsent = append(unsent, eventIDs(chunk)...)
+	}
+	if markErr := s.store.MarkTelemetryPending(unsent); markErr != nil {
+		s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
 	}
 }
 
