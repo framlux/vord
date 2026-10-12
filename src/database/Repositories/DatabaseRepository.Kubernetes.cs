@@ -210,28 +210,25 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         }
 
         // The machine's previous link is cleared before the new one is set, which keeps the unique
-        // machine link satisfied however the node moves.
+        // machine link satisfied however the node moves. Established membership put the report in the
+        // cluster of the machine's own node, so a different row can only mean the machine's node was
+        // renamed inside its cluster, for example from its hostname to its certificate name, and the
+        // old row is replaced rather than left as a second node.
         if ((existing != null) && ((target == null) || (existing.Id != target.Id)))
         {
             long existingId = existing.Id;
-            if (existing.ClusterId == clusterId)
-            {
-                // The machine's node was renamed inside its cluster, for example from its hostname to
-                // its certificate name, so the old row is replaced rather than left as a second node.
-                await _db.KubernetesNodes.Where(n => n.Id == existingId).DeleteAsync(ct);
-            }
-            else
-            {
-                await _db.KubernetesNodes
-                    .Where(n => n.Id == existingId)
-                    .Set(n => n.MachineId, (long?)null)
-                    .UpdateAsync(ct);
-            }
+            await _db.KubernetesNodes.Where(n => n.Id == existingId).DeleteAsync(ct);
         }
 
+        // A report that carries no fingerprint or version leaves what is stored. For a renamed node
+        // the stored values are those of the row being replaced.
+        KubernetesNode? stored = target ?? existing;
         string? reportedFingerprint = string.IsNullOrEmpty(report.CaFingerprint)
-            ? target?.ReportedCaFingerprint
+            ? stored?.ReportedCaFingerprint
             : report.CaFingerprint;
+        string? kubeletVersion = string.IsNullOrEmpty(report.KubeletVersion)
+            ? stored?.KubeletVersion
+            : report.KubeletVersion;
         bool mismatch = (reportedFingerprint != null) && (string.Equals(reportedFingerprint, cluster.CaFingerprint, StringComparison.Ordinal) == false);
 
         if (target == null)
@@ -245,7 +242,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
                 ReportedCaFingerprint = reportedFingerprint,
                 FingerprintMismatch = mismatch,
                 LocalControlPlane = report.ControlPlane,
-                KubeletVersion = report.KubeletVersion,
+                KubeletVersion = kubeletVersion,
                 LastLocalReportAt = report.ServerReceivedAt,
             };
             await _db.InsertWithInt64IdentityAsync(inserted, token: ct);
@@ -263,7 +260,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             await _db.KubernetesNodes
                 .Where(n => n.Id == targetId)
                 .Set(n => n.MachineId, (long?)machineId)
-                .Set(n => n.KubeletVersion, report.KubeletVersion)
+                .Set(n => n.KubeletVersion, kubeletVersion)
                 .Set(n => n.LocalControlPlane, report.ControlPlane)
                 .Set(n => n.LastLocalReportAt, (DateTimeOffset?)report.ServerReceivedAt)
                 .Set(n => n.ReportedCaFingerprint, reportedFingerprint)

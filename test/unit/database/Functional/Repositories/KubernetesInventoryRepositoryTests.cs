@@ -9,6 +9,8 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -927,6 +929,157 @@ public class KubernetesInventoryRepositoryTests
         await Assert.That(firstPage.Select(r => r.Id).SequenceEqual(new[] { kubernetesNode, kubernetesReserved, atVisibilityEdge })).IsTrue();
         await Assert.That(secondPage.Select(r => r.Id).SequenceEqual(new[] { afterEdge, last })).IsTrue();
         await Assert.That(firstPage.Concat(secondPage).All(r => (r.TelemetryType == 14) || (r.TelemetryType == 15))).IsTrue();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    public async Task ApplyLocalReport_NoKubeletVersion_KeepsTheStoredVersion(string? kubeletVersion)
+    {
+        // Intent: a report that could not read the kubelet version, whether it sent nothing or an empty
+        // value, must not erase the version an earlier report established; the rest of the node is
+        // still refreshed.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(1, tenantId, machineId, T0, kubeletVersion: "v1.30.4+k3s1"), T0, CancellationToken.None);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(2, tenantId, machineId, T0.AddMinutes(15), controlPlane: true, kubeletVersion: kubeletVersion),
+            T0.AddMinutes(15), CancellationToken.None);
+
+        KubernetesNode node = await NodeOfMachineAsync(dbFactory.Context, machineId);
+        await Assert.That(node.KubeletVersion).IsEqualTo("v1.30.4+k3s1");
+        await Assert.That(node.LocalControlPlane).IsTrue();
+        await Assert.That(node.LastLocalReportAt).IsEqualTo(T0.AddMinutes(15));
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_FirstReportWithEmptyKubeletVersion_StoresNone()
+    {
+        // Intent: with nothing stored and nothing reported, the node has no version, represented as
+        // null rather than an empty string.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(1, tenantId, machineId, T0, kubeletVersion: ""), T0, CancellationToken.None);
+
+        await Assert.That((await NodeOfMachineAsync(dbFactory.Context, machineId)).KubeletVersion).IsNull();
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_RenamedWithoutFingerprintOrVersion_CarriesTheOldRowsValuesForward()
+    {
+        // Intent: when a node is renamed by a report that carries no fingerprint or version, the row
+        // that replaces the old one keeps what the old row had established, so the rename does not
+        // forget the fingerprint the machine last reported or its kubelet version.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(1, tenantId, machineId, T0, nodeName: "host-a", kubeletVersion: "v1.30.4+k3s1"), T0, CancellationToken.None);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(2, tenantId, machineId, T0.AddMinutes(15), nodeName: "node-a", fingerprint: null, kubeletVersion: null),
+            T0.AddMinutes(15), CancellationToken.None);
+
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync();
+        await Assert.That(node.NodeName).IsEqualTo("node-a");
+        await Assert.That(node.ReportedCaFingerprint).IsEqualTo(FingerprintA);
+        await Assert.That(node.KubeletVersion).IsEqualTo("v1.30.4+k3s1");
+        await Assert.That(node.FingerprintMismatch).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_ReKeyNotBlockedByAnotherTenantHoldingTheNewFingerprint()
+    {
+        // Intent: the rule that a cluster never takes a fingerprint another cluster holds is scoped to
+        // the tenant. Another tenant's cluster with the same CA is unrelated inventory and must neither
+        // block this tenant's re-key nor change.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantOne = await SeedTenantAsync(dbFactory.Context);
+        int tenantTwo = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantOne);
+        await repo.ApplyLocalNodeReportAsync(Report(1, tenantOne, machineId, T0), T0, CancellationToken.None);
+        long clusterId = (await dbFactory.Context.KubernetesClusters.SingleAsync()).Id;
+        long otherTenantCluster = await SeedClusterAsync(dbFactory.Context, tenantTwo, FingerprintB, T0);
+
+        await repo.ApplyLocalNodeReportAsync(
+            Report(2, tenantOne, machineId, T0.AddHours(2), fingerprint: FingerprintB), T0.AddHours(2), CancellationToken.None);
+
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).CaFingerprint).IsEqualTo(FingerprintB);
+        await Assert.That((await ClusterAsync(dbFactory.Context, otherTenantCluster)).CaFingerprint).IsEqualTo(FingerprintB);
+        await Assert.That((await NodeOfMachineAsync(dbFactory.Context, machineId)).FingerprintMismatch).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_CursorInsertFails_RollsBackTheClusterAndNode()
+    {
+        // Intent: the cluster and node writes and the cursor advance are one unit of work. When the
+        // cursor write fails after the node has been written, nothing survives, so a retry starts from
+        // the same state and no row is ever applied without its cursor moving. The connection must also
+        // be left usable.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await dbFactory.Context.ExecuteAsync(
+            """
+            CREATE TRIGGER RefuseCursorInsert BEFORE INSERT ON "KubernetesInventoryProjectionCursor"
+            BEGIN SELECT RAISE(ABORT, 'cursor write refused'); END
+            """);
+
+        SqliteException? failure = await Assert.ThrowsAsync<SqliteException>(
+            async () => await repo.ApplyLocalNodeReportAsync(Report(7, tenantId, machineId, T0), T0, CancellationToken.None));
+
+        await Assert.That(failure!.Message).Contains("cursor write refused");
+        await AssertNothingWrittenAsync(dbFactory.Context);
+        await Assert.That(await repo.GetProjectionCursorAsync(CancellationToken.None)).IsNull();
+
+        await dbFactory.Context.ExecuteAsync("DROP TRIGGER RefuseCursorInsert");
+        LocalReportOutcome retried = await repo.ApplyLocalNodeReportAsync(Report(7, tenantId, machineId, T0), T0, CancellationToken.None);
+
+        await Assert.That(retried).IsEqualTo(LocalReportOutcome.ClusterCreated);
+        await Assert.That(await repo.GetProjectionCursorAsync(CancellationToken.None)).IsEqualTo(7L);
+    }
+
+    [Test]
+    public async Task ApplyLocalReport_CursorUpdateFails_RollsBackNodeCursorAndClusterChanges()
+    {
+        // Intent: the same unit of work holds for a report that updates existing rows. When the cursor
+        // update fails, the node's new values, its new name and the cluster's last-seen time are rolled
+        // back with it, and the cursor keeps its earlier position.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await repo.ApplyLocalNodeReportAsync(
+            Report(10, tenantId, machineId, T0, nodeName: "host-a", kubeletVersion: "v1.30.4+k3s1"), T0, CancellationToken.None);
+        await dbFactory.Context.ExecuteAsync(
+            """
+            CREATE TRIGGER RefuseCursorUpdate BEFORE UPDATE ON "KubernetesInventoryProjectionCursor"
+            BEGIN SELECT RAISE(ABORT, 'cursor write refused'); END
+            """);
+
+        SqliteException? failure = await Assert.ThrowsAsync<SqliteException>(
+            async () => await repo.ApplyLocalNodeReportAsync(
+                Report(20, tenantId, machineId, T0.AddMinutes(15), nodeName: "node-a", kubeletVersion: "v1.31.0+k3s1"),
+                T0.AddMinutes(15), CancellationToken.None));
+
+        await Assert.That(failure!.Message).Contains("cursor write refused");
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync();
+        await Assert.That(node.NodeName).IsEqualTo("host-a");
+        await Assert.That(node.KubeletVersion).IsEqualTo("v1.30.4+k3s1");
+        await Assert.That(node.LastLocalReportAt).IsEqualTo(T0);
+        await Assert.That((await dbFactory.Context.KubernetesClusters.SingleAsync()).LastSeenAt).IsEqualTo(T0);
+        await Assert.That(await repo.GetProjectionCursorAsync(CancellationToken.None)).IsEqualTo(10L);
     }
 
     private sealed class CapturingLogger : ILogger<Database.Repositories.DatabaseRepository>

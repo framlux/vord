@@ -47,7 +47,9 @@ public interface IKubernetesInventoryRepository
     /// Applies one local report in its own transaction under the tenant's Kubernetes lock: resolves the
     /// machine into a cluster by established membership or CA fingerprint, links or updates its node,
     /// re-keys the cluster when a CA rotation has finished, and advances the projection cursor to the
-    /// report's telemetry id in the same transaction whatever the outcome.
+    /// report's telemetry id in the same transaction whatever the outcome. The method opens that
+    /// transaction itself, so it must not be called inside one: a transaction already open on the same
+    /// connection would make the nested begin fail.
     /// </summary>
     /// <param name="report">The report to apply.</param>
     /// <param name="now">The time to record as the cursor's last advance.</param>
@@ -57,7 +59,8 @@ public interface IKubernetesInventoryRepository
 
     /// <summary>
     /// Deletes nodes that no local report has described for seven days and then the clusters left
-    /// with no nodes, one tenant at a time, each in its own transaction under that tenant's lock.
+    /// with no nodes, one tenant at a time, each in its own transaction under that tenant's lock. The
+    /// method opens those transactions itself, so it must not be called inside one.
     /// </summary>
     /// <param name="now">The time staleness is measured from.</param>
     /// <param name="ct">A cancellation token.</param>

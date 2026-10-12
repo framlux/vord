@@ -87,7 +87,6 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         await using NpgsqlConnection connection = new(_migratedConnectionString);
         await connection.OpenAsync();
-        await ExecuteAsync(connection, "DELETE FROM \"MachineTelemetry\" WHERE \"TenantId\" = @tenantId", ("tenantId", tenantId));
         await ExecuteAsync(
             connection,
             """
@@ -110,26 +109,32 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         string loadedPartition = await ScalarAsync(
             connection,
-            "SELECT tableoid::regclass::text FROM \"MachineTelemetry\" WHERE \"TelemetryType\" = 14 LIMIT 1");
+            """
+            SELECT c.relname FROM "MachineTelemetry" t JOIN pg_class c ON c.oid = t.tableoid
+            WHERE t."TelemetryType" = 14 LIMIT 1
+            """);
 
         (string statement, IReadOnlyList<MachineTelemetry> rows) = await CaptureBatchStatementAsync();
         string explain = await ScalarAsync(connection, $"EXPLAIN (FORMAT JSON) {statement}");
 
-        List<string> indexNames = [];
-        List<string> sequentiallyScanned = [];
-        CollectScans(JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan"), indexNames, sequentiallyScanned);
+        List<(string Relation, string Index)> indexScans = [];
+        List<string> sequentialScans = [];
+        CollectScans(JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan"), null, indexScans, sequentialScans);
 
-        bool usesPartialIndex = false;
-        foreach (string indexName in indexNames.Distinct())
+        List<(string Relation, string Index)> loadedPartitionScans = indexScans.Where(scan => scan.Relation == loadedPartition).ToList();
+        bool everyScanUsesPartialIndex = true;
+        foreach ((string _, string indexName) in loadedPartitionScans)
         {
             List<string> ancestors = await IndexAncestorsAsync(connection, indexName);
-            usesPartialIndex = usesPartialIndex || ancestors.Contains(PartialIndexName);
+            everyScanUsesPartialIndex = everyScanUsesPartialIndex && ancestors.Contains(PartialIndexName);
         }
 
         await Assert.That(rows.Count).IsEqualTo(5);
         await Assert.That(rows.All(r => r.TelemetryType == 14)).IsTrue();
-        await Assert.That(usesPartialIndex).IsTrue();
-        await Assert.That(sequentiallyScanned.Contains(loadedPartition)).IsFalse();
+        await Assert.That(loadedPartition).StartsWith("MachineTelemetry_Short_");
+        await Assert.That(loadedPartitionScans.Count).IsGreaterThan(0);
+        await Assert.That(everyScanUsesPartialIndex).IsTrue();
+        await Assert.That(sequentialScans.Contains(loadedPartition)).IsFalse();
     }
 
     [Test]
@@ -206,6 +211,63 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         }
 
         await Assert.That(outcome).IsEqualTo(LocalReportOutcome.ClusterCreated);
+    }
+
+    [Test]
+    public async Task Live_TenantLock_MakesGarbageCollectionWaitForTheHolder()
+    {
+        // Intent: garbage collection deletes under the same per-tenant lock as the projection, so
+        // while another transaction holds a tenant's lock the collector must wait before touching that
+        // tenant's rows, and only then remove them. The wait is observed in the server's lock table,
+        // never by sleeping.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        DateTimeOffset longAgo = new(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        long clusterId = await seedDb.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = FingerprintA,
+            Distro = "k3s",
+            FirstSeenAt = longAgo,
+            LastSeenAt = longAgo,
+        });
+        await seedDb.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "stale-node",
+            LastLocalReportAt = longAgo,
+        });
+        string collectorName = NewApplicationName("collector");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task<int> collect;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            collect = Task.Run(async () =>
+            {
+                await using DatabaseContext collectorDb = CreateContext(collectorName);
+
+                return await CreateRepo(collectorDb).CollectGarbageAsync(
+                    new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), CancellationToken.None);
+            });
+            bool blocked = await PostgresLockProbe.WaitUntilBlockedAsync(
+                _migratedConnectionString, collectorName, collect, failsafe.Token);
+
+            await Assert.That(blocked).IsTrue();
+            await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(1);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        int deleted = await collect;
+
+        await Assert.That(deleted).IsEqualTo(2);
+        await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
+        await Assert.That(await seedDb.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
     }
 
     [Test]
@@ -365,8 +427,10 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             }));
         await using DatabaseContext db = new(options);
 
+        // The window bounds are fixed, far outside any time the seeded rows can carry, so the result
+        // does not depend on the clocks of the test host and the database.
         IReadOnlyList<MachineTelemetry> rows = await CreateRepo(db).GetKubernetesTelemetryBatchAsync(
-            0, DateTimeOffset.UtcNow.AddDays(-8), DateTimeOffset.UtcNow.AddMinutes(1), 500, CancellationToken.None);
+            0, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), 500, CancellationToken.None);
 
         return (statement, rows);
     }
@@ -388,23 +452,33 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         return text;
     }
 
-    private static void CollectScans(JsonElement node, List<string> indexNames, List<string> sequentiallyScanned)
+    /// <summary>
+    /// Walks a JSON plan collecting each index scan with the relation it reads and each sequential
+    /// scan. A bitmap index scan names only the index, so it takes the relation of the bitmap heap
+    /// scan above it.
+    /// </summary>
+    private static void CollectScans(
+        JsonElement node, string? enclosingRelation, List<(string Relation, string Index)> indexScans, List<string> sequentialScans)
     {
-        if (node.TryGetProperty("Index Name", out JsonElement indexName))
+        string? relation = node.TryGetProperty("Relation Name", out JsonElement relationName)
+            ? relationName.GetString()
+            : enclosingRelation;
+
+        if (node.TryGetProperty("Index Name", out JsonElement indexName) && (relation != null))
         {
-            indexNames.Add(indexName.GetString()!);
+            indexScans.Add((relation, indexName.GetString()!));
         }
 
-        if ((node.GetProperty("Node Type").GetString() == "Seq Scan") && node.TryGetProperty("Relation Name", out JsonElement relation))
+        if ((node.GetProperty("Node Type").GetString() == "Seq Scan") && (relation != null))
         {
-            sequentiallyScanned.Add(relation.GetString()!);
+            sequentialScans.Add(relation);
         }
 
         if (node.TryGetProperty("Plans", out JsonElement children))
         {
             foreach (JsonElement child in children.EnumerateArray())
             {
-                CollectScans(child, indexNames, sequentiallyScanned);
+                CollectScans(child, relation, indexScans, sequentialScans);
             }
         }
     }
