@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"time"
@@ -61,13 +60,6 @@ func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 	r.stateChanged(ctx)
 
 	return commands.Result{Success: true, Message: messageEnrolled}
-}
-
-// stateFileExists reports whether the state file is there, usable or not.
-func stateFileExists(dataDir string) bool {
-	_, err := os.Stat(statePath(dataDir))
-
-	return err == nil
 }
 
 // instanceID returns the id this host enrolled with before, or makes a new one. A state file that cannot be used

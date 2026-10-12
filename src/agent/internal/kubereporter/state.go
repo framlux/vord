@@ -73,12 +73,14 @@ func statePath(dataDir string) string {
 // record, so a caller never looks at the files itself. A record that cannot be loaded still counts, since the
 // host enrolled once and the cluster may hold what it created.
 func LocalRecordPresent(dataDir string) bool {
-	return regularFileExists(statePath(dataDir))
+	return stateFileExists(dataDir)
 }
 
-// regularFileExists reports whether path names a regular file. Any failure to find out answers false.
-func regularFileExists(path string) bool {
-	info, err := os.Stat(path)
+// stateFileExists reports whether the state file is there, usable or not. Only a regular file counts, and any
+// failure to find out answers false. It is the one definition of that fact: enrol asks it whether the host had a
+// state file before the run, and LocalRecordPresent builds on it.
+func stateFileExists(dataDir string) bool {
+	info, err := os.Stat(statePath(dataDir))
 
 	return (err == nil) && info.Mode().IsRegular()
 }

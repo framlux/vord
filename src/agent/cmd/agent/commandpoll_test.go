@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/framlux/vord/internal/commands"
+	"github.com/framlux/vord/internal/kubereporter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 	"google.golang.org/grpc"
@@ -177,5 +178,155 @@ func TestCommandPollTick_RemoteCommandsOff_RebootIsRejectedNotExecuted(t *testin
 	ack := client.acks[0]
 	if (ack.CommandId != "cmd-1") || (ack.Result.ResultType != pb.ResultType_REJECTED) || (ack.Result.Message != "remote commands are disabled on this host") || ack.Result.Success {
 		t.Errorf("acknowledgement = %+v, want cmd-1 rejected with the remote-commands-disabled message", ack)
+	}
+}
+
+// admissionHost is a host wired the way main wires it: the real reporter-record check on a temporary data
+// directory, a processor built from the admission options, and a fake server that records what the host answers.
+type admissionHost struct {
+	t          *testing.T
+	dataDir    string
+	client     *fakeConfigurationClient
+	processor  *commands.Processor
+	shouldPoll func() bool
+	options    commands.ProcessorOptions
+}
+
+func newAdmissionHost(t *testing.T, allowRemoteCommands bool) *admissionHost {
+	t.Helper()
+
+	h := &admissionHost{t: t, dataDir: t.TempDir(), client: &fakeConfigurationClient{}}
+	h.options, h.shouldPoll = newCommandAdmission(allowRemoteCommands, h.dataDir)
+	h.processor = commands.NewProcessor(
+		commands.NewHandler(commands.HandlerDeps{}),
+		&storeNonceAdapter{store: newTestStore(t)},
+		&grpcAckAdapter{client: h.client},
+		time.Hour,
+		h.options,
+	)
+
+	return h
+}
+
+// enrolLocally leaves the record an enrolled host holds.
+func (h *admissionHost) enrolLocally() {
+	h.t.Helper()
+
+	err := kubereporter.SaveState(h.dataDir, kubereporter.State{
+		InstanceID: "0123456789abcdef",
+		Server:     "https://10.0.0.1:6443",
+		CACert:     "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+		Token:      "token",
+	})
+	if err != nil {
+		h.t.Fatalf("SaveState: %v", err)
+	}
+}
+
+// answerTo hands the processor an unsigned command of the given type, as if the server had delivered it, and
+// returns the single acknowledgement message. The processor is asked directly, not through the poll, so a host
+// whose gate keeps it from polling is still shown to refuse a command that reaches it. A command the processor
+// lets past its remote-commands check dies at the next one, because the fake key store holds no key, so
+// "unknown signing key" means the command was admitted and the flag text means it was not.
+func (h *admissionHost) answerTo(commandType commands.CommandType) string {
+	h.t.Helper()
+
+	h.client.acks = nil
+
+	h.processor.Process(context.Background(), commands.PendingCommand{
+		ID:               "cmd-1",
+		Type:             string(commandType),
+		CanonicalPayload: "{}",
+		Signature:        []byte("unsigned"),
+		SigningKeyID:     1,
+		TenantID:         100,
+		MachineID:        200,
+		UserID:           42,
+	}, 100, 200)
+
+	if len(h.client.acks) != 1 {
+		h.t.Fatalf("got %d acknowledgements for %s, want 1", len(h.client.acks), commandType)
+	}
+
+	return h.client.acks[0].Result.Message
+}
+
+const (
+	messageAdmitted = "unknown signing key"
+	messageRefused  = "remote commands are disabled on this host"
+)
+
+// Intent: A host that allows remote commands polls and admits every command whether or not it ever enrolled.
+func TestCommandAdmission_RemoteCommandsOn_AdmitsEverythingWithoutARecord(t *testing.T) {
+	h := newAdmissionHost(t, true)
+
+	if h.options.AllowAll == false {
+		t.Error("AllowAll = false, want true when remote commands are on")
+	}
+
+	if h.shouldPoll() == false {
+		t.Error("a host with remote commands on did not poll")
+	}
+
+	for _, commandType := range []commands.CommandType{commands.CommandReboot, commands.CommandK8sReporterEnrol, commands.CommandK8sReporterUninstall} {
+		if got := h.answerTo(commandType); got != messageAdmitted {
+			t.Errorf("%s answered %q, want it admitted (%q)", commandType, got, messageAdmitted)
+		}
+	}
+}
+
+// Intent: A host with remote commands off that never enrolled neither polls nor admits anything, the uninstall
+// command included, so its admin kubeconfig is never used on its behalf.
+func TestCommandAdmission_RemoteCommandsOff_WithoutAStateFile_PollsAndAdmitsNothing(t *testing.T) {
+	h := newAdmissionHost(t, false)
+
+	if h.options.AllowAll {
+		t.Error("AllowAll = true, want false when remote commands are off")
+	}
+
+	if h.shouldPoll() {
+		t.Error("a host with remote commands off and no state file polled")
+	}
+
+	for _, commandType := range []commands.CommandType{commands.CommandReboot, commands.CommandK8sReporterEnrol, commands.CommandK8sReporterUnenrol, commands.CommandK8sReporterUninstall} {
+		if got := h.answerTo(commandType); got != messageRefused {
+			t.Errorf("%s answered %q, want it refused (%q)", commandType, got, messageRefused)
+		}
+	}
+}
+
+// Intent: Once the state file is there, the same host polls and admits the two cleanup commands and nothing
+// else, and when the state file goes (as it does at the end of a cleanup) it polls and admits nothing again.
+func TestCommandAdmission_RemoteCommandsOff_WithAStateFile_AdmitsCleanupOnly(t *testing.T) {
+	h := newAdmissionHost(t, false)
+	h.enrolLocally()
+
+	if h.shouldPoll() == false {
+		t.Fatal("a host with remote commands off and a state file did not poll")
+	}
+
+	want := map[commands.CommandType]string{
+		commands.CommandK8sReporterUnenrol:   messageAdmitted,
+		commands.CommandK8sReporterUninstall: messageAdmitted,
+		commands.CommandK8sReporterEnrol:     messageRefused,
+		commands.CommandReboot:               messageRefused,
+		commands.CommandKillProcess:          messageRefused,
+	}
+	for commandType, message := range want {
+		if got := h.answerTo(commandType); got != message {
+			t.Errorf("%s answered %q, want %q", commandType, got, message)
+		}
+	}
+
+	if err := kubereporter.DeleteState(h.dataDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if h.shouldPoll() {
+		t.Error("the host kept polling after its state file was removed")
+	}
+
+	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageRefused {
+		t.Errorf("uninstall answered %q after the state file was removed, want it refused", got)
 	}
 }

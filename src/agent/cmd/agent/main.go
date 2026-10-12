@@ -159,7 +159,7 @@ func main() {
 	// collector is shared. The collector reports why the reporter cannot use its credentials, if it cannot.
 	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir, reporterRuntime.ReporterError)
 
-	localRecordPresent := func() bool { return kubereporter.LocalRecordPresent(cfg.DataDir) }
+	processorOptions, shouldPoll := newCommandAdmission(cfg.AllowRemoteCommands, cfg.DataDir)
 
 	kubeReporter := kubereporter.New(kubereporter.Options{
 		DataDir:  cfg.DataDir,
@@ -173,10 +173,7 @@ func main() {
 	cmdHandler := commands.NewHandler(commands.HandlerDeps{KubeReporter: kubeReporter})
 	nonceAdapter := &storeNonceAdapter{store: store}
 	ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
-	cmdProcessor := commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay, commands.ProcessorOptions{
-		AllowAll:           cfg.AllowRemoteCommands,
-		LocalRecordPresent: localRecordPresent,
-	})
+	cmdProcessor := commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay, processorOptions)
 
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
@@ -231,14 +228,14 @@ func main() {
 	// Start the command poll loop in background. With remote commands off it still runs, but each tick polls only
 	// while this host holds a reporter record, so a host that never enrolled adds no load and accepts nothing.
 	if cfg.AllowRemoteCommands == false {
-		slog.Info("remote commands are disabled by configuration, only cluster reporter cleanup commands are accepted")
+		slog.Info("remote commands are disabled by configuration; cluster reporter cleanup commands are accepted only while this host holds a reporter record")
 	}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer recoverPanic("command-poll")
-		runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit, pauseCoordinator.Paused, commandPollGate(cfg.AllowRemoteCommands, localRecordPresent))
+		runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit, pauseCoordinator.Paused, shouldPoll)
 	}()
 
 	// Start telemetry sender in background.
@@ -458,6 +455,21 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 			timer.Reset(jit.Apply(interval, 0.15))
 		}
 	}
+}
+
+// newCommandAdmission decides which commands this host takes and when it asks for them, from the one fact that
+// settles both: whether remote commands are allowed. The processor options and the poll gate share a single
+// reporter-record check on the agent's data directory, so what the poll fetches and what the processor accepts
+// cannot disagree.
+func newCommandAdmission(allowRemoteCommands bool, dataDir string) (commands.ProcessorOptions, func() bool) {
+	localRecordPresent := func() bool { return kubereporter.LocalRecordPresent(dataDir) }
+
+	options := commands.ProcessorOptions{
+		AllowAll:           allowRemoteCommands,
+		LocalRecordPresent: localRecordPresent,
+	}
+
+	return options, commandPollGate(allowRemoteCommands, localRecordPresent)
 }
 
 // commandPollGate answers, on each tick, whether this host should ask the server for commands. A host that
