@@ -319,6 +319,26 @@ public class MachineStateBatchCollapserTests
         await Assert.That(patch.LastSeenAt).IsEqualTo(t0);
     }
 
+    [Test]
+    public async Task Collapse_KubernetesNodeRow_IsIgnoredByTheStateProjection()
+    {
+        // Intent: Kubernetes node reports belong to the Kubernetes inventory projection, which reads
+        // them past its own cursor. The machine-state projection must neither fold one into a fragment
+        // nor count it as a row it failed to parse, but the machine is still seen.
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.KubernetesNode, """{"distro":"k3s","node_name":"cp-1","has_kubelet":true}""", t0),
+        ];
+
+        CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
+
+        MachineStatePatch patch = result.Patches.Single();
+        await Assert.That(patch.HasDetailChanges).IsFalse();
+        await Assert.That(result.Skipped.Count).IsEqualTo(0);
+        await Assert.That(patch.LastSeenAt).IsEqualTo(t0);
+    }
+
     private static MachineTelemetry Row(long id, long machineId, short type, string payload, DateTimeOffset receivedAt, DateTimeOffset? serverReceivedAt = null) =>
         new()
         {
