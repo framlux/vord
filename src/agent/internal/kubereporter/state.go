@@ -66,6 +66,23 @@ func statePath(dataDir string) string {
 	return filepath.Join(dataDir, StateFileName)
 }
 
+// LocalRecordPresent reports whether this host holds a local record of having enrolled as a reporter candidate.
+// It is how the agent tells a host that still has cluster objects of its own to clean up from one that does not:
+// with remote commands off, only a host that holds a record polls for and accepts the cleanup commands, because
+// every such host had remote commands on when it enrolled. This is the one place that decides what counts as a
+// record, so a caller never looks at the files itself. A record that cannot be loaded still counts, since the
+// host enrolled once and the cluster may hold what it created.
+func LocalRecordPresent(dataDir string) bool {
+	return regularFileExists(statePath(dataDir))
+}
+
+// regularFileExists reports whether path names a regular file. Any failure to find out answers false.
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+
+	return (err == nil) && info.Mode().IsRegular()
+}
+
 // LoadState reads the state file. A file that does not exist is not an error: it answers (State{}, false, nil).
 // A file that cannot be read, is not valid or is missing a field answers an error that never quotes its
 // content, because the content is a credential.

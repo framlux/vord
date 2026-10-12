@@ -65,18 +65,48 @@ type Processor struct {
 	destructiveDelay time.Duration
 	maxTimestampAge  time.Duration
 	now              func() time.Time
+
+	allowAll           bool
+	localRecordPresent func() bool
+}
+
+// messageRemoteCommandsDisabled is what a command refused for the host's remote commands setting is acknowledged
+// with.
+const messageRemoteCommandsDisabled = "remote commands are disabled on this host"
+
+// ProcessorOptions says which commands a Processor accepts.
+type ProcessorOptions struct {
+	// AllowAll is whether this host allows remote commands. When it is false the processor accepts only the
+	// cleanup commands, and only while LocalRecordPresent says the host has something of its own to clean up.
+	AllowAll bool
+
+	// LocalRecordPresent answers whether this host holds a local reporter record. It is read for each cleanup
+	// command, only when AllowAll is false. Nil means no record, so every command is refused.
+	LocalRecordPresent func() bool
 }
 
 // NewProcessor creates a command processor.
-func NewProcessor(handler *Handler, store NonceStore, ack CommandAcknowledger, destructiveDelay time.Duration) *Processor {
+func NewProcessor(handler *Handler, store NonceStore, ack CommandAcknowledger, destructiveDelay time.Duration, options ProcessorOptions) *Processor {
 	return &Processor{
-		handler:          handler,
-		store:            store,
-		ack:              ack,
-		destructiveDelay: destructiveDelay,
-		maxTimestampAge:  5 * time.Minute,
-		now:              time.Now,
+		handler:            handler,
+		store:              store,
+		ack:                ack,
+		destructiveDelay:   destructiveDelay,
+		maxTimestampAge:    5 * time.Minute,
+		now:                time.Now,
+		allowAll:           options.AllowAll,
+		localRecordPresent: options.LocalRecordPresent,
 	}
+}
+
+// acceptsWhileRemoteCommandsOff reports whether a command of this type may run on a host that has remote
+// commands off: a cleanup command, on a host that holds a local reporter record.
+func (p *Processor) acceptsWhileRemoteCommandsOff(commandType CommandType) bool {
+	if commandType.IsCleanup() == false {
+		return false
+	}
+
+	return (p.localRecordPresent != nil) && p.localRecordPresent()
 }
 
 // Process validates and executes a single command. It performs ownership checks,
@@ -92,7 +122,16 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		return
 	}
 
-	// 0b. Verify command ownership: tenant and machine must match agent identity.
+	// 0b. With remote commands off, refuse everything but the cleanup commands before any other work: no
+	// signature is checked, no nonce is spent, and a destructive command is not even acknowledged as initiated.
+	if (p.allowAll == false) && (p.acceptsWhileRemoteCommandsOff(cmdType) == false) {
+		slog.Warn("remote commands are disabled on this host, rejecting command", "command_id", cmd.ID, "type", cmd.Type)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", messageRemoteCommandsDisabled, ResultTypeRejected)
+
+		return
+	}
+
+	// 0c. Verify command ownership: tenant and machine must match agent identity.
 	if cmd.TenantID != agentTenantID {
 		slog.Error("command tenant mismatch, rejecting", "command_id", cmd.ID, "cmd_tenant", cmd.TenantID, "agent_tenant", agentTenantID)
 		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "tenant mismatch", ResultTypeRejected)

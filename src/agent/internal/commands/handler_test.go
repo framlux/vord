@@ -99,6 +99,33 @@ func TestNewHandler_AllExecutorsRegistered(t *testing.T) {
 	}
 }
 
+// Intent: Only unenrol and uninstall are cleanup commands, and the match is exact: the exemption from the
+// remote-commands flag must not extend to enrol, to any machine command, or to a spelling that differs in case.
+func TestCommandType_IsCleanup(t *testing.T) {
+	cases := []struct {
+		commandType CommandType
+		want        bool
+	}{
+		{CommandK8sReporterUnenrol, true},
+		{CommandK8sReporterUninstall, true},
+		{CommandK8sReporterEnrol, false},
+		{CommandReboot, false},
+		{CommandKillProcess, false},
+		{CommandKillSession, false},
+		{CommandCheckUpdate, false},
+		{CommandInstallUpdate, false},
+		{CommandType("K8S_REPORTER_UNINSTALL"), false},
+		{CommandType("k8s_reporter_unenrol "), false},
+		{CommandType(""), false},
+	}
+
+	for _, tc := range cases {
+		if got := tc.commandType.IsCleanup(); got != tc.want {
+			t.Errorf("CommandType(%q).IsCleanup() = %v, want %v", string(tc.commandType), got, tc.want)
+		}
+	}
+}
+
 // Intent: Unknown command type returns error result.
 func TestExecute_UnknownCommand(t *testing.T) {
 	h := NewHandler(HandlerDeps{})

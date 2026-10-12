@@ -296,3 +296,63 @@ func TestState_LoadAndSave_SweepLeftoverTemporaryFiles(t *testing.T) {
 		}
 	})
 }
+
+// Intent: A host with no state file holds no local reporter record, and neither does one whose data directory
+// does not exist.
+func TestLocalRecordPresent_AbsentWhenNothingWasEnrolled(t *testing.T) {
+	if LocalRecordPresent(t.TempDir()) {
+		t.Error("an empty data directory reported a local record")
+	}
+
+	if LocalRecordPresent(filepath.Join(t.TempDir(), "missing")) {
+		t.Error("a data directory that does not exist reported a local record")
+	}
+}
+
+// Intent: A saved state file is a local record, and deleting it (what unenrol and uninstall do last) ends it.
+func TestLocalRecordPresent_FollowsTheStateFile(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := SaveState(dir, sampleState()); err != nil {
+		t.Fatal(err)
+	}
+
+	if LocalRecordPresent(dir) == false {
+		t.Fatal("a saved state file did not count as a local record")
+	}
+
+	if err := DeleteState(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if LocalRecordPresent(dir) {
+		t.Error("a deleted state file still counted as a local record")
+	}
+}
+
+// Intent: The record is the file's existence, not its validity: a state file that cannot be loaded still means
+// the host enrolled once and may hold cluster objects to clean up.
+func TestLocalRecordPresent_CountsAFileThatCannotBeLoaded(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, StateFileName), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if LocalRecordPresent(dir) == false {
+		t.Error("an unreadable state file did not count as a local record")
+	}
+}
+
+// Intent: Only a file is a record; a directory that happens to carry the name is not.
+func TestLocalRecordPresent_IgnoresADirectoryOfTheSameName(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.Mkdir(filepath.Join(dir, StateFileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if LocalRecordPresent(dir) {
+		t.Error("a directory named like the state file counted as a local record")
+	}
+}

@@ -94,9 +94,14 @@ func (m *mockExecutor) Execute(ctx context.Context, params map[string]string) Re
 // it and the processor reads it through its injected clock, so no test depends on the wall clock.
 var signedTestNow = time.Date(2026, time.October, 11, 12, 1, 0, 0, time.UTC)
 
-// newTestProcessor creates a Processor whose clock is fixed at signedTestNow.
+// newTestProcessor creates a Processor that allows every command, with its clock fixed at signedTestNow.
 func newTestProcessor(handler *Handler, store NonceStore, ack CommandAcknowledger, destructiveDelay time.Duration) *Processor {
-	processor := NewProcessor(handler, store, ack, destructiveDelay)
+	return newTestProcessorWithOptions(handler, store, ack, destructiveDelay, ProcessorOptions{AllowAll: true})
+}
+
+// newTestProcessorWithOptions creates a Processor with the given options and its clock fixed at signedTestNow.
+func newTestProcessorWithOptions(handler *Handler, store NonceStore, ack CommandAcknowledger, destructiveDelay time.Duration, options ProcessorOptions) *Processor {
+	processor := NewProcessor(handler, store, ack, destructiveDelay, options)
 	processor.now = func() time.Time { return signedTestNow }
 
 	return processor
