@@ -210,8 +210,8 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 }
 
 // LastAckAt returns when the server last acknowledged an envelope with success, or the zero time when it has not
-// yet. Only an acknowledgement that reports success counts: a rejected batch and a batch that never reached the
-// server do not.
+// yet. Only an acknowledgement that reports success counts: a rejected batch, a batch that never reached the
+// server and an acknowledgement that says the host is paused or its subscription inactive do not.
 func (s *Sender) LastAckAt() time.Time {
 	acked := s.lastAck.Load()
 	if acked == nil {
@@ -321,10 +321,17 @@ func (s *Sender) sendEnvelope(ctx context.Context, tier string, items []*pb.Tele
 		return false
 	}
 
+	// An ack that carries a pause reason reports success so the batch is dropped, but it says the server is
+	// discarding this host's data. It must not count as the server taking it, or a paused host would look healthy
+	// to whatever reads LastAckAt.
+	pauseReason := pause.FromProto(ack.Reason)
+
 	delivered := ack.Success
 	if delivered {
-		acked := s.clock()
-		s.lastAck.Store(&acked)
+		if pauseReason == pause.None {
+			acked := s.clock()
+			s.lastAck.Store(&acked)
+		}
 
 		if err := s.store.MarkTelemetryCompleted(ids); err != nil {
 			s.logger.Error("failed to mark telemetry completed", "error", err)
@@ -342,8 +349,8 @@ func (s *Sender) sendEnvelope(ctx context.Context, tier string, items []*pb.Tele
 	// released the tier lock, because entering the pause runs hooks that close the streams and take it again.
 	// An ack only ever starts or renews a pause: a reason this agent does not know is ignored rather than
 	// read as "resumed", and a plain ack proves nothing about a pause that is already in force.
-	if reason := pause.FromProto(ack.Reason); reason != pause.None {
-		s.pause.Observe(reason)
+	if pauseReason != pause.None {
+		s.pause.Observe(pauseReason)
 
 		return false
 	}

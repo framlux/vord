@@ -85,7 +85,12 @@ type Gate struct {
 }
 
 // Elector runs one candidate's side of the election for the reporter Lease. Tick and Release make requests and
-// are serialised; IsLeader, LeaseEpoch and ReporterError only read, and may be called from any goroutine.
+// are serialised; Leadership, IsLeader, LeaseEpoch and ReporterError only read, and may be called from any
+// goroutine.
+//
+// A candidate holds the Lease under an identity made from the instance id in its state file. A host cloned after
+// it enrolled keeps that id, so the clone shares the identity: each would see the other's claim as its own and
+// both could lead. That is not detected; a clone has to be enrolled afresh.
 type Elector struct {
 	clientFactory func() (*kube.Client, error)
 	identity      string
@@ -105,14 +110,18 @@ type Elector struct {
 	observedAt   time.Time
 	lastFailure  string
 
-	// mu guards what the readers see.
-	mu           sync.Mutex
-	held         bool
-	transitions  int64
-	renewedFrom  time.Time
-	leaseUID     string
-	leaseCreated string
-	reporterErr  string
+	// mu guards what the readers see. The tenure fields are written together, when a write wins, and describe
+	// the Lease as it was then; leaseUID and leaseCreated follow every read and are kept apart from them, so
+	// seeing another Lease can never change what a holder reports about its own tenure.
+	mu            sync.Mutex
+	held          bool
+	transitions   int64
+	renewedFrom   time.Time
+	tenureUID     string
+	tenureCreated string
+	leaseUID      string
+	leaseCreated  string
+	reporterErr   string
 }
 
 // NewElector builds a candidate. clientFactory builds the client the Lease is read and written with, and is
@@ -134,19 +143,35 @@ func NewElector(clientFactory func() (*kube.Client, error), identity string, clo
 	}
 }
 
-// IsLeader reports whether this agent holds the Lease and renewed it within the renew deadline. When the
-// deadline has passed it answers false at once, and announces the loss, instead of waiting for the next tick.
-func (e *Elector) IsLeader() (transitions int64, ok bool) {
+// Leadership reports whether this agent holds the Lease and renewed it within the renew deadline, and if so the
+// transition count of its tenure and the uid and creationTimestamp of the Lease it won it in. The three are read
+// together, so a snapshot stamped with them never pairs a count with the wrong Lease. When the renew deadline has
+// passed it answers false at once, and announces the loss, instead of waiting for the next tick. When ok is
+// false the other values are zero.
+func (e *Elector) Leadership() (transitions int64, leaseUID string, leaseCreatedAt string, ok bool) {
 	e.loseIfExpired(e.clock.Now())
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	return e.transitions, e.held
+	if e.held == false {
+		return 0, "", "", false
+	}
+
+	return e.transitions, e.tenureUID, e.tenureCreated, true
 }
 
-// LeaseEpoch returns the metadata.uid and creationTimestamp of the Lease as last observed. They tell one Lease
-// from the next one created after the cluster was disabled and enabled again.
+// IsLeader reports whether this agent holds the Lease and renewed it within the renew deadline, with the
+// transition count of its tenure. It answers from the same snapshot as Leadership.
+func (e *Elector) IsLeader() (transitions int64, ok bool) {
+	transitions, _, _, ok = e.Leadership()
+
+	return transitions, ok
+}
+
+// LeaseEpoch returns the metadata.uid and creationTimestamp of the Lease as last observed, whoever holds it. They
+// tell one Lease from the next one created after the cluster was disabled and enabled again. A holder stamping
+// what it sends uses Leadership, which gives the epoch of its own tenure.
 func (e *Elector) LeaseEpoch() (uid string, createdAt string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -364,15 +389,21 @@ func (e *Elector) afterConflict(ctx context.Context, client *kube.Client, renewi
 	e.won(stored, sentAt, intAt(spec, "leaseTransitions"))
 }
 
-// won records a successful write: this agent holds the Lease, as of sentAt.
+// won records a successful write: this agent holds the Lease, as of sentAt. The count and the epoch of the
+// tenure are set in one step, from the Lease as stored.
 func (e *Elector) won(stored map[string]any, sentAt time.Time, transitions int64) {
 	e.observe(stored)
+
+	uid := stringAt(stored, "metadata", "uid")
+	created := stringAt(stored, "metadata", "creationTimestamp")
 
 	e.mu.Lock()
 	wasHeld := e.held
 	e.held = true
 	e.transitions = transitions
 	e.renewedFrom = sentAt
+	e.tenureUID = uid
+	e.tenureCreated = created
 	e.mu.Unlock()
 
 	if wasHeld == false {
@@ -380,10 +411,16 @@ func (e *Elector) won(stored map[string]any, sentAt time.Time, transitions int64
 	}
 }
 
-// releaseLocked clears the Lease if this agent is its holder, then stops acting as leader and backs off. The
-// local state changes even if the Lease could not be written: an agent told to give the Lease up must stop
-// leading whether or not the cluster heard it.
+// releaseLocked clears the Lease if this agent is its holder, then backs off. This agent stops leading before the
+// Lease is touched: once the holder is cleared a standby may take it at any moment, and until then this agent
+// must not still say that it leads. The local state changes even if the Lease could not be written, because an
+// agent told to give the Lease up must stop leading whether or not the cluster heard it.
+//
+// The loss is announced only when this agent was leading. A claim still on the record after the renew deadline
+// passed ended its tenure then, and was announced then.
 func (e *Elector) releaseLocked(ctx context.Context) {
+	wasHeld := e.setNotHeld()
+
 	cleared := false
 
 	if client, err := e.leaseClient(); err == nil {
@@ -392,11 +429,13 @@ func (e *Elector) releaseLocked(ctx context.Context) {
 		e.logFailure("build the client", err)
 	}
 
-	wasHeld := e.setNotHeld()
 	e.backoffUntil = e.clock.Now().Add(releaseBackoff)
 
 	if wasHeld || cleared {
 		slog.Info("this host gave up the cluster reporter lease", "identity", e.identity)
+	}
+
+	if wasHeld {
 		e.fireLost()
 	}
 }

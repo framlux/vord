@@ -716,6 +716,47 @@ func TestLastAckAt_NotSetOnRejectionOrFailure(t *testing.T) {
 	}
 }
 
+// Intent: an ack that tells the host it is paused or its subscription is inactive proves the server is not taking
+// this host's data, so it must not make a stalled delivery path look healthy to the reporter's health gate, even
+// though the ack reports success. A reason this agent does not know says nothing about a pause, so it still counts.
+func TestLastAckAt_NotSetForAnAckThatCarriesAPauseReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		reason     pb.IngestRejectionReason
+		wantRecord bool
+	}{
+		{"host paused", pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED, false},
+		{"subscription inactive", pb.IngestRejectionReason_INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE, false},
+		{"no reason", pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED, true},
+		{"unknown reason", pb.IngestRejectionReason(99), true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			enqueueCpu(t, store, "ack-reason")
+			client := unaryOnlyClient(func(*pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+				return &pb.TelemetryAck{Success: true, Reason: tc.reason}, nil
+			})
+			s := New(store, client, state.New(), jitter.NewDefault(), newPauseRecorder(nil).coord)
+
+			fixed := time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC)
+			s.clock = func() time.Time { return fixed }
+
+			s.sendBatch(context.Background(), "fast", FastTypes)
+
+			got := s.LastAckAt()
+			if tc.wantRecord && got.Equal(fixed) == false {
+				t.Errorf("LastAckAt = %v, want %v", got, fixed)
+			}
+
+			if tc.wantRecord == false && got.IsZero() == false {
+				t.Errorf("LastAckAt = %v for an ack carrying a pause reason, want the zero time", got)
+			}
+		})
+	}
+}
+
 // Intent: a later acknowledgement replaces an earlier one, so the gate measures from the newest.
 func TestLastAckAt_AdvancesWithEachSuccessfulAck(t *testing.T) {
 	store := newTestStore(t)

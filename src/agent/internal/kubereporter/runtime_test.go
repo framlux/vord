@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/framlux/vord/internal/db"
 )
 
 const runtimeInstanceID = "0123456789abcdef"
@@ -560,5 +562,143 @@ func TestNewRuntime_DefaultsToTheSystemClock(t *testing.T) {
 
 	if now := runtime.clock.Now(); time.Since(now) > time.Minute {
 		t.Errorf("the system clock reads %v", now)
+	}
+}
+
+// Intent: a snapshot left in the queue by a previous run, for example after a crash while leading, belongs to a
+// tenure nothing vouches for any more. The runtime drops it when it starts on an enrolled host, before its first
+// election request, since a new holder collects at once anyway.
+func TestRuntime_Run_DropsSnapshotsOfAPreviousRunBeforeTheFirstRequest(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrol()
+
+	var requestsAtDrop []int
+
+	rig.runtime.onLost = func() {
+		requestsAtDrop = append(requestsAtDrop, len(rig.api.requestLog()))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := rig.startRun(ctx)
+
+	// The first step has finished once the loop takes a tick.
+	rig.tickAndSettle()
+
+	if got := rig.holder(); got != "vord-"+runtimeInstanceID {
+		t.Fatalf("holder = %q, want the loop to have taken the Lease", got)
+	}
+
+	cancel()
+	<-done
+
+	if len(requestsAtDrop) != 2 {
+		t.Fatalf("snapshots were dropped %d times, want at the start and again when the Lease was released: %v", len(requestsAtDrop), requestsAtDrop)
+	}
+
+	if requestsAtDrop[0] != 0 {
+		t.Errorf("the start-up drop came after %d election requests, want before the first", requestsAtDrop[0])
+	}
+}
+
+// Intent: the drop reaches the real queue: cluster snapshots a previous run left pending or in flight are gone
+// when the runtime has started, and nothing else is touched.
+func TestRuntime_Run_StartUpDropRemovesQueuedClusterSnapshots(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() { database.Close() })
+
+	store := db.NewStore(database, 0)
+
+	for id, itemType := range map[string]db.TelemetryType{
+		"snapshot-1": db.TelemetryKubernetesCluster,
+		"snapshot-2": db.TelemetryKubernetesCluster,
+		"node":       db.TelemetryKubernetesNode,
+	} {
+		if err := store.EnqueueTelemetry(id, itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	if _, err := store.DequeueTelemetryByTypes([]db.TelemetryType{db.TelemetryKubernetesCluster}, 1); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+
+	rig := newRuntimeRig(t)
+	rig.enrol()
+
+	rig.runtime.onLost = func() {
+		if _, err := store.DeleteTelemetryByType(db.TelemetryKubernetesCluster); err != nil {
+			t.Errorf("DeleteTelemetryByType: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// A loop that never starts must not drop anything.
+	<-rig.startRun(ctx)
+
+	var snapshots int
+
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM telemetry_queue WHERE item_type = ?", int(db.TelemetryKubernetesCluster)).Scan(&snapshots); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if snapshots != 2 {
+		t.Fatalf("snapshots after a loop that never started = %d, want 2 untouched", snapshots)
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	done := rig.startRun(ctx)
+
+	// The first step has finished once the loop takes a tick, and the Lease is still held: nothing has been
+	// released yet, so only the start-up drop can have emptied the queue.
+	rig.tickAndSettle()
+
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM telemetry_queue WHERE item_type = ?", int(db.TelemetryKubernetesCluster)).Scan(&snapshots); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if snapshots != 0 {
+		t.Errorf("cluster snapshots left after the runtime started = %d, want none", snapshots)
+	}
+
+	if got := rig.holder(); got != "vord-"+runtimeInstanceID {
+		t.Errorf("holder = %q, want the runtime to be holding the Lease", got)
+	}
+
+	cancel()
+	<-done
+
+	var others int
+
+	if err := store.DB().QueryRow("SELECT COUNT(*) FROM telemetry_queue WHERE item_type = ?", int(db.TelemetryKubernetesNode)).Scan(&others); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	if others != 1 {
+		t.Errorf("node reports left = %d, want 1", others)
+	}
+}
+
+// Intent: a host that is not enrolled has nothing from a previous tenure to drop, so starting the runtime on it
+// announces nothing.
+func TestRuntime_Run_NoStartUpDropWithoutAStateFile(t *testing.T) {
+	rig := newRuntimeRig(t)
+
+	rig.runtime.onLost = func() { rig.lost++ }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := rig.startRun(ctx)
+
+	rig.tickAndSettle()
+	cancel()
+	<-done
+
+	if rig.lost != 0 {
+		t.Errorf("snapshots were dropped %d times on a host that is not enrolled, want 0", rig.lost)
 	}
 }

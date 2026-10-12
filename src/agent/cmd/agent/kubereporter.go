@@ -30,9 +30,10 @@ func newReporterStateHook(collect func(ctx context.Context) error, paused func()
 	}
 }
 
-// newSnapshotFence builds what runs when this host stops being the holder of its cluster's reporter Lease: every
-// cluster snapshot it queued, waiting or already taken by the sender, is deleted, so a snapshot from a tenure that
-// has ended is never sent after another agent has taken over.
+// newSnapshotFence builds what runs when this host stops being the holder of its cluster's reporter Lease, and
+// when the reporter starts on an enrolled host: every cluster snapshot in the queue, waiting or taken by the
+// sender, is deleted, so a snapshot of a tenure that has ended is not sent later. A snapshot already on the wire
+// or in an envelope the sender has built cannot be recalled; the server's per-epoch fence rejects those.
 func newSnapshotFence(deleteByType func(db.TelemetryType) (int64, error)) func() {
 	return func() {
 		deleted, err := deleteByType(db.TelemetryKubernetesCluster)

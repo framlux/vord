@@ -7,6 +7,7 @@ package kubereporter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -1546,4 +1547,273 @@ func TestElector_IsLeaderIsSafeWhileTicking(t *testing.T) {
 	readers.Wait()
 
 	a.requireLeader(1)
+}
+
+// Intent: a holder told to give the Lease up must stop leading before the cluster is told, or there is a moment
+// when the Lease is free for a standby to take while this agent still reports that it leads and may enqueue a
+// snapshot. Whatever the route to the release, this agent must already be a non-leader when the clearing write
+// reaches the API.
+func TestElector_Release_StopsLeadingBeforeTheLeaseIsCleared(t *testing.T) {
+	routes := map[string]func(c *candidate){
+		"gate failure": func(c *candidate) {
+			c.paused = true
+			c.tick()
+		},
+		"explicit release": func(c *candidate) {
+			c.elector.Release(context.Background())
+		},
+	}
+
+	for name, release := range routes {
+		t.Run(name, func(t *testing.T) {
+			rig := newElectorRig(t)
+			a := rig.newCandidate("aaaa")
+			a.tick()
+			a.requireLeader(1)
+
+			rig.advance(electionInterval)
+
+			var leaderWhenCleared, seen bool
+
+			rig.api.inject(fault{
+				method: http.MethodPut,
+				path:   leasePath,
+				times:  1,
+				onFire: func(*fakeAPI) {
+					_, _, _, leaderWhenCleared = a.elector.Leadership()
+					seen = true
+				},
+			})
+
+			release(a)
+
+			if seen == false {
+				t.Fatal("the clearing write never reached the API")
+			}
+
+			if leaderWhenCleared {
+				t.Error("this agent still reported leadership when the clearing write reached the API")
+			}
+
+			if got := rig.holder(); got != "" {
+				t.Errorf("holder = %q, want the Lease cleared", got)
+			}
+
+			if a.lost != 1 {
+				t.Errorf("onLost ran %d times, want 1", a.lost)
+			}
+		})
+	}
+}
+
+// Intent: the snapshot loop stamps a snapshot with the transition count and the Lease epoch it fences on, so the
+// two must come from one moment: the epoch of the tenure the count belongs to.
+func TestElector_Leadership_ReportsTheTenuresTransitionsAndEpochTogether(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	b := rig.newCandidate("bbbb")
+
+	if transitions, uid, created, ok := a.elector.Leadership(); ok || (transitions != 0) || (uid != "") || (created != "") {
+		t.Fatalf("Leadership before any tick = (%d, %q, %q, %v), want zero values", transitions, uid, created, ok)
+	}
+
+	a.tick()
+	b.tick()
+
+	transitions, uid, created, ok := a.elector.Leadership()
+	if (ok == false) || (transitions != 1) || (uid != stringAt(rig.lease(), "metadata", "uid")) || (created != "2026-10-11T12:00:00Z") {
+		t.Errorf("holder's Leadership = (%d, %q, %q, %v), want (1, the Lease's uid and creation time, true)", transitions, uid, created, ok)
+	}
+
+	if transitions, uid, created, ok := b.elector.Leadership(); ok || (transitions != 0) || (uid != "") || (created != "") {
+		t.Errorf("standby's Leadership = (%d, %q, %q, %v), want zero values", transitions, uid, created, ok)
+	}
+
+	// IsLeader answers from the same snapshot.
+	if got, isLeader := a.elector.IsLeader(); (isLeader == false) || (got != transitions) {
+		t.Errorf("IsLeader = (%d, %v), want (%d, true)", got, isLeader, transitions)
+	}
+}
+
+// Intent: seeing a different Lease (one recreated by a re-enable) must not change what a holder reports about its
+// own tenure. Its count and its epoch change together, when it wins in the new epoch, and never one without the
+// other.
+func TestElector_Leadership_ObservingAnotherEpochDoesNotMixItIntoTheTenure(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	firstUID := stringAt(rig.lease(), "metadata", "uid")
+
+	recreated := map[string]any{
+		"metadata": map[string]any{"uid": "uid-recreated", "creationTimestamp": "2030-01-01T00:00:00Z", "resourceVersion": "9"},
+		"spec":     map[string]any{"leaseTransitions": float64(40)},
+	}
+
+	a.elector.observe(recreated)
+
+	if uid, created := a.elector.LeaseEpoch(); (uid != "uid-recreated") || (created != "2030-01-01T00:00:00Z") {
+		t.Errorf("LeaseEpoch = (%q, %q), want the Lease just observed", uid, created)
+	}
+
+	transitions, uid, created, ok := a.elector.Leadership()
+	if (ok == false) || (transitions != 1) || (uid != firstUID) || (created != "2026-10-11T12:00:00Z") {
+		t.Fatalf("Leadership after observing another epoch = (%d, %q, %q, %v), want the old tenure unchanged (1, %q, ...)", transitions, uid, created, ok, firstUID)
+	}
+
+	a.elector.won(recreated, rig.clock.Now(), 41)
+
+	transitions, uid, created, ok = a.elector.Leadership()
+	if (ok == false) || (transitions != 41) || (uid != "uid-recreated") || (created != "2030-01-01T00:00:00Z") {
+		t.Errorf("Leadership after winning in the new epoch = (%d, %q, %q, %v), want (41, uid-recreated, 2030-01-01T00:00:00Z, true)", transitions, uid, created, ok)
+	}
+}
+
+// Intent: across real ticks that replace the Lease, every snapshot a reader takes pairs a transition count with
+// the epoch it was won in, and a holder that lost its Lease reports nothing. Each epoch starts its count at a
+// different value, so a count carried into the wrong epoch (or the other way round) cannot look right.
+func TestElector_Leadership_IsConsistentAcrossEpochChanges(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+
+	type reading struct {
+		transitions int64
+		uid         string
+		ok          bool
+	}
+
+	var readings []reading
+
+	record := func() {
+		transitions, uid, _, ok := a.elector.Leadership()
+		readings = append(readings, reading{transitions, uid, ok})
+	}
+
+	// Every request the elector makes is a point where its state can be read mid-tick.
+	rig.api.inject(fault{method: http.MethodGet, path: leasePath, times: -1, onFire: func(*fakeAPI) { record() }})
+	rig.api.inject(fault{method: http.MethodPut, path: leasePath, times: -1, onFire: func(*fakeAPI) { record() }})
+
+	for epoch := 1; epoch <= 4; epoch++ {
+		a.tick()
+		rig.advance(electionInterval)
+		a.tick()
+		record()
+
+		// A re-enable: the Lease is deleted and created again, with the count started at a value of its own.
+		rig.api.mu.Lock()
+		rig.api.deleteLocked(leasePath)
+		rig.api.mu.Unlock()
+
+		lease := leaseManifest(true)
+		lease["spec"] = map[string]any{"leaseTransitions": float64(epoch * 10)}
+		rig.api.seed(leasePath, lease)
+	}
+
+	// The epochs are uid-1 (count 0, so a tenure counts 1), uid-2 (10, tenure 11), uid-3 (20, 21) and so on.
+	for i, r := range readings {
+		if r.ok == false {
+			if (r.transitions != 0) || (r.uid != "") {
+				t.Errorf("reading %d: not leading but reported (%d, %q)", i, r.transitions, r.uid)
+			}
+
+			continue
+		}
+
+		var epoch int64
+		if _, err := fmt.Sscanf(r.uid, "uid-%d", &epoch); err != nil {
+			t.Errorf("reading %d: leading with the epoch %q", i, r.uid)
+
+			continue
+		}
+
+		if want := (epoch-1)*10 + 1; r.transitions != want {
+			t.Errorf("reading %d: leading at count %d in epoch %q, want %d", i, r.transitions, r.uid, want)
+		}
+	}
+
+	if len(readings) < 8 {
+		t.Fatalf("only %d readings were taken", len(readings))
+	}
+}
+
+// Intent: onLost drops the snapshots of a tenure, so it runs once when a tenure ends. A holder that lost the
+// Lease to the renew deadline has already announced it, so neither handing back the claim that is still on the
+// record nor a gate failure afterwards ends anything new.
+func TestElector_OnLostFiresOncePerTenure_WhenAReleaseFollowsADeadlineLoss(t *testing.T) {
+	cases := []struct {
+		name       string
+		act        func(c *candidate)
+		wantHolder string
+	}{
+		// An explicit release clears whatever claim of this agent is on the record.
+		{"explicit release", func(c *candidate) { c.elector.Release(context.Background()) }, ""},
+		// A gate failure releases only a holder, and this agent no longer is one; the record is left to expire.
+		{"gate failure", func(c *candidate) {
+			c.paused = true
+			c.tick()
+		}, "vord-aaaa"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newElectorRig(t)
+			a := rig.newCandidate("aaaa")
+			a.tick()
+
+			rig.api.inject(fault{method: http.MethodPut, path: leasePath, status: http.StatusInternalServerError, reason: "InternalError", times: 1})
+
+			rig.advance(electionInterval)
+			a.tick()
+
+			rig.advance(21 * time.Second)
+			a.requireNotLeader()
+
+			if a.lost != 1 {
+				t.Fatalf("onLost ran %d times for the deadline loss, want 1", a.lost)
+			}
+
+			// The record still names this agent, so there is a claim for a release to clear.
+			if got := rig.holder(); got != "vord-aaaa" {
+				t.Fatalf("holder = %q, want the record to still name this agent", got)
+			}
+
+			tc.act(a)
+
+			if got := rig.holder(); got != tc.wantHolder {
+				t.Errorf("holder = %q, want %q", got, tc.wantHolder)
+			}
+
+			if a.lost != 1 {
+				t.Errorf("onLost ran %d times in total, want once for the one tenure", a.lost)
+			}
+		})
+	}
+}
+
+// Intent: a new tenure announces its own end: a holder that lost the Lease to the deadline and then renewed it in
+// place leads a second tenure, and losing that one is announced too.
+func TestElector_OnLostFiresForEachTenure(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	a.tick()
+
+	rig.api.inject(fault{method: http.MethodPut, path: leasePath, status: http.StatusInternalServerError, reason: "InternalError", times: 1})
+
+	rig.advance(electionInterval)
+	a.tick()
+
+	rig.advance(21 * time.Second)
+	a.requireNotLeader()
+	a.tick()
+	a.requireLeader(1)
+
+	if a.lost != 1 {
+		t.Fatalf("onLost ran %d times after the first tenure, want 1", a.lost)
+	}
+
+	a.elector.Release(context.Background())
+
+	if a.lost != 2 {
+		t.Errorf("onLost ran %d times after the second tenure, want 2", a.lost)
+	}
 }

@@ -556,10 +556,10 @@ func (s *Store) ClearTelemetryQueue() error {
 }
 
 // DeleteTelemetryByType deletes every pending and processing item of one type and returns how many rows it
-// removed. A cluster reporter that loses its Lease calls it so a snapshot it queued as the holder is never sent
-// after another agent has taken over. Completed rows are history and stay until the purge removes them. The
-// cached pending count drops by the pending rows deleted; processing rows were already taken out of it when
-// they were dequeued.
+// removed. A cluster reporter that loses its Lease calls it so the snapshots it queued as the holder are not sent
+// later; one the sender has already put in an envelope is not recalled by this. Completed rows are history and
+// stay until the purge removes them. The cached pending count drops by the pending rows deleted; processing rows
+// were already taken out of it when they were dequeued.
 func (s *Store) DeleteTelemetryByType(t TelemetryType) (int64, error) {
 	// The count must be loaded before the transaction starts: the database has one connection, and a lazy load
 	// inside the transaction would wait for it forever.

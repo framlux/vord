@@ -25,8 +25,10 @@ type RuntimeOptions struct {
 	Clock Clock
 	// Gate is the health gate the elector checks before it contends and while it holds the Lease.
 	Gate Gate
-	// OnLost runs when this agent stops being the holder of the Lease, however that came about. It must be safe
-	// to call from any goroutine.
+	// OnLost drops the cluster snapshots this agent queued. It runs when this agent stops being the holder of
+	// the Lease, however that came about, and once when the runtime starts on an enrolled host, since whatever a
+	// previous run left in the queue (a crash while leading) belongs to a tenure nothing vouches for any more.
+	// It must be safe to call from any goroutine.
 	OnLost func()
 	// Ticks drives the loop; each value runs one step. Nil means a ticker every 20 seconds, which is what an
 	// agent uses. Tests supply a channel so they never wait for time to pass.
@@ -37,6 +39,9 @@ type RuntimeOptions struct {
 // when one appears it builds the client and the elector from it, when it changes it starts over with the new
 // credentials, and when it is gone it releases the Lease and stops. Enrol and unenrol therefore take effect
 // without an agent restart.
+//
+// The candidate's identity on the Lease comes from the instance id in the state file, so a host cloned after it
+// enrolled shares the identity with its original; see Elector.
 type Runtime struct {
 	dataDir string
 	clock   Clock
@@ -95,6 +100,12 @@ func (r *Runtime) Run(ctx context.Context) {
 
 	defer r.shutdown()
 
+	if ctx.Err() != nil {
+		return
+	}
+
+	r.dropSnapshotsOfAPreviousRun()
+
 	for {
 		r.step(ctx)
 
@@ -104,6 +115,21 @@ func (r *Runtime) Run(ctx context.Context) {
 		case <-ticks:
 		}
 	}
+}
+
+// dropSnapshotsOfAPreviousRun drops the cluster snapshots left in the queue by an earlier run, when this host is
+// enrolled. It runs before the first election request, so no snapshot of an old tenure can sit beside one of the
+// new; a holder collects immediately on winning, so nothing is lost by it.
+func (r *Runtime) dropSnapshotsOfAPreviousRun() {
+	if r.onLost == nil {
+		return
+	}
+
+	if _, found, err := LoadState(r.dataDir); (err != nil) || (found == false) {
+		return
+	}
+
+	r.onLost()
 }
 
 // ReleaseAndStop hands the Lease back if this host holds it and stops the elector, so unenrol and uninstall can
