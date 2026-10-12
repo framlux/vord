@@ -90,6 +90,18 @@ func (m *mockExecutor) Execute(ctx context.Context, params map[string]string) Re
 	return m.result
 }
 
+// signedTestNow is the instant every processor test treats as the present. Commands are timestamped relative to
+// it and the processor reads it through its injected clock, so no test depends on the wall clock.
+var signedTestNow = time.Date(2026, time.October, 11, 12, 1, 0, 0, time.UTC)
+
+// newTestProcessor creates a Processor whose clock is fixed at signedTestNow.
+func newTestProcessor(handler *Handler, store NonceStore, ack CommandAcknowledger, destructiveDelay time.Duration) *Processor {
+	processor := NewProcessor(handler, store, ack, destructiveDelay)
+	processor.now = func() time.Time { return signedTestNow }
+
+	return processor
+}
+
 // newTestHandler creates a Handler with a mock executor for the given command type.
 func newTestHandler(cmdType CommandType, result Result) *Handler {
 	h := &Handler{
@@ -128,7 +140,7 @@ func testKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 func validPendingCommand(t *testing.T, cmdType CommandType, tenantID int32, machineID int64, priv ed25519.PrivateKey, pub ed25519.PublicKey, keyID int32) PendingCommand {
 	t.Helper()
 
-	now := time.Now().UTC()
+	now := signedTestNow
 	cmd := PendingCommand{
 		ID:           "cmd-test-001",
 		Type:         string(cmdType),
@@ -180,7 +192,7 @@ func TestProcess_ValidNonDestructiveCommand(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "updates checked"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -214,7 +226,7 @@ func TestProcess_TenantMismatch(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	// Command has tenant 100, agent has tenant 999.
 	cmd := validPendingCommand(t, CommandCheckUpdate, 100, 200, priv, pub, int32KeyID)
@@ -247,7 +259,7 @@ func TestProcess_MachineMismatch(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	// Command has machine 200, agent has machine 888.
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, 200, priv, pub, int32KeyID)
@@ -272,7 +284,7 @@ func TestProcess_UnknownCommandType(t *testing.T) {
 	store := &mockNonceStore{}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := PendingCommand{
 		ID:        "cmd-unknown-type",
@@ -303,7 +315,7 @@ func TestProcess_UnknownSigningKey(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := PendingCommand{
 		ID:           "cmd-bad-key",
@@ -340,7 +352,7 @@ func TestProcess_InvalidSignature(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 
@@ -376,7 +388,7 @@ func TestProcess_TamperedCanonicalPayload_InvalidSignature(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 
@@ -410,10 +422,10 @@ func TestProcess_ExpiredCommand(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	// Build an expired command: timestamp and expiry both in the past.
-	now := time.Now().UTC()
+	now := signedTestNow
 	cmd := PendingCommand{
 		ID:           "cmd-expired",
 		Type:         string(CommandCheckUpdate),
@@ -478,7 +490,7 @@ func TestProcess_ReusedNonce(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -511,7 +523,7 @@ func TestProcess_NonceRecordingFailure(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -544,7 +556,7 @@ func TestProcess_DestructiveCommand_SkipsDelayOnContextCancel(t *testing.T) {
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "reboot initiated"})
 
 	// Use a long delay so the context cancellation triggers the skip path.
-	processor := NewProcessor(handler, store, ack, 10*time.Minute)
+	processor := newTestProcessor(handler, store, ack, 10*time.Minute)
 
 	cmd := validPendingCommand(t, CommandReboot, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 
@@ -556,8 +568,8 @@ func TestProcess_DestructiveCommand_SkipsDelayOnContextCancel(t *testing.T) {
 		close(doneCh)
 	}()
 
-	// Allow the goroutine to reach the select statement, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	// Cancelling needs no head start: the wait for the delay ends at once whether the context is cancelled before
+	// or after Process reaches it.
 	cancel()
 
 	select {
@@ -595,7 +607,7 @@ func TestProcess_DestructiveCommand_ExecutesAfterDelay(t *testing.T) {
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "reboot initiated"})
 
 	// Use a minimal delay so the test completes quickly.
-	processor := NewProcessor(handler, store, ack, 1*time.Millisecond)
+	processor := newTestProcessor(handler, store, ack, 1*time.Millisecond)
 
 	cmd := validPendingCommand(t, CommandReboot, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -642,7 +654,7 @@ func TestProcess_FailedNonDestructiveCommand_ReturnsFailed(t *testing.T) {
 		Message: "process not found",
 		Error:   fmt.Errorf("no such process"),
 	})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandKillProcess, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -681,7 +693,7 @@ func TestProcess_FailedDestructiveCommand_ReturnsFailed(t *testing.T) {
 	})
 
 	// Use a minimal delay so the test completes quickly.
-	processor := NewProcessor(handler, store, ack, 1*time.Millisecond)
+	processor := newTestProcessor(handler, store, ack, 1*time.Millisecond)
 
 	cmd := validPendingCommand(t, CommandReboot, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -724,7 +736,7 @@ func TestProcess_NonceCheckError(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -754,7 +766,7 @@ func TestProcess_NonceIsRecorded(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -781,7 +793,7 @@ func TestProcess_AckUsesAgentMachineID(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -811,7 +823,7 @@ func TestProcess_SignedWithWrongKey(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, signingPriv, signingPub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -844,7 +856,7 @@ func TestProcess_SignedUserIDMismatch(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	// validPendingCommand signs the payload correctly with UserID 42, so the signature is valid.
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
@@ -888,7 +900,7 @@ func TestProcess_SignedUserIDMatch_Accepted(t *testing.T) {
 	}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
 	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
@@ -906,7 +918,7 @@ func TestProcess_EmptyCommandType(t *testing.T) {
 	store := &mockNonceStore{}
 	ack := &mockAcknowledger{}
 	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
-	processor := NewProcessor(handler, store, ack, 10*time.Second)
+	processor := newTestProcessor(handler, store, ack, 10*time.Second)
 
 	cmd := PendingCommand{
 		ID:        "cmd-empty-type",
@@ -929,9 +941,6 @@ func TestProcess_EmptyCommandType(t *testing.T) {
 }
 
 // --- Verification against the exact signed payload ---
-
-// signedTestNow is the instant the processor treats as the present in the signed payload tests.
-var signedTestNow = time.Date(2026, time.October, 11, 12, 1, 0, 0, time.UTC)
 
 const (
 	signedTestKeyID    int32 = 1
@@ -991,8 +1000,7 @@ func newSignedFixture(t *testing.T) *signedFixture {
 		},
 	}
 	ack := &mockAcknowledger{}
-	processor := NewProcessor(handler, store, ack, time.Millisecond)
-	processor.now = func() time.Time { return signedTestNow }
+	processor := newTestProcessor(handler, store, ack, time.Millisecond)
 
 	return &signedFixture{priv: priv, store: store, ack: ack, executed: executed, processor: processor}
 }
