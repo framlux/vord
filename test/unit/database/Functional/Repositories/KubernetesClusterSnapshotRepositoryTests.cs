@@ -968,6 +968,58 @@ public class KubernetesClusterSnapshotRepositoryTests
     }
 
     [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Snapshot_UidMerge_CombinedNodeKeepsAKnownKubeletVersionWhenTheFresherRowHasNone(bool survivorHoldsTheFresherRow)
+    {
+        // Intent: the kubelet version comes from the row that was updated last, but a row that never learned
+        // one must not blank the version the other row knows, whichever of the two clusters holds it.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long survivorCluster = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long mergedCluster = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, survivorCluster, sender, T0.AddMinutes(-30));
+        await SeedNodeAsync(
+            dbFactory.Context, tenantId, survivorCluster, "n", null,
+            lastReporterSeenAt: survivorHoldsTheFresherRow ? T0.AddMinutes(-10) : T0.AddHours(-3),
+            kubeletVersion: survivorHoldsTheFresherRow ? null : "v1.30.4");
+        await SeedNodeAsync(
+            dbFactory.Context, tenantId, mergedCluster, "n", null,
+            lastReporterSeenAt: survivorHoldsTheFresherRow ? T0.AddHours(-3) : T0.AddMinutes(-10),
+            kubeletVersion: survivorHoldsTheFresherRow ? "v1.30.4" : null);
+
+        SnapshotOutcome outcome = await ApplyAsync(
+            repo, Snapshot(10, tenantId, sender, T0, nodes: [Node("z")], truncated: true));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        KubernetesNode merged = (await NodesOfAsync(dbFactory.Context, survivorCluster))["n"];
+        await Assert.That(merged.KubeletVersion).IsEqualTo("v1.30.4");
+        await Assert.That(merged.LastReporterSeenAt).IsEqualTo(T0.AddMinutes(-10));
+    }
+
+    [Test]
+    public async Task Snapshot_UidMerge_CombinedNodeTakesTheFresherRowsKubeletVersionWhenBothKnowOne()
+    {
+        // Intent: the fallback to the other row's version applies only when the fresher row has none; when
+        // both know a version the fresher row's wins.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long survivorCluster = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long mergedCluster = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, survivorCluster, sender, T0.AddMinutes(-30));
+        await SeedNodeAsync(dbFactory.Context, tenantId, survivorCluster, "n", null, lastReporterSeenAt: T0.AddHours(-3), kubeletVersion: "v1.28.0");
+        await SeedNodeAsync(dbFactory.Context, tenantId, mergedCluster, "n", null, lastReporterSeenAt: T0.AddMinutes(-10), kubeletVersion: "v1.30.4");
+
+        await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, nodes: [Node("z")], truncated: true));
+
+        await Assert.That((await NodesOfAsync(dbFactory.Context, survivorCluster))["n"].KubeletVersion).IsEqualTo("v1.30.4");
+    }
+
+    [Test]
     public async Task Snapshot_UidMerge_KeepsTheMachineLinkOfWhicheverSameNamedRowHasOne()
     {
         // Intent: when only one of two same-named rows is linked to a machine, the combined row keeps that
@@ -1630,6 +1682,108 @@ public class KubernetesClusterSnapshotRepositoryTests
 
         Dictionary<string, KubernetesNode> nodes = await NodesOfAsync(dbFactory.Context, clusterId);
         await Assert.That(nodes.Keys).IsEquivalentTo(new[] { "listed", "boundary-local", "recent-local" });
+    }
+
+    [Test]
+    public async Task Snapshot_NonTruncatedWithNoNodes_RemovesEveryNodeWithoutARecentLocalReport()
+    {
+        // Intent: a complete snapshot that lists nothing is a cluster whose reporter sees no nodes, and the
+        // inventory follows it like any other complete snapshot: reporter-only rows and rows whose machine
+        // has not reported within the staleness threshold go, and a row whose machine reported recently
+        // stays, because the machine is the better witness. This is deliberate, and the outcome is still
+        // Accepted.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, sender, T0.AddMinutes(-30));
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "reporter-only", null, lastReporterSeenAt: T0.AddHours(-1));
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "stale-local", null, lastLocalReportAt: T0.AddMinutes(-91));
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "recent-local", null, lastLocalReportAt: T0.AddMinutes(-89));
+
+        SnapshotOutcome outcome = await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, nodes: []));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That((await NodesOfAsync(dbFactory.Context, clusterId)).Keys).IsEquivalentTo(new[] { "recent-local" });
+    }
+
+    [Test]
+    public async Task Snapshot_TruncatedWithNoNodes_RemovesNothing()
+    {
+        // Intent: the empty list of a truncated snapshot proves nothing either.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "reporter-only", null, lastReporterSeenAt: T0.AddHours(-1));
+
+        await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, truncated: true, nodes: []));
+
+        await Assert.That((await NodesOfAsync(dbFactory.Context, clusterId)).Keys).IsEquivalentTo(new[] { "reporter-only" });
+    }
+
+    [Test]
+    public async Task Snapshot_Accepted_BumpsTheClustersLastSeenAtToTheReceiptTime()
+    {
+        // Intent: a cluster that is described only by its reporter's snapshots is still being heard from, so an
+        // accepted snapshot moves the cluster's last-seen time to its receipt time.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, sender, T0.AddMinutes(-30));
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).LastSeenAt).IsEqualTo(T0.AddDays(-4));
+
+        SnapshotOutcome outcome = await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, nodes: [Node("cp-1")]));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).LastSeenAt).IsEqualTo(T0);
+    }
+
+    [Test]
+    public async Task Snapshot_Accepted_NeverMovesTheClustersLastSeenAtBackwards()
+    {
+        // Intent: a local report received after the snapshot already dated the cluster later, and the
+        // snapshot, processed second, must not take that back.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, sender, T0.AddMinutes(-30));
+        await dbFactory.Context.KubernetesClusters
+            .Where(c => c.Id == clusterId)
+            .Set(c => c.LastSeenAt, T0.AddMinutes(3))
+            .UpdateAsync();
+
+        SnapshotOutcome outcome = await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, nodes: [Node("cp-1")]));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).LastSeenAt).IsEqualTo(T0.AddMinutes(3));
+    }
+
+    [Test]
+    public async Task Snapshot_ErrorOrFenced_LeavesTheClustersLastSeenAtAlone()
+    {
+        // Intent: an error snapshot observed nothing of the cluster and a fenced one is discarded, so
+        // neither says the cluster was seen.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long clusterId = await SeedClusterAsync(
+            dbFactory.Context, tenantId, FingerprintA, uid: UidA, leaseCreatedAt: Epoch1, leaseTransitions: 5, lastSnapshotAt: T0.AddMinutes(-30), lastSnapshotId: 5);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, sender, T0.AddMinutes(-30));
+
+        SnapshotOutcome error = await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, transitions: 6, reporterError: "api_unreachable"));
+        SnapshotOutcome fenced = await ApplyAsync(repo, Snapshot(11, tenantId, sender, T0.AddMinutes(1), transitions: 4, nodes: [Node("cp-1")]));
+
+        await Assert.That(error).IsEqualTo(SnapshotOutcome.ErrorRecorded);
+        await Assert.That(fenced).IsEqualTo(SnapshotOutcome.Fenced);
+        await Assert.That((await ClusterAsync(dbFactory.Context, clusterId)).LastSeenAt).IsEqualTo(T0.AddDays(-4));
     }
 
     [Test]

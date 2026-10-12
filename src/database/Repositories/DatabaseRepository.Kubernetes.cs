@@ -1487,9 +1487,10 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// Combines two rows of one node into the kept row. The fields that only the node's own machine
     /// reports come from the row with the newer local report, the fields only the cluster reporter
     /// reports come from the row with the newer sighting, and the kubelet version, which either may
-    /// report, comes from the row that was updated last. The machine link comes from whichever row has
-    /// one, the row with the newer local report first. The other row is deleted before the kept row takes
-    /// its link, so the unique index over the link holds.
+    /// report, comes from the row that was updated last unless that row has none, in which case the other
+    /// row's version is kept. The machine link comes from whichever row has one, the row with the newer
+    /// local report first. The other row is deleted before the kept row takes its link, so the unique index
+    /// over the link holds.
     /// </summary>
     private async Task CombineNodesAsync(KubernetesNode kept, KubernetesNode moving, CancellationToken ct)
     {
@@ -1497,6 +1498,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         KubernetesNode otherLocal = ReferenceEquals(local, kept) ? moving : kept;
         KubernetesNode sighting = (Nullable.Compare(moving.LastReporterSeenAt, kept.LastReporterSeenAt) > 0) ? moving : kept;
         KubernetesNode freshest = (Nullable.Compare(LastActivityOf(moving), LastActivityOf(kept)) > 0) ? moving : kept;
+        KubernetesNode otherActivity = ReferenceEquals(freshest, kept) ? moving : kept;
         long? machineId = local.MachineId ?? otherLocal.MachineId;
         long keptId = kept.Id;
         long movingId = moving.Id;
@@ -1509,7 +1511,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             .Set(n => n.FingerprintMismatch, local.FingerprintMismatch)
             .Set(n => n.LocalControlPlane, local.LocalControlPlane)
             .Set(n => n.LastLocalReportAt, local.LastLocalReportAt)
-            .Set(n => n.KubeletVersion, freshest.KubeletVersion)
+            .Set(n => n.KubeletVersion, freshest.KubeletVersion ?? otherActivity.KubeletVersion)
             .Set(n => n.NodeMachineId, sighting.NodeMachineId)
             .Set(n => n.Roles, sighting.Roles)
             .Set(n => n.ReadyStatus, sighting.ReadyStatus)
@@ -1581,6 +1583,8 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// Writes what an accepted snapshot says about the cluster: the Lease state and the sender as the
     /// active reporter, the UID and CA fingerprint when it carries them, and either its error or, for a
     /// snapshot of the cluster, the details it reports. An error leaves the last reported details alone.
+    /// A snapshot of the cluster moves its last-seen time forward to the snapshot's receipt time, never
+    /// back; an error observed nothing of the cluster and leaves it.
     /// </summary>
     private async Task RecordAcceptedSnapshotAsync(
         KubernetesCluster cluster, ClusterSnapshot snapshot, string? uid, string? fingerprint, bool isError, CancellationToken ct)
@@ -1598,9 +1602,11 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         string? clusterVersion = isError ? cluster.ClusterVersion : snapshot.ClusterVersion;
         bool roleOutdated = isError ? cluster.RoleOutdated : snapshot.RoleOutdated;
         bool truncated = isError ? cluster.Truncated : snapshot.Truncated;
+        DateTimeOffset lastSeenAt = (isError || (receivedAt <= cluster.LastSeenAt)) ? cluster.LastSeenAt : receivedAt;
 
         await _db.KubernetesClusters
             .Where(c => c.Id == clusterId)
+            .Set(c => c.LastSeenAt, lastSeenAt)
             .Set(c => c.LeaseUid, leaseUid)
             .Set(c => c.LeaseCreatedAt, (DateTimeOffset?)leaseCreatedAt)
             .Set(c => c.LeaseTransitions, leaseTransitions)

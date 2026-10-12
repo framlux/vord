@@ -365,7 +365,7 @@ public sealed class KubernetesInventoryProjectionService : BackgroundService
         if (snapshot is null)
         {
             await SkipInvalidPayloadAsync(
-                row, ClusterSnapshotDescription, "the Lease it was taken under has no readable creation time or a negative transition count", null, ct);
+                row, ClusterSnapshotDescription, "the Lease it was taken under has no readable creation time, one in the future, or a negative transition count", null, ct);
 
             return false;
         }

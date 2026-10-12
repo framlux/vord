@@ -227,6 +227,34 @@ public class KubernetesClusterPayloadNormaliserTests
     }
 
     [Test]
+    public async Task Normalise_LeaseCreatedAtWithinTenMinutesAfterReceipt_IsAccepted()
+    {
+        // Intent: clocks differ between the agent and the server, so a Lease created a little after the
+        // snapshot reached the server is tolerated, up to and including ten minutes.
+        KubernetesClusterPayload payload = ValidPayload();
+        payload.LeaseCreatedAt = TelemetryRow().ServerReceivedAt.AddMinutes(10).ToString("O");
+
+        ClusterSnapshot snapshot = Normalise(payload);
+
+        await Assert.That(snapshot.LeaseCreatedAt).IsEqualTo(TelemetryRow().ServerReceivedAt.AddMinutes(10));
+    }
+
+    [Test]
+    [Arguments(10, 1)]
+    [Arguments(60, 0)]
+    [Arguments(60 * 24 * 365 * 70, 0)]
+    public async Task Normalise_LeaseCreatedAtMoreThanTenMinutesAfterReceipt_IsRejected(int minutes, int seconds)
+    {
+        // Intent: a Lease cannot have been created after the snapshot that describes it reached the server.
+        // A bogus future epoch would outrank every later snapshot in the per-epoch fence and silence the
+        // cluster, so it is unusable like any other value that cannot be ordered.
+        KubernetesClusterPayload payload = ValidPayload();
+        payload.LeaseCreatedAt = TelemetryRow().ServerReceivedAt.AddMinutes(minutes).AddSeconds(seconds).ToString("O");
+
+        await Assert.That(KubernetesClusterPayloadNormaliser.Normalise(payload, TelemetryRow())).IsNull();
+    }
+
+    [Test]
     public async Task Normalise_NegativeLeaseTransitions_IsRejected()
     {
         KubernetesClusterPayload payload = ValidPayload();

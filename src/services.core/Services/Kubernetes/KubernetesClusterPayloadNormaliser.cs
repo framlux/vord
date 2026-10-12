@@ -29,6 +29,13 @@ internal static class KubernetesClusterPayloadNormaliser
     private const int MaxConditionStatusLength = 16;
     private const string ApiUnreachable = "api_unreachable";
 
+    /// <summary>
+    /// How far after the server received a snapshot its Lease may claim to have been created. The agent's
+    /// clock is not the server's, but a Lease cannot postdate the snapshot that describes it by more than
+    /// the clocks can differ.
+    /// </summary>
+    private static readonly TimeSpan MaxLeaseCreatedAfterReceipt = TimeSpan.FromMinutes(10);
+
     private static readonly HashSet<string> KnownReporterErrors = new(StringComparer.Ordinal)
     {
         "credentials_rejected",
@@ -42,8 +49,10 @@ internal static class KubernetesClusterPayloadNormaliser
     /// <list type="bullet">
     /// <item>
     /// A snapshot is unusable, and null is returned, when the Lease it was taken under has no readable
-    /// creation time or a negative transition count: they order the snapshot against the cluster's
-    /// others, and a snapshot that cannot be ordered cannot be fenced.
+    /// creation time, a creation time more than ten minutes after the server received the snapshot, or a
+    /// negative transition count: they order the snapshot against the cluster's others, and a snapshot
+    /// that cannot be ordered cannot be fenced. A creation time in the far future would outrank every
+    /// later snapshot of the cluster.
     /// </item>
     /// <item>A UID that is not a UUID and a CA fingerprint that is not 64 lowercase hex characters become null.</item>
     /// <item>A reporter error that is none of the four codes the agent sends becomes <c>api_unreachable</c>.</item>
@@ -60,7 +69,7 @@ internal static class KubernetesClusterPayloadNormaliser
         ArgumentNullException.ThrowIfNull(row);
 
         DateTimeOffset? leaseCreatedAt = ParseTimestamp(payload.LeaseCreatedAt);
-        if ((leaseCreatedAt == null) || (payload.LeaseTransitions < 0))
+        if ((leaseCreatedAt == null) || (payload.LeaseTransitions < 0) || (leaseCreatedAt.Value > (row.ServerReceivedAt + MaxLeaseCreatedAfterReceipt)))
         {
             return null;
         }

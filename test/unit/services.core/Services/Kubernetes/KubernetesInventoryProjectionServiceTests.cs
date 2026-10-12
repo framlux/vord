@@ -639,6 +639,7 @@ public class KubernetesInventoryProjectionServiceTests
     [Arguments("""{"lease_created_at":"2026-10-11T08:00:00Z","lease_transitions":"many"}""")]
     [Arguments("""{"lease_created_at":"yesterday","lease_transitions":1}""")]
     [Arguments("""{"lease_created_at":"2026-10-11T08:00:00Z","lease_transitions":-1}""")]
+    [Arguments("""{"lease_created_at":"2999-01-01T00:00:00Z","lease_transitions":1,"kube_system_uid":"11111111-1111-4111-8111-111111111111","ca_fingerprint":"a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718"}""")]
     [Arguments("""{"kube_system_uid":"11111111-1111-4111-8111-111111111111","ca_fingerprint":"a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718"}""")]
     public async Task Projector_UnusableType15Payload_IsSkippedCountedAndTheCursorAdvances(string payload)
     {
