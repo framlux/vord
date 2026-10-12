@@ -403,6 +403,29 @@ func TestSetPayload_KubernetesNode(t *testing.T) {
 	}
 }
 
+// Intent: the reason a reporter cannot use its Lease credentials reaches the server in the node report, under the
+// snake_case key the local collector writes.
+func TestSetPayload_KubernetesNode_CarriesReporterError(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+	telItem := &pb.TelemetryItem{}
+	s.setPayload(telItem, db.TelemetryQueueItem{
+		ID:       "test-kubernetes-node-error",
+		ItemType: db.TelemetryKubernetesNode,
+		Payload:  `{"distro": "k3s", "node_name": "cp-1", "reporter_enrolled": true, "reporter_error": "credentials_rejected"}`,
+	})
+
+	node := telItem.GetKubernetesNode()
+	if node == nil {
+		t.Fatal("expected KubernetesNode payload, got nil")
+	}
+
+	if node.ReporterError != "credentials_rejected" {
+		t.Errorf("ReporterError = %q, want credentials_rejected", node.ReporterError)
+	}
+}
+
 // Intent: System info JSON correctly maps to proto SystemInfo payload.
 func TestSetPayload_SystemInfo(t *testing.T) {
 	store := newTestStore(t)
@@ -626,6 +649,94 @@ func TestSendBatch_ServerReject(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Errorf("expected 1 pending item after rejection, got %d", len(items))
+	}
+}
+
+// Intent: the cluster reporter's health gate counts from the last time the server accepted a batch, so the
+// timestamp must come from the sender's clock at the moment an ack reports success, and from nowhere else.
+func TestLastAckAt_SetOnSuccessfulAck(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnqueueTelemetry("ack-time", db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	client := &mockTelemetryClient{
+		submitFunc: func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: true}, nil
+		},
+	}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	fixed := time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC)
+	s.clock = func() time.Time { return fixed }
+
+	if got := s.LastAckAt(); got.IsZero() == false {
+		t.Fatalf("LastAckAt before any ack = %v, want the zero time", got)
+	}
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if got := s.LastAckAt(); got.Equal(fixed) == false {
+		t.Errorf("LastAckAt = %v, want %v", got, fixed)
+	}
+}
+
+// Intent: a batch the server rejects, or one that never reached it, is not an acknowledgement, so it must not make
+// a broken delivery path look healthy to the reporter's health gate.
+func TestLastAckAt_NotSetOnRejectionOrFailure(t *testing.T) {
+	cases := map[string]func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error){
+		"rejected": func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
+		},
+		"unreachable": func(context.Context, *pb.TelemetryEnvelope, ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return nil, fmt.Errorf("server unreachable")
+		},
+	}
+
+	for name, submit := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			if err := store.EnqueueTelemetry("no-ack", db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+
+			s := New(store, &mockTelemetryClient{submitFunc: submit}, state.New(), jitter.NewDefault(), neverPaused())
+			s.clock = func() time.Time { return time.Date(2026, 10, 11, 12, 30, 0, 0, time.UTC) }
+
+			// A cancelled context stops the unary retries from backing off, so the failure case ends at once.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			s.sendBatch(ctx, "fast", FastTypes)
+
+			if got := s.LastAckAt(); got.IsZero() == false {
+				t.Errorf("LastAckAt = %v after a %s batch, want the zero time", got, name)
+			}
+		})
+	}
+}
+
+// Intent: a later acknowledgement replaces an earlier one, so the gate measures from the newest.
+func TestLastAckAt_AdvancesWithEachSuccessfulAck(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	s.clock = func() time.Time { return now }
+
+	for i, offset := range []time.Duration{0, 7 * time.Minute} {
+		now = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC).Add(offset)
+
+		if err := store.EnqueueTelemetry(fmt.Sprintf("ack-%d", i), db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+
+		s.sendBatch(context.Background(), "fast", FastTypes)
+
+		if got := s.LastAckAt(); got.Equal(now) == false {
+			t.Errorf("after ack %d LastAckAt = %v, want %v", i, got, now)
+		}
 	}
 }
 

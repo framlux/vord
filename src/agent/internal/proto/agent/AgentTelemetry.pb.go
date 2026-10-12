@@ -2222,8 +2222,11 @@ type KubernetesNodeRecord struct {
 	CaFingerprint          string                 `protobuf:"bytes,7,opt,name=ca_fingerprint,json=caFingerprint,proto3" json:"ca_fingerprint,omitempty"`
 	AdminCredentialPresent bool                   `protobuf:"varint,8,opt,name=admin_credential_present,json=adminCredentialPresent,proto3" json:"admin_credential_present,omitempty"`
 	ReporterEnrolled       bool                   `protobuf:"varint,9,opt,name=reporter_enrolled,json=reporterEnrolled,proto3" json:"reporter_enrolled,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed. Empty
+	// when the last Lease call worked or none has been made.
+	ReporterError string `protobuf:"bytes,10,opt,name=reporter_error,json=reporterError,proto3" json:"reporter_error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KubernetesNodeRecord) Reset() {
@@ -2317,6 +2320,13 @@ func (x *KubernetesNodeRecord) GetReporterEnrolled() bool {
 		return x.ReporterEnrolled
 	}
 	return false
+}
+
+func (x *KubernetesNodeRecord) GetReporterError() string {
+	if x != nil {
+		return x.ReporterError
+	}
+	return ""
 }
 
 type SshSessionRecord struct {
@@ -2601,7 +2611,7 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\tsub_state\x18\x04 \x01(\tR\bsubState\x12 \n" +
 	"\vdescription\x18\x05 \x01(\tR\vdescription\".\n" +
 	"\x12AgentVersionRecord\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\"\xf2\x02\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\"\x99\x03\n" +
 	"\x14KubernetesNodeRecord\x12\x16\n" +
 	"\x06distro\x18\x01 \x01(\tR\x06distro\x12'\n" +
 	"\x0fkubelet_version\x18\x02 \x01(\tR\x0ekubeletVersion\x12\x1b\n" +
@@ -2612,7 +2622,9 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\rcontrol_plane\x18\x06 \x01(\bR\fcontrolPlane\x12%\n" +
 	"\x0eca_fingerprint\x18\a \x01(\tR\rcaFingerprint\x128\n" +
 	"\x18admin_credential_present\x18\b \x01(\bR\x16adminCredentialPresent\x12+\n" +
-	"\x11reporter_enrolled\x18\t \x01(\bR\x10reporterEnrolled\"\xbb\x01\n" +
+	"\x11reporter_enrolled\x18\t \x01(\bR\x10reporterEnrolled\x12%\n" +
+	"\x0ereporter_error\x18\n" +
+	" \x01(\tR\rreporterError\"\xbb\x01\n" +
 	"\x10SshSessionRecord\x12\x12\n" +
 	"\x04user\x18\x01 \x01(\tR\x04user\x12\x1b\n" +
 	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x1f\n" +

@@ -555,6 +555,54 @@ func (s *Store) ClearTelemetryQueue() error {
 	return nil
 }
 
+// DeleteTelemetryByType deletes every pending and processing item of one type and returns how many rows it
+// removed. A cluster reporter that loses its Lease calls it so a snapshot it queued as the holder is never sent
+// after another agent has taken over. Completed rows are history and stay until the purge removes them. The
+// cached pending count drops by the pending rows deleted; processing rows were already taken out of it when
+// they were dequeued.
+func (s *Store) DeleteTelemetryByType(t TelemetryType) (int64, error) {
+	// The count must be loaded before the transaction starts: the database has one connection, and a lazy load
+	// inside the transaction would wait for it forever.
+	if _, err := s.loadPendingCount(); err != nil {
+		return 0, fmt.Errorf("initializing pending count: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin delete telemetry transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var pending int64
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM telemetry_queue WHERE item_type = ? AND status = ?",
+		int(t), int(QueueStatusPending),
+	).Scan(&pending); err != nil {
+		return 0, fmt.Errorf("counting pending telemetry of type %d: %w", int(t), err)
+	}
+
+	result, err := tx.Exec(
+		"DELETE FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)",
+		int(t), int(QueueStatusPending), int(QueueStatusProcessing),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting telemetry of type %d: %w", int(t), err)
+	}
+
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted telemetry of type %d: %w", int(t), err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing delete telemetry transaction: %w", err)
+	}
+
+	s.pendingCount.Add(-pending)
+
+	return deleted, nil
+}
+
 // MarkTelemetryCompleted marks multiple items as completed.
 func (s *Store) MarkTelemetryCompleted(ids []string) error {
 	if len(ids) == 0 {

@@ -34,6 +34,7 @@ type kubernetesNodePayload struct {
 	CaFingerprint          string `json:"ca_fingerprint,omitempty"`
 	AdminCredentialPresent bool   `json:"admin_credential_present"`
 	ReporterEnrolled       bool   `json:"reporter_enrolled"`
+	ReporterError          string `json:"reporter_error,omitempty"`
 }
 
 // KubernetesCollector reports whether this host is a Kubernetes node and its identity from local files: the
@@ -43,12 +44,16 @@ type kubernetesNodePayload struct {
 type KubernetesCollector struct {
 	detector kubelocal.Detector
 	dataDir  string // agent data directory, holds k8s-reporter.json
+	// reporterError says why the cluster reporter on this host cannot use its Lease credentials. Nil when the
+	// host runs no reporter runtime.
+	reporterError func() string
 }
 
 // NewKubernetesCollector creates a collector that inspects the real filesystem and keeps its reporter state
-// file in dataDir.
-func NewKubernetesCollector(dataDir string) *KubernetesCollector {
-	return &KubernetesCollector{detector: kubelocal.Detector{Root: "/"}, dataDir: dataDir}
+// file in dataDir. reporterError, which may be nil, is asked on every collection for the reason the cluster
+// reporter on this host cannot use its credentials, and the answer is sent while the host is enrolled.
+func NewKubernetesCollector(dataDir string, reporterError func() string) *KubernetesCollector {
+	return &KubernetesCollector{detector: kubelocal.Detector{Root: "/"}, dataDir: dataDir, reporterError: reporterError}
 }
 
 // Name returns the collector's unique identifier.
@@ -84,6 +89,12 @@ func (c *KubernetesCollector) Collect(ctx context.Context, store *db.Store) erro
 		CaFingerprint:          facts.CaFingerprint,
 		AdminCredentialPresent: facts.AdminCredentialPresent,
 		ReporterEnrolled:       c.reporterEnrolled(),
+	}
+
+	// An error describes an enrolled reporter's credentials, so a host without the state file reports none even
+	// if the runtime still remembers its last failure.
+	if payload.ReporterEnrolled && (c.reporterError != nil) {
+		payload.ReporterError = c.reporterError()
 	}
 
 	data, err := json.Marshal(payload)

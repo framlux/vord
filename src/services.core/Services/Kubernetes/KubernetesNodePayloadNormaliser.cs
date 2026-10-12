@@ -17,6 +17,8 @@ internal static class KubernetesNodePayloadNormaliser
     private const int MaxKubeletVersionLength = 64;
     private const int CaFingerprintLength = 64;
     private const string UnknownDistro = "unknown";
+    private const string CredentialsRejected = "credentials_rejected";
+    private const string TlsCaChanged = "tls_ca_changed";
 
     private static readonly HashSet<string> KnownDistros = new(StringComparer.Ordinal)
     {
@@ -34,7 +36,8 @@ internal static class KubernetesNodePayloadNormaliser
     /// must be a valid Kubernetes node name, except that a host without a kubelet may report an empty
     /// one, because a control-plane host with no kubelet and an unusable hostname has no name to give.
     /// An unrecognised distro becomes <c>unknown</c>, a CA fingerprint that is not 64 lowercase hex
-    /// characters and an empty kubelet version become empty, and a longer version is cut to fit.
+    /// characters and an empty kubelet version become empty, and a longer version is cut to fit. A
+    /// reporter error is kept only when it is one of the two codes the agent sends, and is null otherwise.
     /// </summary>
     /// <param name="payload">The deserialized payload.</param>
     /// <returns>The normalised report, or null when it names no distro or has an unusable node name.</returns>
@@ -74,6 +77,7 @@ internal static class KubernetesNodePayloadNormaliser
             CaFingerprint = NormaliseCaFingerprint(payload.CaFingerprint) ?? string.Empty,
             AdminCredentialPresent = payload.AdminCredentialPresent,
             ReporterEnrolled = payload.ReporterEnrolled,
+            ReporterError = NormaliseReporterError(payload.ReporterError),
         };
     }
 
@@ -151,6 +155,21 @@ internal static class KubernetesNodePayloadNormaliser
         }
 
         return fingerprint;
+    }
+
+    private static string? NormaliseReporterError(string? reporterError)
+    {
+        if (string.Equals(reporterError, CredentialsRejected, StringComparison.Ordinal))
+        {
+            return CredentialsRejected;
+        }
+
+        if (string.Equals(reporterError, TlsCaChanged, StringComparison.Ordinal))
+        {
+            return TlsCaChanged;
+        }
+
+        return null;
     }
 
     private static string? NormaliseKubeletVersion(string? version)

@@ -42,6 +42,9 @@ type kubeFixture struct {
 	hostnameErr error
 	versionOut  string
 	versionErr  error
+
+	// reporterError is what the fake reporter runtime says about its Lease credentials; nil means no runtime.
+	reporterError func() string
 }
 
 func newKubeFixture(t *testing.T) *kubeFixture {
@@ -99,6 +102,7 @@ func (f *kubeFixture) unknownNode() {
 
 func (f *kubeFixture) collector() *KubernetesCollector {
 	return &KubernetesCollector{
+		reporterError: f.reporterError,
 		detector: kubelocal.Detector{
 			Root: f.root,
 			ExecCmd: func(context.Context, string, ...string) ([]byte, error) {
@@ -196,7 +200,7 @@ func collectOne(t *testing.T, f *kubeFixture) kubernetesNodePayload {
 // Intent: a name and a 15 minute interval identify the collector to the scheduler, and the
 // production constructor reads the real filesystem root and the agent data directory.
 func TestKubernetesCollector_NameIntervalAndConstructor(t *testing.T) {
-	c := NewKubernetesCollector("/var/lib/vord-agent")
+	c := NewKubernetesCollector("/var/lib/vord-agent", nil)
 
 	if c.Name() != "kubernetes" {
 		t.Errorf("Name = %q, want %q", c.Name(), "kubernetes")
@@ -212,6 +216,11 @@ func TestKubernetesCollector_NameIntervalAndConstructor(t *testing.T) {
 
 	if c.dataDir != "/var/lib/vord-agent" {
 		t.Errorf("dataDir = %q, want %q", c.dataDir, "/var/lib/vord-agent")
+	}
+
+	withSource := NewKubernetesCollector("/var/lib/vord-agent", func() string { return "tls_ca_changed" })
+	if withSource.reporterError == nil || withSource.reporterError() != "tls_ca_changed" {
+		t.Errorf("the constructor did not keep the reporter error source")
 	}
 }
 
@@ -506,5 +515,90 @@ func TestKubernetesCollector_PayloadRoundTripsThroughProto(t *testing.T) {
 
 	if _, err := proto.Marshal(&record); err != nil {
 		t.Errorf("proto.Marshal error: %v", err)
+	}
+}
+
+// withReporterError lays out an enrolled control plane host whose reporter runtime reports the given error.
+func (f *kubeFixture) withReporterError(reason string) {
+	f.t.Helper()
+
+	ca, _ := newKubeCert(f.t, "k3s-server-ca", 1)
+	f.k3sNode(ca, "k3s-server-1")
+	f.write("/etc/rancher/k3s/k3s.yaml", []byte("admin kubeconfig"))
+	f.reporterError = func() string { return reason }
+}
+
+// Intent: a reporter that cannot use its credentials tells the server through the node report, as the exact
+// reason code, and the key is one the proto knows so the sender accepts it.
+func TestKubernetesCollector_ReporterError_IsReportedWhileEnrolled(t *testing.T) {
+	for _, reason := range []string{"credentials_rejected", "tls_ca_changed"} {
+		t.Run(reason, func(t *testing.T) {
+			f := newKubeFixture(t)
+			f.withReporterError(reason)
+			f.markReporterEnrolled()
+
+			items := collectItems(t, f.collector(), newTestStore(t))
+			if len(items) != 1 {
+				t.Fatalf("expected 1 node report, got %d", len(items))
+			}
+
+			if want := `"reporter_enrolled":true,"reporter_error":"` + reason + `"}`; strings.HasSuffix(items[0].Payload, want) == false {
+				t.Errorf("payload = %s, want it to end with %s", items[0].Payload, want)
+			}
+
+			var record pb.KubernetesNodeRecord
+			if err := protojson.Unmarshal([]byte(items[0].Payload), &record); err != nil {
+				t.Fatalf("protojson.Unmarshal rejected the payload %s: %v", items[0].Payload, err)
+			}
+
+			if record.ReporterError != reason {
+				t.Errorf("record.ReporterError = %q, want %q", record.ReporterError, reason)
+			}
+		})
+	}
+}
+
+// Intent: a healthy reporter and a host with no reporter runtime both leave the field out, so the report is
+// byte-identical to the one an agent without the field sends.
+func TestKubernetesCollector_ReporterError_OmittedWhenThereIsNone(t *testing.T) {
+	cases := map[string]func(*kubeFixture){
+		"empty error": func(f *kubeFixture) { f.withReporterError("") },
+		"no runtime": func(f *kubeFixture) {
+			f.withReporterError("")
+			f.reporterError = nil
+		},
+	}
+
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newKubeFixture(t)
+			arrange(f)
+			f.markReporterEnrolled()
+
+			items := collectItems(t, f.collector(), newTestStore(t))
+			if len(items) != 1 {
+				t.Fatalf("expected 1 node report, got %d", len(items))
+			}
+
+			if strings.Contains(items[0].Payload, "reporter_error") {
+				t.Errorf("payload = %s, want no reporter_error key", items[0].Payload)
+			}
+		})
+	}
+}
+
+// Intent: an error belongs to an enrolled reporter, so a host whose state file is gone never reports one, even
+// if the runtime still remembers its last failure.
+func TestKubernetesCollector_ReporterError_NotReportedWhenNotEnrolled(t *testing.T) {
+	f := newKubeFixture(t)
+	f.withReporterError("credentials_rejected")
+
+	items := collectItems(t, f.collector(), newTestStore(t))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 node report, got %d", len(items))
+	}
+
+	if strings.Contains(items[0].Payload, "reporter_error") {
+		t.Errorf("payload = %s, want no reporter_error key without a state file", items[0].Payload)
 	}
 }

@@ -134,17 +134,30 @@ func main() {
 		func(c context.Context, s *db.Store) error { return sshCollector.ResetToNow(c, s) },
 	))
 
+	// The reporter runtime elects one enrolled control-plane host per cluster to report the cluster, and runs on
+	// every enrolled host whether or not remote commands are allowed. Its health gate reads the sender's last
+	// acknowledgement, and the sender is built below, so the gate reaches it through the variable declared above.
+	reporterRuntime := kubereporter.NewRuntime(kubereporter.RuntimeOptions{
+		DataDir: cfg.DataDir,
+		Gate: newReporterGate(
+			pauseCoordinator.Paused,
+			func() time.Time { return telemetrySender.LastAckAt() },
+			time.Now(),
+		),
+		OnLost: newSnapshotFence(store.DeleteTelemetryByType),
+	})
+
 	// Initialize command processor if remote commands are enabled. The cluster reporter commands report a state
 	// change through a hook that runs the local Kubernetes collector, which the scheduler also runs, so the
-	// collector is shared.
-	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir)
+	// collector is shared. The collector reports why the reporter cannot use its credentials, if it cannot.
+	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir, reporterRuntime.ReporterError)
 
 	var cmdProcessor *commands.Processor
 	if cfg.AllowRemoteCommands {
 		kubeReporter := kubereporter.New(kubereporter.Options{
 			DataDir:  cfg.DataDir,
 			Facts:    kubelocal.Detector{Root: "/"}.Detect,
-			Releaser: kubereporter.NoopLeaseReleaser{},
+			Releaser: reporterRuntime,
 			OnStateChanged: newReporterStateHook(
 				func(c context.Context) error { return kubeCollector.Collect(c, store) },
 				pauseCoordinator.Paused,
@@ -195,6 +208,15 @@ func main() {
 		defer wg.Done()
 		defer recoverPanic("config-refresh")
 		runConfigRefresh(ctx, regManager, runtimeState, jit)
+	}()
+
+	// Start the cluster reporter runtime in background. On shutdown it hands the reporter Lease back, so a
+	// standby on another host takes over without waiting for it to expire.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer recoverPanic("cluster-reporter")
+		reporterRuntime.Run(ctx)
 	}()
 
 	// Start command poll loop in background (opt-in only).

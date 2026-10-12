@@ -110,6 +110,19 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 	return api
 }
 
+// issueReporterToken hands out a token the fake accepts as the reporter's: it may list nodes and get and update
+// the one Lease. The token is not tied to a Secret, so nothing revokes it.
+func (a *fakeAPI) issueReporterToken() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.nextTok++
+	token := fmt.Sprintf("standalone-reporter-token-%d-do-not-leak", a.nextTok)
+	a.issued[token] = "standalone"
+
+	return token
+}
+
 // url is the address of the fake.
 func (a *fakeAPI) url() string {
 	return a.server.URL
@@ -294,7 +307,14 @@ func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		principal = "reporter"
 	}
 
-	record := &recordedRequest{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Principal: principal, Body: body}
+	// The body is stored as the object for a create or an update, and the store then changes it, so the log keeps
+	// a copy of what was actually sent.
+	var sent map[string]any
+	if body != nil {
+		sent = cloneObject(body)
+	}
+
+	record := &recordedRequest{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery, Principal: principal, Body: sent}
 	a.requests = append(a.requests, *record)
 	index := len(a.requests) - 1
 
@@ -373,13 +393,19 @@ func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if principal == "reporter" {
-		if (r.Method == http.MethodGet) && (r.URL.Path == "/api/v1/nodes") {
+		switch {
+		case (r.Method == http.MethodGet) && (r.URL.Path == "/api/v1/nodes"):
 			reply(http.StatusOK, map[string]any{"kind": "NodeList", "items": []any{}})
-		} else {
-			fail(http.StatusForbidden, "Forbidden", "the reporter token may only list nodes")
-		}
 
-		return
+			return
+		case ((r.Method == http.MethodGet) || (r.Method == http.MethodPut)) && (r.URL.Path == leasePath):
+			// The reporter's Role grants get and update on the one Lease, so those requests are served like
+			// the admin's.
+		default:
+			fail(http.StatusForbidden, "Forbidden", "the reporter token may only list nodes and use its Lease")
+
+			return
+		}
 	}
 
 	switch r.Method {

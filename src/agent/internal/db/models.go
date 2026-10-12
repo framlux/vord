@@ -22,6 +22,8 @@ const (
 	TelemetryServiceStatus  TelemetryType = 12
 	TelemetryAgentVersion   TelemetryType = 13
 	TelemetryKubernetesNode TelemetryType = 14
+	// TelemetryKubernetesCluster is the cluster snapshot only the Lease holder of a cluster queues.
+	TelemetryKubernetesCluster TelemetryType = 15
 )
 
 // QueueStatus represents the processing state of a telemetry queue item.

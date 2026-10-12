@@ -35,4 +35,11 @@ public sealed class KubernetesNodePayload
 
     /// <summary>Whether this host has been enrolled as the reporter for its cluster.</summary>
     public bool ReporterEnrolled { get; set; }
+
+    /// <summary>
+    /// Why the cluster reporter on this host cannot use its credentials: <c>credentials_rejected</c> or
+    /// <c>tls_ca_changed</c>. Empty or null when the last call to the cluster worked, or when the agent
+    /// predates the field.
+    /// </summary>
+    public string? ReporterError { get; set; }
 }

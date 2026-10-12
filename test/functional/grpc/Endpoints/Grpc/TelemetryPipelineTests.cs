@@ -427,7 +427,8 @@ public sealed class TelemetryPipelineTests
                         ControlPlane = true,
                         CaFingerprint = "ab",
                         AdminCredentialPresent = true,
-                        ReporterEnrolled = true
+                        ReporterEnrolled = true,
+                        ReporterError = "tls_ca_changed"
                     }
                 }
             }
@@ -454,6 +455,8 @@ public sealed class TelemetryPipelineTests
         await Assert.That(payload.CaFingerprint).IsEqualTo("ab");
         await Assert.That(payload.AdminCredentialPresent).IsTrue();
         await Assert.That(payload.ReporterEnrolled).IsTrue();
+        await Assert.That(row.Payload).Contains("\"reporter_error\"");
+        await Assert.That(payload.ReporterError).IsEqualTo("tls_ca_changed");
     }
 
     [Test]

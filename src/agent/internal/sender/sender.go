@@ -12,6 +12,7 @@ import (
 	"math"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -85,6 +86,9 @@ type Sender struct {
 	// clock supplies the current time for stamping the envelope's AgentTimestamp. Defaults to
 	// time.Now in production; tests inject a fixed closure for deterministic timestamp assertions.
 	clock func() time.Time
+	// lastAck is when the server last acknowledged an envelope with success, nil before the first. It is read by
+	// other goroutines, such as the cluster reporter's health gate, so it is an atomic pointer.
+	lastAck atomic.Pointer[time.Time]
 
 	streams map[string]*tierStream
 }
@@ -205,6 +209,18 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 	}
 }
 
+// LastAckAt returns when the server last acknowledged an envelope with success, or the zero time when it has not
+// yet. Only an acknowledgement that reports success counts: a rejected batch and a batch that never reached the
+// server do not.
+func (s *Sender) LastAckAt() time.Time {
+	acked := s.lastAck.Load()
+	if acked == nil {
+		return time.Time{}
+	}
+
+	return *acked
+}
+
 // CloseStreams closes every tier's cached stream so the next send opens a fresh one. A pause calls it to stop
 // holding a stream open to a server that is discarding what it receives.
 //
@@ -307,6 +323,9 @@ func (s *Sender) sendEnvelope(ctx context.Context, tier string, items []*pb.Tele
 
 	delivered := ack.Success
 	if delivered {
+		acked := s.clock()
+		s.lastAck.Store(&acked)
+
 		if err := s.store.MarkTelemetryCompleted(ids); err != nil {
 			s.logger.Error("failed to mark telemetry completed", "error", err)
 		}

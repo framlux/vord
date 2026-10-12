@@ -1844,3 +1844,121 @@ func TestDiscardTelemetry_UnknownIDs(t *testing.T) {
 		t.Errorf("expected 0 rows deleted, got %d", deleted)
 	}
 }
+
+// pendingCountOf returns the cached pending count, failing the test when it cannot be read.
+func pendingCountOf(t *testing.T, store *Store) int64 {
+	t.Helper()
+
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+
+	return count
+}
+
+// Intent: a holder that loses its Lease must discard every cluster snapshot it queued, pending or already taken
+// by the sender, while leaving every other kind of telemetry and the history of delivered snapshots alone.
+func TestDeleteTelemetryByType_DeletesPendingAndProcessingOfThatTypeOnly(t *testing.T) {
+	store := newTestStore(t)
+
+	enqueue := func(id string, itemType TelemetryType) {
+		t.Helper()
+
+		if err := store.EnqueueTelemetry(id, itemType, `{}`); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	enqueue("delivered", TelemetryKubernetesCluster)
+	enqueue("in-flight", TelemetryKubernetesCluster)
+
+	taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10)
+	if err != nil || len(taken) != 2 {
+		t.Fatalf("dequeue snapshots: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"delivered"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	enqueue("pending-1", TelemetryKubernetesCluster)
+	enqueue("pending-2", TelemetryKubernetesCluster)
+	enqueue("node", TelemetryKubernetesNode)
+	enqueue("cpu", TelemetryCpuUsage)
+
+	if got := pendingCountOf(t, store); got != 4 {
+		t.Fatalf("pending count before = %d, want 4", got)
+	}
+
+	deleted, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster)
+	if err != nil {
+		t.Fatalf("DeleteTelemetryByType: %v", err)
+	}
+
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3 (one processing and two pending)", deleted)
+	}
+
+	if got := pendingCountOf(t, store); got != 2 {
+		t.Errorf("pending count after = %d, want 2 (the node and cpu items)", got)
+	}
+
+	var remaining []string
+
+	rows, err := store.DB().Query("SELECT id FROM telemetry_queue ORDER BY id")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+
+		remaining = append(remaining, id)
+	}
+
+	if want := "cpu,delivered,node"; strings.Join(remaining, ",") != want {
+		t.Errorf("rows left = %v, want %s", remaining, want)
+	}
+}
+
+// Intent: the cached pending count must follow the delete even when it was never loaded before, and a type with
+// nothing queued must delete nothing and leave the count alone.
+func TestDeleteTelemetryByType_KeepsCachedCountExact(t *testing.T) {
+	store := newTestStore(t)
+
+	deleted, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster)
+	if err != nil || deleted != 0 {
+		t.Fatalf("delete on an empty queue = %d, %v; want 0, nil", deleted, err)
+	}
+
+	if err := store.EnqueueTelemetry("snapshot", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("cpu", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if _, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster); err != nil {
+		t.Fatalf("DeleteTelemetryByType: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count = %d, want 1", got)
+	}
+
+	// The count must match the table, which a reload from the database proves.
+	if err := store.ResetProcessingTelemetry(); err != nil {
+		t.Fatalf("ResetProcessingTelemetry: %v", err)
+	}
+
+	if got := pendingCountOf(t, store); got != 1 {
+		t.Errorf("pending count after a reload = %d, want 1", got)
+	}
+}
