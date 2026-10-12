@@ -433,6 +433,48 @@ func TestRuntime_ReporterError_ComesFromTheElector(t *testing.T) {
 	}
 }
 
+// Intent: an error the elector learned belongs to the credentials it was built from. Once the state file holds
+// other credentials (a re-enrol wrote them ahead of the loop's next pass), the old error describes a token that
+// no longer exists and must not be reported, and the new credentials start clean.
+func TestRuntime_ReporterError_IsNotReportedForCredentialsThatWereReplaced(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrolWithToken("a-token-the-cluster-never-issued")
+	rig.step()
+
+	if got := rig.runtime.ReporterError(); got != "credentials_rejected" {
+		t.Fatalf("ReporterError = %q, want credentials_rejected before the re-enrol", got)
+	}
+
+	rig.enrol()
+
+	if got := rig.runtime.ReporterError(); got != "" {
+		t.Errorf("ReporterError after the state file was replaced = %q, want none", got)
+	}
+
+	rig.advance(electionInterval)
+	rig.step()
+
+	if got := rig.runtime.ReporterError(); got != "" {
+		t.Errorf("ReporterError once the elector runs on the new credentials = %q, want none", got)
+	}
+}
+
+// Intent: a state file that cannot be read right now says nothing about the credentials, so the elector's own
+// error stays, as the rest of the runtime keeps a working reporter over a file that may be mid-rewrite.
+func TestRuntime_ReporterError_SurvivesAnUnreadableStateFile(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrolWithToken("a-token-the-cluster-never-issued")
+	rig.step()
+
+	if err := os.WriteFile(filepath.Join(rig.dataDir, StateFileName), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("corrupt the state file: %v", err)
+	}
+
+	if got := rig.runtime.ReporterError(); got != "credentials_rejected" {
+		t.Errorf("ReporterError = %q, want credentials_rejected while the state file is unreadable", got)
+	}
+}
+
 // Intent: the health gate reaches the elector, so a paused host's runtime hands the Lease back like any holder
 // whose gate fails.
 func TestRuntime_PassesTheGateToTheElector(t *testing.T) {

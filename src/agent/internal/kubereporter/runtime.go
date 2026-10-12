@@ -311,12 +311,22 @@ func (r *Runtime) ReleaseAndStop(ctx context.Context) {
 
 // ReporterError returns why the reporter on this host cannot use its Lease credentials: credentials_rejected,
 // tls_ca_changed, or an empty string when there is no error or no elector.
+//
+// An error belongs to the credentials the elector was built from. An enrol writes the new state file before the
+// loop's next pass replaces the elector, and the hook that follows an enrol reads this at once, so while the file
+// holds other credentials than the elector's the elector's error describes a token that is already gone and is
+// not reported. A state file that cannot be read says nothing either way, and the elector's error stands.
 func (r *Runtime) ReporterError() string {
 	r.mu.Lock()
 	cur := r.current
 	r.mu.Unlock()
 
 	if cur == nil {
+		return ""
+	}
+
+	state, found, err := LoadState(r.dataDir)
+	if (err == nil) && ((found == false) || (state != cur.state)) {
 		return ""
 	}
 

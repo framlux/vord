@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/framlux/vord/internal/kubelocal"
 )
 
 // postedPaths lists the paths of the POST requests in the log, in order.
@@ -838,6 +840,62 @@ func TestEnrol_ReEnrolCannotDeleteOldSecret_KeepsStateFileAndSecret(t *testing.T
 
 	if h.changed != 1 {
 		t.Errorf("state-changed hook ran %d times, want only the first enrol's", h.changed)
+	}
+}
+
+// Intent: the hook that runs after a successful re-enrol collects the local node report at once, and that report
+// carries the reporter's error. The runtime still holds the elector built from the old credentials at that moment,
+// so the error it learned about the old token must not reach the report of the new enrolment.
+func TestEnrol_ReEnrol_HookReportsNoErrorFromTheReplacedCredentials(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	runtime := NewRuntime(RuntimeOptions{
+		DataDir: h.dataDir,
+		Clock:   h.clock,
+		Gate: Gate{
+			Paused:    func() bool { return false },
+			LastAck:   h.clock.Now,
+			StartedAt: h.clock.Now(),
+		},
+	})
+
+	revoked := h.state()
+	revoked.Token = "a-token-the-cluster-never-issued"
+
+	if err := SaveState(h.dataDir, revoked); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	runtime.step(context.Background())
+
+	if got := runtime.ReporterError(); got != "credentials_rejected" {
+		t.Fatalf("ReporterError = %q, want credentials_rejected before the re-enrol", got)
+	}
+
+	var reported []string
+
+	h.reporter = New(Options{
+		DataDir:        h.dataDir,
+		Facts:          func(context.Context) (kubelocal.Facts, bool) { return h.facts, h.factsOK },
+		Releaser:       h.releaser,
+		OnStateChanged: func(context.Context) { reported = append(reported, runtime.ReporterError()) },
+		Now:            h.clock.Now,
+		Sleep:          h.clock.Sleep,
+	})
+
+	h.enrol()
+
+	if len(reported) != 1 {
+		t.Fatalf("the hook ran %d times, want 1", len(reported))
+	}
+
+	if reported[0] != "" {
+		t.Errorf("the hook after the re-enrol reported %q, want no error", reported[0])
+	}
+
+	if h.state().Token == revoked.Token {
+		t.Error("the re-enrol kept the revoked token")
 	}
 }
 
