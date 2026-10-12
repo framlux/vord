@@ -21,6 +21,8 @@ import type {
 	IntegrationEndpointDto,
 	IntegrationProviderDto,
 	FleetSshSessionDto,
+	KubernetesClusterDetailDto,
+	KubernetesClusterSummaryDto,
 	UpdateMachineRequest
 } from './types';
 import {
@@ -145,6 +147,19 @@ export class MockApiClient {
 
 	// No-op success stubs — let mid-screenshot clicks (tenant switch, rename, ack)
 	// resolve cleanly instead of throwing toasts.
+
+	// The demo fleet has no Kubernetes clusters, so the list is empty and any one cluster is unknown.
+	async getClusters(): Promise<KubernetesClusterSummaryDto[]> {
+		return [];
+	}
+
+	async getCluster(id: number): Promise<KubernetesClusterDetailDto> {
+		throw new ApiError(404, `Cluster ${id} not found`);
+	}
+
+	async renameCluster(id: number, _displayName: string | null): Promise<KubernetesClusterSummaryDto> {
+		throw new ApiError(404, `Cluster ${id} not found`);
+	}
 
 	async switchTenant(_tenantId: number): Promise<void> {
 		// Mock tenant switching is a no-op

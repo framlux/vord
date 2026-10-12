@@ -853,9 +853,10 @@ export interface MachineKubernetesLocalDto {
 	distro: string;
 	/** Empty when no kubelet was found on the host. */
 	kubeletVersion: string;
-	nodeName: string;
-	/** Where the node name came from: certificate or hostname. */
-	nodeNameSource: string;
+	/** Null when the host runs no kubelet, because it is then not a node and has no node name to show. */
+	nodeName: string | null;
+	/** Where the node name came from: certificate or hostname. Null when nodeName is. */
+	nodeNameSource: string | null;
 	hasKubelet: boolean;
 	controlPlane: boolean;
 	adminCredentialPresent: boolean;

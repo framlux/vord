@@ -196,6 +196,26 @@ describe('cluster detail +page.server rename action', () => {
 		expect(result).toMatchObject({ status: 403, data: { message: 'Forbidden' } });
 	});
 
+	it.each([
+		[0, 500],
+		[399, 500],
+		[400, 400],
+		[404, 404],
+		[599, 599],
+		[600, 500]
+	])('reports an API failure with status %i as %i, the nearest status a form action may use', async (apiStatus, expected) => {
+		// A request that timed out or never reached the API carries status 0, which SvelteKit refuses
+		// to use for a failure and would turn the form's message into an internal error.
+		apiMock.renameCluster.mockRejectedValue(new ApiError(apiStatus, 'Request timed out'));
+
+		const result = await actions.rename(makeRenameEvent('12', { displayName: 'Production' }));
+
+		expect(result).toMatchObject({
+			status: expected,
+			data: { message: 'Request timed out', displayName: 'Production' }
+		});
+	});
+
 	it('does not swallow a failure that is not an API error', async () => {
 		apiMock.renameCluster.mockRejectedValue(new TypeError('network down'));
 

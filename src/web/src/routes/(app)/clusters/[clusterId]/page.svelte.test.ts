@@ -98,6 +98,21 @@ describe('cluster detail', () => {
 	});
 
 	describe('node table', () => {
+		it('says no nodes have reported yet, instead of an empty table, when the cluster has none', () => {
+			renderPage(makeCluster({ nodes: [], nodeCount: 0, managedNodeCount: 0 }));
+
+			expect(screen.getByText('No nodes reported yet')).toBeInTheDocument();
+			expect(screen.queryByRole('table')).not.toBeInTheDocument();
+			expect(screen.queryByRole('columnheader')).not.toBeInTheDocument();
+		});
+
+		it('shows the table, not the empty message, once a node has reported', () => {
+			renderPage(makeCluster());
+
+			expect(screen.queryByText('No nodes reported yet')).not.toBeInTheDocument();
+			expect(screen.getByRole('table')).toBeInTheDocument();
+		});
+
 		it('labels the columns', () => {
 			renderPage(makeCluster());
 

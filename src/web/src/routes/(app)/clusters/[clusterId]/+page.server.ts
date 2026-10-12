@@ -13,6 +13,12 @@ function parseClusterId(raw: string): number | null {
 	return Number.isInteger(id) ? id : null;
 }
 
+// A request that timed out or never reached the API carries status 0, which SvelteKit refuses as a
+// failure status. Anything outside the error range is reported as a server error instead.
+function failureStatus(status: number): number {
+	return status >= 400 && status <= 599 ? status : 500;
+}
+
 export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	const id = parseClusterId(params.clusterId);
@@ -52,7 +58,7 @@ export const actions: Actions = {
 			await api.renameCluster(id, displayName);
 		} catch (e) {
 			if (e instanceof ApiError) {
-				return fail(e.status, { message: e.message, displayName: typed });
+				return fail(failureStatus(e.status), { message: e.message, displayName: typed });
 			}
 			throw e;
 		}

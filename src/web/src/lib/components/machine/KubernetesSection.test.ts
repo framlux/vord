@@ -92,6 +92,34 @@ describe('KubernetesSection', () => {
 			expect(screen.getByTestId('kubernetes-node-name-note')).toHaveTextContent('(from hostname)');
 		});
 
+		it('shows no node name for a host without a kubelet that is not a known node', () => {
+			render(KubernetesSection, {
+				props: {
+					kubernetes: makeKubernetes({
+						local: makeLocal({ nodeName: null, nodeNameSource: null, hasKubelet: false }),
+						node: null
+					})
+				}
+			});
+
+			expect(screen.queryByTestId('kubernetes-node-name')).not.toBeInTheDocument();
+			expect(screen.queryByTestId('kubernetes-node-name-note')).not.toBeInTheDocument();
+		});
+
+		it('names a host without a kubelet after its linked node, with no hostname note', () => {
+			render(KubernetesSection, {
+				props: {
+					kubernetes: makeKubernetes({
+						local: makeLocal({ nodeName: null, nodeNameSource: null, hasKubelet: false }),
+						node: makeNode({ nodeName: 'worker-9' })
+					})
+				}
+			});
+
+			expect(text('kubernetes-node-name')).toBe('worker-9');
+			expect(screen.queryByTestId('kubernetes-node-name-note')).not.toBeInTheDocument();
+		});
+
 		it('shows the kubelet version', () => {
 			render(KubernetesSection, { props: { kubernetes: makeKubernetes() } });
 

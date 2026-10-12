@@ -6,6 +6,7 @@
 	import type { KubernetesClusterDetailDto } from '$lib/api/types';
 	import { formatRelativeTime } from '$lib/utils/format';
 	import { canAdminMachines } from '$lib/utils/roles';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { ArrowLeft, TriangleAlert } from 'lucide-svelte';
 
@@ -85,67 +86,74 @@
 		</form>
 	{/if}
 
-	<div
-		class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
-	>
-		<div class="overflow-x-auto">
-			<table class="w-full text-left text-sm">
-				<thead>
-					<tr class="border-b border-surface-200 dark:border-surface-700">
-						<th scope="col" class={headerClass}>Node</th>
-						<th scope="col" class={headerClass}>Role</th>
-						<th scope="col" class={headerClass}>Kubelet</th>
-						<th scope="col" class={headerClass}>Machine</th>
-						<th scope="col" class={headerClass}>Cluster CA</th>
-						<th scope="col" class={headerClass}>Last report</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-					{#each cluster.nodes as node (node.id)}
-						<tr class="transition hover:bg-surface-100/60 dark:hover:bg-surface-700/50">
-							<td class="px-6 py-4 font-medium text-surface-900 dark:text-surface-100">
-								{node.nodeName}
-							</td>
-							<td class="px-6 py-4">
-								{#if node.controlPlane}
-									<span
-										class="inline-flex items-center rounded-full bg-primary-500/10 px-2.5 py-0.5 text-xs font-medium text-primary-600 dark:text-primary-400"
-									>
-										control plane
-									</span>
-								{/if}
-							</td>
-							<td class="px-6 py-4 font-mono text-xs text-surface-700 dark:text-surface-300">
-								{node.kubeletVersion ?? '---'}
-							</td>
-							<td class="px-6 py-4">
-								{#if node.machineId !== null}
-									<a
-										href="/machines/{node.machineId}"
-										class="font-semibold text-primary-500 hover:text-primary-600 hover:underline dark:text-primary-400 dark:hover:text-primary-300"
-									>
-										{node.machineName}
-									</a>
-								{:else}
-									<span class="text-surface-500 dark:text-surface-400">Not managed by Vord</span>
-								{/if}
-							</td>
-							<td class="px-6 py-4">
-								{#if node.fingerprintMismatch}
-									<span
-										class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-									>
-										CA mismatch
-									</span>
-								{/if}
-							</td>
-							<td class="px-6 py-4 text-surface-500 dark:text-surface-400">
-								{node.lastLocalReportAt === null ? '---' : formatRelativeTime(node.lastLocalReportAt)}
-							</td>
+	{#if cluster.nodes.length === 0}
+		<EmptyState
+			title="No nodes reported yet"
+			description="Nodes appear here once a Vord agent on one of them has reported."
+		/>
+	{:else}
+		<div
+			class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
+		>
+			<div class="overflow-x-auto">
+				<table class="w-full text-left text-sm">
+					<thead>
+						<tr class="border-b border-surface-200 dark:border-surface-700">
+							<th scope="col" class={headerClass}>Node</th>
+							<th scope="col" class={headerClass}>Role</th>
+							<th scope="col" class={headerClass}>Kubelet</th>
+							<th scope="col" class={headerClass}>Machine</th>
+							<th scope="col" class={headerClass}>Cluster CA</th>
+							<th scope="col" class={headerClass}>Last report</th>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
+					</thead>
+					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+						{#each cluster.nodes as node (node.id)}
+							<tr class="transition hover:bg-surface-100/60 dark:hover:bg-surface-700/50">
+								<td class="px-6 py-4 font-medium text-surface-900 dark:text-surface-100">
+									{node.nodeName}
+								</td>
+								<td class="px-6 py-4">
+									{#if node.controlPlane}
+										<span
+											class="inline-flex items-center rounded-full bg-primary-500/10 px-2.5 py-0.5 text-xs font-medium text-primary-600 dark:text-primary-400"
+										>
+											control plane
+										</span>
+									{/if}
+								</td>
+								<td class="px-6 py-4 font-mono text-xs text-surface-700 dark:text-surface-300">
+									{node.kubeletVersion ?? '---'}
+								</td>
+								<td class="px-6 py-4">
+									{#if node.machineId !== null}
+										<a
+											href="/machines/{node.machineId}"
+											class="font-semibold text-primary-500 hover:text-primary-600 hover:underline dark:text-primary-400 dark:hover:text-primary-300"
+										>
+											{node.machineName}
+										</a>
+									{:else}
+										<span class="text-surface-500 dark:text-surface-400">Not managed by Vord</span>
+									{/if}
+								</td>
+								<td class="px-6 py-4">
+									{#if node.fingerprintMismatch}
+										<span
+											class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+										>
+											CA mismatch
+										</span>
+									{/if}
+								</td>
+								<td class="px-6 py-4 text-surface-500 dark:text-surface-400">
+									{node.lastLocalReportAt === null ? '---' : formatRelativeTime(node.lastLocalReportAt)}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		</div>
-	</div>
+	{/if}
 </div>
