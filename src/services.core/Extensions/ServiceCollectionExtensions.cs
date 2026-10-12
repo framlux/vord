@@ -178,6 +178,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IPartitionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITenantDeletionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IKubernetesInventoryRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddSingleton<IServerSettingsReader, ServerSettingsReader>();
 
         return services;
