@@ -5,6 +5,7 @@
 using System.Text.RegularExpressions;
 using FastEndpoints;
 using FluentValidation;
+using Framlux.FleetManagement.Services.Core.Commands;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Commands;
 
@@ -67,6 +68,14 @@ public sealed partial class CommandSendValidator : Validator<CommandSendRequest>
         RuleFor(x => x.ExpiresAt)
             .GreaterThan(x => x.Timestamp)
             .WithMessage("Expiry must be after timestamp");
+
+        // The agent reads params as a map of strings and refuses a value of any other type or a repeated
+        // key, so a request carrying either is refused here instead of queueing a command that cannot run.
+        // Absent or blank params mean none and are left alone.
+        RuleFor(x => x.Params)
+            .Must(commandParams => CommandParameters.TryParse(commandParams, out _))
+            .WithMessage("Params must be a JSON object of string values")
+            .When(x => string.IsNullOrWhiteSpace(x.Params) == false);
     }
 
     private static bool IsValidBase64(string value)

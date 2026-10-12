@@ -20,6 +20,9 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 /// idempotent and label-checked, so it deliberately asks no more than enrol: it can clean up an
 /// orphaned install whose server-side state has already been collected.</item>
 /// <item>Unenrol needs a machine that is a reporter candidate or whose latest report says it is enrolled.</item>
+/// <item>Uninstall on a host whose agent has remote commands switched off needs that same evidence of
+/// enrolment. The command skips the capability check so a host that enrolled can still be cleaned up, and
+/// this keeps it from reaching a control plane whose owner switched commands off without ever enrolling.</item>
 /// <item>All three take no parameters.</item>
 /// </list>
 /// </remarks>
@@ -29,6 +32,7 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     private const string NoParametersMessage = "This command takes no parameters";
     private const string CannotEnrolMessage = "Only control-plane machines with an admin credential can enrol";
     private const string NotEnrolledMessage = "This machine is not an enrolled reporter";
+    private const string UninstallNeedsEnrolmentMessage = "This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it";
 
     /// <summary>
     /// How old a local report may be and still describe the machine. It is the window the machine page
@@ -59,7 +63,7 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
 
     /// <inheritdoc/>
     public async Task<ServiceResult<bool>> CheckAsync(
-        int tenantId, Machine machine, string commandType, string? commandParams, CancellationToken ct)
+        int tenantId, Machine machine, string commandType, string? commandParams, bool remoteCommandsEnabled, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(commandType);
@@ -101,12 +105,24 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
             return await CheckUnenrolAsync(tenantId, machine.Id, report, ct);
         }
 
-        if (CanEnrol(report))
+        if (CanEnrol(report) == false)
         {
-            return ServiceResult<bool>.Ok(true);
+            return ServiceResult<bool>.BadRequest(CannotEnrolMessage);
         }
 
-        return ServiceResult<bool>.BadRequest(CannotEnrolMessage);
+        // The capability check does not apply to uninstall, so this is the only place a host whose remote
+        // commands are off is asked whether it has anything of ours to remove.
+        bool isUninstall = string.Equals(kubernetesType, KubernetesCommandTypes.Uninstall, StringComparison.Ordinal);
+        if (isUninstall && (remoteCommandsEnabled == false))
+        {
+            bool enrolled = await HasEnrolmentEvidenceAsync(tenantId, machine.Id, report, ct);
+            if (enrolled == false)
+            {
+                return ServiceResult<bool>.BadRequest(UninstallNeedsEnrolmentMessage);
+            }
+        }
+
+        return ServiceResult<bool>.Ok(true);
     }
 
     /// <summary>
@@ -122,18 +138,29 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     private async Task<ServiceResult<bool>> CheckUnenrolAsync(
         int tenantId, long machineId, KubernetesNodePayload? report, CancellationToken ct)
     {
-        if ((report is not null) && report.ReporterEnrolled)
-        {
-            return ServiceResult<bool>.Ok(true);
-        }
-
-        KubernetesReporterCandidate? candidate = await _repository.GetCandidateForMachineAsync(tenantId, machineId, ct);
-        if (candidate is not null)
+        if (await HasEnrolmentEvidenceAsync(tenantId, machineId, report, ct))
         {
             return ServiceResult<bool>.Ok(true);
         }
 
         return ServiceResult<bool>.BadRequest(NotEnrolledMessage);
+    }
+
+    /// <summary>
+    /// Reports whether the machine ever enrolled as a reporter: its latest report says it is enrolled, or it
+    /// has a candidate row. The report is tried first because it costs no further read.
+    /// </summary>
+    private async Task<bool> HasEnrolmentEvidenceAsync(
+        int tenantId, long machineId, KubernetesNodePayload? report, CancellationToken ct)
+    {
+        if ((report is not null) && report.ReporterEnrolled)
+        {
+            return true;
+        }
+
+        KubernetesReporterCandidate? candidate = await _repository.GetCandidateForMachineAsync(tenantId, machineId, ct);
+
+        return candidate is not null;
     }
 
     /// <summary>

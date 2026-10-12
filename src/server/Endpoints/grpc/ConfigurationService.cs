@@ -212,14 +212,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
                 MachineId = cmd.MachineId,
             };
 
-            if (string.IsNullOrEmpty(cmd.Params) == false)
-            {
-                using JsonDocument paramsDoc = JsonDocument.Parse(cmd.Params);
-                foreach (JsonProperty prop in paramsDoc.RootElement.EnumerateObject())
-                {
-                    agentCmd.Params[prop.Name] = prop.Value.GetString() ?? string.Empty;
-                }
-            }
+            CopyParams(cmd, agentCmd);
 
             response.Commands.Add(agentCmd);
             deliveredIds.Add(cmd.CommandId);
@@ -232,6 +225,56 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// Copies a stored command's parameters onto the command sent to the agent. The endpoint only stores an
+    /// object of string values, but a row written any other way must not stop the machine's other pending
+    /// commands being delivered, so nothing here throws. A value that is not a string goes out as its raw
+    /// JSON text, which the agent's binding check then rejects because it differs from what was signed, and
+    /// parameters that are not a JSON object go out empty. Either case logs a warning naming the command.
+    /// </summary>
+    private void CopyParams(RemoteCommand stored, AgentCommand agentCommand)
+    {
+        if (string.IsNullOrEmpty(stored.Params))
+        {
+            return;
+        }
+
+        try
+        {
+            using JsonDocument paramsDoc = JsonDocument.Parse(stored.Params);
+            if (paramsDoc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                _logger.LogWarning("Stored params of command {CommandId} are not a JSON object; delivering it with no params", stored.CommandId);
+
+                return;
+            }
+
+            bool allStrings = true;
+            foreach (JsonProperty prop in paramsDoc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.String)
+                {
+                    agentCommand.Params[prop.Name] = prop.Value.GetString() ?? string.Empty;
+                }
+                else
+                {
+                    agentCommand.Params[prop.Name] = prop.Value.GetRawText();
+                    allStrings = false;
+                }
+            }
+
+            if (allStrings == false)
+            {
+                _logger.LogWarning("Stored params of command {CommandId} have a value that is not a string; delivering its raw text", stored.CommandId);
+            }
+        }
+        catch (JsonException ex)
+        {
+            agentCommand.Params.Clear();
+            _logger.LogWarning(ex, "Stored params of command {CommandId} are not valid JSON; delivering it with no params", stored.CommandId);
+        }
     }
 
     /// <summary>

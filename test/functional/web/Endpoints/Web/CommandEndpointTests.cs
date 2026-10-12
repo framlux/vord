@@ -178,27 +178,42 @@ public sealed class CommandEndpointTests
         await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
     }
 
+    /// <summary>
+    /// Builds a command request whose canonical payload is signed with the given key. The payload carries
+    /// the command type and parameters the request carries, so the server finds them matching unless a
+    /// test overrides what was signed. The server compares only those two fields with the request, so the
+    /// other signed fields are placeholders.
+    /// </summary>
     private static object BuildCommandRequest(
         long machineId,
         int signingKeyId,
         NSec.Cryptography.Key privateKey,
         string? commandId = null,
         string commandType = "reboot",
-        string? commandParams = null)
+        string? commandParams = null,
+        string? signedCommandType = null,
+        string? signedParamsJson = null)
     {
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
-        string payload = "{}";
+        string id = commandId ?? Guid.NewGuid().ToString("D");
+        string nonce = Guid.NewGuid().ToString("N");
+        string payload = TestCanonicalPayload.Build(
+            signedCommandType ?? commandType,
+            signedParamsJson ?? (string.IsNullOrWhiteSpace(commandParams) ? "{}" : commandParams),
+            id,
+            nonce,
+            machineId);
         byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(payload);
         byte[] signature = algorithm.Sign(privateKey, payloadBytes);
 
         return new
         {
-            CommandId = commandId ?? Guid.NewGuid().ToString("D"),
+            CommandId = id,
             MachineId = machineId,
             SigningKeyId = signingKeyId,
             CommandType = commandType,
             Params = commandParams,
-            Nonce = Guid.NewGuid().ToString("N"),
+            Nonce = nonce,
             Signature = Convert.ToBase64String(signature),
             CanonicalPayload = payload,
             Timestamp = DateTimeOffset.UtcNow,
@@ -706,7 +721,7 @@ public sealed class CommandEndpointTests
             .Build();
 
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
-        string payload = "{}";
+        string payload = TestCanonicalPayload.Build(string.Empty);
         byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(payload);
         byte[] signature = algorithm.Sign(privateKey, payloadBytes);
 
@@ -1017,21 +1032,298 @@ public sealed class CommandEndpointTests
     }
 
     [Test]
-    public async Task SubmitCommand_KubernetesCommandOnAProTenant_StillReturns403WithTheTeamMessage()
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_enrol")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_unenrol")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_uninstall")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_enrol")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_unenrol")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_uninstall")]
+    public async Task SubmitCommand_ReporterCommandFromATenantBelowTeam_IsStoredForAnEligibleHost(SubscriptionTier tier, string commandType)
     {
-        // Intent: the Team subscription gate on the endpoint is unchanged and runs before eligibility.
+        // Intent: cluster reporting is open to every tier. A valid signed command for an eligible host is
+        // accepted and stored whatever the tenant pays for, and no Team message is involved.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, tier);
         await EnableCommandsCapability(factory, machineId);
-        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        RemoteCommand stored = await db.RemoteCommands.SingleAsync(c => c.MachineId == machineId);
+        await Assert.That(stored.CommandType).IsEqualTo(commandType);
+        await Assert.That(stored.Status).IsEqualTo(RemoteCommandStatus.Pending);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    public async Task SubmitCommand_ReporterCommandFromATenantBelowTeam_StillFacesEligibility(SubscriptionTier tier)
+    {
+        // Intent: opening the commands to every tier moves only the Team check. The service still refuses a
+        // host that cannot take the command, with its own reason.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, tier);
+        await EnableCommandsCapability(factory, machineId);
         HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync(
             "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol"));
 
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Only control-plane machines with an admin credential can enrol");
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    public async Task SubmitCommand_RequestNamesAReporterCommandButTheSignatureCoversAnotherType_IsRefusedAtSendTime(SubscriptionTier tier)
+    {
+        // Intent: the Team check judges the type the request names, and the agent runs the type that was
+        // signed. A tenant below Team that names a reporter command to get past the check while signing
+        // something else is refused, so the check can never be skipped by naming the wrong type.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, tier);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_enrol", signedCommandType: "reboot"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Canonical payload does not match the request");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_RequestNamesRebootOnAProTenantButTheSignatureCoversAReporterCommand_IsRefusedByTheTeamCheck()
+    {
+        // Intent: the type the request names decides the Team check, so naming a command that needs Team
+        // is refused for a Pro tenant whatever was signed.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, SubscriptionTier.Pro);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "reboot", signedCommandType: "k8s_reporter_enrol"));
+
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
-        await Assert.That(await response.Content.ReadAsStringAsync()).Contains("Team subscription");
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Remote commands require a Team subscription");
+    }
+
+    [Test]
+    public async Task SubmitCommand_PayloadSignsDifferentParamsThanTheRequest_Returns400AtSendTime()
+    {
+        // Intent: a params mismatch used to fail on the host, when the agent compared the delivered command
+        // with the signed one. The server now catches it when the command is sent.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "kill_process", commandParams: """{"pid":"42"}""", signedParamsJson: """{"pid":"43"}"""));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("Canonical payload does not match the request");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_NullParamsWithASignedEmptyObject_IsStored()
+    {
+        // Intent: this is exactly what the web sends, so the match must hold for it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "reboot", commandParams: null, signedParamsJson: "{}"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        RemoteCommand stored = await db.RemoteCommands.SingleAsync(c => c.MachineId == machineId);
+        await Assert.That(stored.Params).IsNull();
+    }
+
+    [Test]
+    [Arguments("""{"pid":42}""")]
+    [Arguments("""{"flag":true}""")]
+    [Arguments("""{"pid":null}""")]
+    [Arguments("""{"nested":{"a":"b"}}""")]
+    [Arguments("""{"list":["a"]}""")]
+    [Arguments("[]")]
+    [Arguments("\"text\"")]
+    [Arguments("not json")]
+    [Arguments("""{"pid":"1","pid":"2"}""")]
+    public async Task SubmitCommand_ParamsThatAreNotAnObjectOfStrings_Returns400WithTheParamsMessage(string commandParams)
+    {
+        // Intent: the agent refuses signed params that are not strings, so the server refuses the request
+        // with a validation error on Params instead of queueing a command that cannot run.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "kill_process", commandParams: commandParams, signedParamsJson: "{}"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await response.Content.ReadAsStringAsync()).Contains("Params must be a JSON object of string values");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_ParamsThatAreAnObjectOfStrings_AreStoredAsSent()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands",
+            BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "kill_process", commandParams: """{"pid":"42"}"""));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        RemoteCommand stored = await db.RemoteCommands.SingleAsync(c => c.MachineId == machineId);
+        await Assert.That(stored.Params).IsEqualTo("""{"pid":"42"}""");
+    }
+
+    [Test]
+    [Arguments("k8s_reporter_unenrol")]
+    [Arguments("k8s_reporter_uninstall")]
+    public async Task SubmitCommand_CleanupCommandOnAnEnrolledHostWithoutTheCommandsCapability_IsStored(string commandType)
+    {
+        // Intent: remote commands switched off on a host must not strand the reporter's objects in the
+        // cluster. A host that enrolled can still be sent the commands that remove them.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => (c.MachineId == machineId) && (c.CommandType == commandType))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UninstallOnAHostThatOnlyHasACandidateRowAndNoCommandsCapability_IsStored()
+    {
+        // Intent: a candidate row is evidence of enrolment, so it earns the cleanup bypass even when the
+        // host's latest report does not say it is enrolled.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        await SeedCandidateAsync(db, tenantId, machineId);
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UninstallOnAControlPlaneThatNeverEnrolledAndHasNoCommandsCapability_Returns400WithTheRemoteCommandsReason()
+    {
+        // Intent: skipping the capability check is for cleaning up what the reporter installed. A control
+        // plane that never enrolled has nothing to clean, so it is not sent a command it switched off.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response))
+            .IsEqualTo("This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UninstallOnAControlPlaneThatNeverEnrolledWithTheCommandsCapability_IsStored()
+    {
+        // Intent: with remote commands on nothing changed. Uninstall can still clean up an orphaned
+        // install whose server-side state was already collected.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolOnAHostThatNeverEnrolledAndHasNoCommandsCapability_Returns400NotAnEnrolledReporter()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: false));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response)).IsEqualTo("This machine is not an enrolled reporter");
+    }
+
+    [Test]
+    public async Task SubmitCommand_CleanupCommandOnAPausedHostWithoutTheCommandsCapability_Returns409()
+    {
+        // Intent: the agent does not poll while paused, so even a cleanup command is refused with the
+        // reason, and the capability bypass does not extend to it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long keptMachineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        long pausedMachineId = await SeedAuthorizedMachineAfter(db, tenantId, userId, signingKeyId);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await SeedLocalReportAsync(db, tenantId, pausedMachineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(pausedMachineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(keptMachineId).IsNotEqualTo(pausedMachineId);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == pausedMachineId)).IsEqualTo(0);
     }
 
     [Test]

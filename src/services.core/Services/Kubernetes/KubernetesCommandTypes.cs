@@ -18,4 +18,26 @@ public static class KubernetesCommandTypes
 
     /// <summary>Removes every Kubernetes object the reporter installed, and this host's reporter state.</summary>
     public const string Uninstall = "k8s_reporter_uninstall";
+
+    /// <summary>
+    /// Reports whether a command type is one of the three cluster reporter commands. A constant pattern on a
+    /// string compares ordinally, which is how the agent matches, so another spelling of one of them is not
+    /// a reporter command.
+    /// </summary>
+    /// <param name="type">The command type exactly as submitted.</param>
+    public static bool IsReporterCommand(string type)
+    {
+        return type is Enrol or Unenrol or Uninstall;
+    }
+
+    /// <summary>
+    /// Reports whether a command type removes the reporter: unenrol or uninstall, matched ordinally and
+    /// exactly. These can be sent to a host whose remote commands are switched off, because they only undo
+    /// what an earlier enrolment installed.
+    /// </summary>
+    /// <param name="type">The command type exactly as submitted.</param>
+    public static bool IsCleanupCommand(string type)
+    {
+        return type is Unenrol or Uninstall;
+    }
 }

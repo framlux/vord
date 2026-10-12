@@ -253,6 +253,78 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task GetPendingCommands_OneRowWithANumericParamAndOneGoodRow_DeliversBothAndMarksBothDelivered()
+    {
+        // A stored row whose params are not strings used to throw out of the whole poll, so one such row
+        // stranded every other command for the machine. Through the real authentication and storage, the
+        // poll now answers with both commands, the bad one carrying the number's own text for the agent
+        // to reject on binding.
+        using FunctionalTestFactory factory = new();
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+        string badCommandId = Guid.NewGuid().ToString("D");
+        string goodCommandId = Guid.NewGuid().ToString("D");
+        using (DatabaseContext db = factory.CreateDbContext())
+        {
+            int tenantId = await db.Machines.Where(m => m.Id == machineId).Select(m => m.TenantId).SingleAsync();
+            int userId = await db.InsertWithInt32IdentityAsync(new UserAccount
+            {
+                ExternalId = $"ext-{Guid.NewGuid():N}",
+                Username = $"user-{Guid.NewGuid():N}@example.com",
+                CreatedAt = DateTimeOffset.UtcNow,
+                CreatedByUserId = 1,
+                IsActive = true,
+                IsSystem = false,
+                IsGlobalAdmin = false,
+            });
+            int signingKeyId = await db.InsertWithInt32IdentityAsync(new UserSigningKey
+            {
+                UserId = userId,
+                TenantId = tenantId,
+                Label = "Test Signing Key",
+                PublicKey = Convert.ToBase64String(new byte[32]),
+                PublicKeyFingerprint = Guid.NewGuid().ToString("N"),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+
+            foreach ((string commandId, string commandParams) in new[] { (badCommandId, """{"pid":42}"""), (goodCommandId, """{"pid":"42"}""") })
+            {
+                await db.InsertAsync(new RemoteCommand
+                {
+                    CommandId = commandId,
+                    TenantId = tenantId,
+                    MachineId = machineId,
+                    UserId = userId,
+                    SigningKeyId = signingKeyId,
+                    CommandType = "kill_process",
+                    Params = commandParams,
+                    Nonce = Guid.NewGuid().ToString("N"),
+                    Signature = Convert.ToBase64String(new byte[64]),
+                    CanonicalPayload = "{}",
+                    Timestamp = DateTimeOffset.UtcNow,
+                    ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                    Status = RemoteCommandStatus.Pending,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+        }
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        GetPendingCommandsResponse response = await client.GetPendingCommandsAsync(
+            new GetPendingCommandsRequest { MachineId = machineId },
+            headers: new Metadata { { "x-api-key", apiKey } });
+
+        await Assert.That(response.Commands.Count).IsEqualTo(2);
+        AgentCommand bad = response.Commands.Single(c => c.Id == badCommandId);
+        AgentCommand good = response.Commands.Single(c => c.Id == goodCommandId);
+        await Assert.That(bad.Params["pid"]).IsEqualTo("42");
+        await Assert.That(good.Params["pid"]).IsEqualTo("42");
+        using DatabaseContext verifyDb = factory.CreateDbContext();
+        await Assert.That(await verifyDb.RemoteCommands.CountAsync(c => (c.MachineId == machineId) && (c.Status == RemoteCommandStatus.Pending))).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task AgentPing_HostBeyondTheMachineLimit_ReportsPausedAndStillRecordsTheHeartbeat()
     {
         // With a limit of one machine the oldest host is told it is active and the newer one is told it

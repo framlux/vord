@@ -19,6 +19,7 @@ namespace Framlux.FleetManagement.Services.Core.Commands;
 public sealed class RemoteCommandService
 {
     private const string HostPausedMessage = "Host is paused: your plan's host limit is reached.";
+    private const string PayloadMismatchMessage = "Canonical payload does not match the request";
 
     private static readonly HashSet<string> AllowedCommandTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -81,7 +82,7 @@ public sealed class RemoteCommandService
     }
 
     /// <summary>
-    /// Submits a signed remote command. The server verifies the Ed25519 signature, command type, machine ownership, and nonce uniqueness.
+    /// Submits a signed remote command. The server verifies the Ed25519 signature, that the signed payload names the same command type and parameters as the request, the command type, machine ownership, and nonce uniqueness.
     /// </summary>
     /// <param name="command">The remote command to submit</param>
     /// <param name="cancellationToken">Token used to cancel async calls</param>
@@ -142,6 +143,14 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.BadRequest("Signature verification failed");
         }
 
+        // The signature vouches for the payload, and the agent runs the command type and parameters it
+        // reads from it. The checks that follow judge the request's own fields, so the request has to say
+        // the same thing the payload does, or a command could be judged as one type and run as another.
+        if (CanonicalPayloadBinding.Matches(command.CanonicalPayload, command.CommandType, command.Params) == false)
+        {
+            return ServiceResult<RemoteCommand>.BadRequest(PayloadMismatchMessage);
+        }
+
         // Validate target machine belongs to user's tenant.
         Machine? machine = await _machineRepository.GetActiveMachineByIdAsync(command.MachineId, command.TenantId, cancellationToken);
         if (machine is null)
@@ -156,12 +165,18 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
         }
 
+        // The capability bits are read once. The eligibility check below needs to know whether remote
+        // commands are on for the uninstall rule, and the capability check further down judges the same
+        // value, so the two can never disagree about a machine.
+        ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
+        bool remoteCommandsEnabled = AgentCapabilities.HasRemoteCommands(capabilities);
+
         // Every command is handed to the Kubernetes eligibility check, which recognises its own types by
         // itself and lets the rest through, so no spelling of a type can bypass it. It follows the key
         // authorization so that what a machine reports about itself is only revealed to a caller who
         // could have sent it a command.
         ServiceResult<bool> eligibility = await _kubernetesEligibility.CheckAsync(
-            command.TenantId, machine, command.CommandType, command.Params, cancellationToken);
+            command.TenantId, machine, command.CommandType, command.Params, remoteCommandsEnabled, cancellationToken);
         if (eligibility.IsSuccess == false)
         {
             return ServiceResult<RemoteCommand>.BadRequest(eligibility.ErrorMessage ?? "This machine cannot be sent this command");
@@ -176,9 +191,11 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.Conflict(HostPausedMessage);
         }
 
-        // Reject commands when the agent has not reported the remote commands capability.
-        ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
-        if (AgentCapabilities.HasRemoteCommands(capabilities) == false)
+        // Reject commands when the agent has not reported the remote commands capability. The two commands
+        // that remove the reporter are exempt, so a host whose remote commands were switched off after it
+        // enrolled can still be cleaned up. The eligibility check above already required that such a
+        // host enrolled, and it refuses every spelling that is not exactly one of these types.
+        if ((remoteCommandsEnabled == false) && (KubernetesCommandTypes.IsCleanupCommand(command.CommandType) == false))
         {
             return ServiceResult<RemoteCommand>.BadRequest("Remote commands are not enabled on this machine");
         }

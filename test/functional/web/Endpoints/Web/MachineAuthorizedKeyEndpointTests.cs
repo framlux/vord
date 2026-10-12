@@ -179,41 +179,29 @@ public sealed class MachineAuthorizedKeyEndpointTests
     }
 
     [Test]
-    public async Task AddAuthorizedKey_FreeTier_Returns403WithSubscriptionMessage()
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    public async Task AddAuthorizedKey_FreeOrProTier_Succeeds(SubscriptionTier tier)
     {
+        // Intent: authorising a key grants nothing by itself, because sending a command still goes through
+        // the per-type Team check on POST /commands. A tenant below Team has to be able to authorise its key
+        // for a host, or it could never send the cluster reporter commands that are open to every tier.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId, int signingKeyId) = await SeedEnvironment(
-            db, tier: SubscriptionTier.Free);
+        (int tenantId, int userId, long machineId, int signingKeyId) = await SeedEnvironment(db, tier: tier);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync(
             $"/api/v1/machines/{machineId}/authorized-keys",
             new { SigningKeyId = signingKeyId });
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Team subscription");
-    }
-
-    [Test]
-    public async Task AddAuthorizedKey_ProTier_Returns403WithSubscriptionMessage()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId, int signingKeyId) = await SeedEnvironment(
-            db, tier: SubscriptionTier.Pro);
-        HttpClient client = BuildClient(factory, tenantId, userId);
-
-        HttpResponseMessage response = await client.PostAsJsonAsync(
-            $"/api/v1/machines/{machineId}/authorized-keys",
-            new { SigningKeyId = signingKeyId });
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
-
-        string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Team subscription");
+        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).DoesNotContain("Team subscription");
+        await Assert.That(await db.MachineAuthorizedKeys.CountAsync(k => k.MachineId == machineId && k.SigningKeyId == signingKeyId))
+            .IsEqualTo(1);
     }
 
     [Test]

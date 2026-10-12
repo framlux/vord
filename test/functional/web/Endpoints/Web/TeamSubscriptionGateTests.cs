@@ -30,7 +30,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// update are <i>also</i> Pro-tagged, so a Free-row tenant is refused by the Pro gate whether or
 /// not the Team gate exists — a Free-row test on those two would pass with the Team pre-processor
 /// unregistered and prove nothing. They use a Pro/Active row, which clears the Pro gate and leaves
-/// only the Team gate able to refuse. The three endpoints carrying no other gate use a Free row.
+/// only the Team gate able to refuse. The audit log endpoint carries no other gate and uses a Free row.
+/// </para>
+/// <para>
+/// Command send is the exception to the tag: whether it needs Team depends on the command type, which
+/// is in the request body, so its handler makes the check after validation. Its tests are below and
+/// pin both the type rule and the order.
 /// </para>
 /// </remarks>
 public sealed class TeamSubscriptionGateTests
@@ -105,6 +110,24 @@ public sealed class TeamSubscriptionGateTests
         return await db.InsertWithInt64IdentityAsync(machine);
     }
 
+    private static async Task<int> SeedSigningKey(DatabaseContext db, int tenantId, int userId)
+    {
+        byte[] keyBytes = new byte[32];
+        Random.Shared.NextBytes(keyBytes);
+
+        UserSigningKey signingKey = new()
+        {
+            UserId = userId,
+            TenantId = tenantId,
+            Label = $"Team Gate Key {Guid.NewGuid():N}",
+            PublicKey = Convert.ToBase64String(keyBytes),
+            PublicKeyFingerprint = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(keyBytes)),
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+
+        return await db.InsertWithInt32IdentityAsync(signingKey);
+    }
+
     private static HttpClient BuildClient(FunctionalTestFactory factory, int tenantId, int userId)
     {
         return new AuthenticatedClientBuilder(factory)
@@ -133,24 +156,29 @@ public sealed class TeamSubscriptionGateTests
     }
 
     /// <summary>
-    /// A structurally valid command. It never executes — the gate refuses it first — but keeping it
-    /// valid means a 403 assertion cannot be satisfied by a malformed payload instead of the tier.
+    /// A structurally valid command. The signing key it names does not exist, so a request that gets past
+    /// the Team check is answered by the command service with a 400 about the key, while one the check
+    /// refuses is answered with a 403 before the service is asked. Keeping the body valid means neither
+    /// answer can come from request validation instead.
     /// </summary>
-    private static object BuildCommand()
+    private static object BuildCommand(string commandType = "reboot")
     {
         return new
         {
             CommandId = Guid.NewGuid().ToString("D"),
             MachineId = 1L,
             SigningKeyId = 1,
-            CommandType = "reboot",
+            CommandType = commandType,
             Nonce = Guid.NewGuid().ToString("N"),
             Signature = Convert.ToBase64String("not-a-real-signature"u8.ToArray()),
-            CanonicalPayload = "{}",
+            CanonicalPayload = TestCanonicalPayload.Build(commandType),
             Timestamp = DateTimeOffset.UtcNow,
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
         };
     }
+
+    private const string TeamMessage = "Remote commands require a Team subscription";
+    private const string UnknownSigningKeyMessage = "Signing key not found or does not belong to tenant";
 
     private static async Task<string> ReadMessage(HttpResponseMessage response)
     {
@@ -204,35 +232,115 @@ public sealed class TeamSubscriptionGateTests
     }
 
     [Test]
-    public async Task MachineAuthorizedKeyAdd_FreeTenant_IsRefused()
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    public async Task MachineAuthorizedKeyAdd_BelowTeam_IsAllowedThrough(SubscriptionTier tier)
     {
+        // Intent: authorising a key is no longer a Team feature. It grants nothing on its own, because
+        // sending a command still faces the per-type check, so a tenant below Team can authorise the key it
+        // needs for the cluster reporter commands.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Free);
+        (int tenantId, int userId) = await SeedTenant(db, tier);
+        long machineId = await SeedMachine(db, tenantId);
+        int signingKeyId = await SeedSigningKey(db, tenantId, userId);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync(
-            "/api/v1/machines/1/authorized-keys",
-            new { SigningKeyId = 1 });
+            $"/api/v1/machines/{machineId}/authorized-keys",
+            new { SigningKeyId = signingKeyId });
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
-        await Assert.That(await ReadMessage(response))
-            .IsEqualTo("Remote commands require a Team subscription");
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
     }
 
     [Test]
-    public async Task CommandSend_FreeTenant_IsRefused()
+    [Arguments(SubscriptionTier.Free, "reboot")]
+    [Arguments(SubscriptionTier.Free, "kill_process")]
+    [Arguments(SubscriptionTier.Free, "kill_session")]
+    [Arguments(SubscriptionTier.Free, "check_updates")]
+    [Arguments(SubscriptionTier.Free, "install_updates")]
+    [Arguments(SubscriptionTier.Pro, "reboot")]
+    [Arguments(SubscriptionTier.Pro, "kill_process")]
+    [Arguments(SubscriptionTier.Pro, "kill_session")]
+    [Arguments(SubscriptionTier.Pro, "check_updates")]
+    [Arguments(SubscriptionTier.Pro, "install_updates")]
+    public async Task CommandSend_EveryOtherCommandBelowTeam_IsRefusedWithTheTeamMessageBeforeTheServiceIsAsked(SubscriptionTier tier, string commandType)
     {
+        // Intent: only the three cluster reporter commands are open to every tier. The signing key here does
+        // not exist, so a 403 proves the check ran ahead of the service, which would have answered 400.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Free);
+        (int tenantId, int userId) = await SeedTenant(db, tier);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand());
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand(commandType));
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
-        await Assert.That(await ReadMessage(response))
-            .IsEqualTo("Remote commands require a Team subscription");
+        await Assert.That(await ReadMessage(response)).IsEqualTo(TeamMessage);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free, "K8S_REPORTER_ENROL")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_Unenrol")]
+    [Arguments(SubscriptionTier.Free, "K8s_Reporter_Uninstall")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_enrol ")]
+    [Arguments(SubscriptionTier.Pro, "K8S_REPORTER_ENROL")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_Unenrol")]
+    [Arguments(SubscriptionTier.Pro, "K8s_Reporter_Uninstall")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_enrol ")]
+    public async Task CommandSend_NonLowercaseSpellingOfAReporterCommandBelowTeam_IsRefusedWithTheTeamMessage(SubscriptionTier tier, string commandType)
+    {
+        // Intent: the agent matches the type exactly, so a spelling that is not exactly one of the three
+        // is not a reporter command and must not borrow their exemption from the Team check.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, tier);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand(commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        await Assert.That(await ReadMessage(response)).IsEqualTo(TeamMessage);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_enrol")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_unenrol")]
+    [Arguments(SubscriptionTier.Free, "k8s_reporter_uninstall")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_enrol")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_unenrol")]
+    [Arguments(SubscriptionTier.Pro, "k8s_reporter_uninstall")]
+    public async Task CommandSend_ReporterCommandBelowTeam_PassesTheGateAndReachesTheService(SubscriptionTier tier, string commandType)
+    {
+        // Intent: cluster reporting works on every tier, so the three reporter commands are not stopped by
+        // the Team check. The service answers 400 about the signing key, which does not exist here, and that
+        // answer can only come from the service.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, tier);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand(commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ReadMessage(response)).IsEqualTo(UnknownSigningKeyMessage);
+    }
+
+    [Test]
+    [Arguments("reboot")]
+    [Arguments("k8s_reporter_enrol")]
+    public async Task CommandSend_TeamTenant_PassesTheGateForEveryCommand(string commandType)
+    {
+        // Intent: without this the suite would still pass for a check that refused every tenant.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", BuildCommand(commandType));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ReadMessage(response)).IsEqualTo(UnknownSigningKeyMessage);
     }
 
     [Test]
@@ -268,17 +376,12 @@ public sealed class TeamSubscriptionGateTests
     }
 
     /// <summary>
-    /// Records where the gate sits relative to request validation, measured rather than assumed.
+    /// Pins where the command Team check sits relative to request validation: after it. The check lives in
+    /// the handler because it needs the command type, so a request that fails validation is answered with
+    /// the validation error whatever the tenant's tier, and only a valid request is then judged by tier.
     /// </summary>
-    /// <remarks>
-    /// Global pre-processors run <b>before</b> request validation here, so a non-Team tenant sending
-    /// an invalid body now gets 403 rather than the 400 it got while the check lived in the handler.
-    /// That is a deliberate, observed change and it converges on the existing pattern: the Pro-tagged
-    /// endpoints have always answered 403 to an invalid body from an ungated tenant. The tier is not
-    /// a secret, so reporting it before validating the payload leaks nothing.
-    /// </remarks>
     [Test]
-    public async Task CommandSend_FreeTenantWithInvalidBody_IsRefusedByTheGateBeforeValidation()
+    public async Task CommandSend_FreeTenantWithInvalidBody_GetsTheValidationErrorNotTheTeamRefusal()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -290,11 +393,44 @@ public sealed class TeamSubscriptionGateTests
             CommandId = "not-a-uuid",
             MachineId = 0L,
             SigningKeyId = 0,
-            CommandType = "",
+            CommandType = "reboot",
             Nonce = "short",
             Signature = "!!!not-base64!!!",
+            CanonicalPayload = "{}",
+            Timestamp = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
         });
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(body).Contains("Command ID must be a valid UUID");
+        await Assert.That(body).DoesNotContain("Team subscription");
+    }
+
+    [Test]
+    public async Task CommandSend_ProTenantWithMalformedParams_GetsTheParamsValidationErrorNotTheTeamRefusal()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Pro);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", new
+        {
+            CommandId = Guid.NewGuid().ToString("D"),
+            MachineId = 1L,
+            SigningKeyId = 1,
+            CommandType = "reboot",
+            Params = """{"pid":42}""",
+            Nonce = Guid.NewGuid().ToString("N"),
+            Signature = Convert.ToBase64String("not-a-real-signature"u8.ToArray()),
+            CanonicalPayload = TestCanonicalPayload.Build("reboot"),
+            Timestamp = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+        });
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(body).Contains("Params must be a JSON object of string values");
     }
 }

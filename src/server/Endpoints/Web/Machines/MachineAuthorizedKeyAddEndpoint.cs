@@ -26,6 +26,11 @@ public sealed class MachineAuthorizedKeyAddRequest
 /// <summary>
 /// Authorizes a signing key for a specific machine, enabling remote command execution.
 /// </summary>
+/// <remarks>
+/// Available on every tier. An authorization grants nothing by itself, because sending a command still
+/// goes through the per-type Team check on <c>POST /commands</c>, and the cluster reporter commands that
+/// every tier may send need an authorized key like any other.
+/// </remarks>
 public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorizedKeyAddRequest, ApiResponse<MachineAuthorizedKeyDto>>
 {
     private readonly MachineAuthorizedKeyService _authorizedKeyService;
@@ -45,8 +50,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     {
         Post("/machines/{machineId}/authorized-keys");
         Policies(AuthorizationPolicies.MachineAdmin);
-        Tags(Services.Billing.EndpointTags.RequiresTeamSubscription, EndpointTags.RequiresTenant);
-        Options(b => b.WithMetadata(new RequiresTeamFeatureMessage("Remote commands require a Team subscription")));
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 

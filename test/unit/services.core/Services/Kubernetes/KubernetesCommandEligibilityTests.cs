@@ -31,6 +31,7 @@ public sealed class KubernetesCommandEligibilityTests
     private const string NoParametersMessage = "This command takes no parameters";
     private const string CannotEnrolMessage = "Only control-plane machines with an admin credential can enrol";
     private const string NotEnrolledMessage = "This machine is not an enrolled reporter";
+    private const string UninstallNeedsEnrolmentMessage = "This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it";
 
     private static readonly DateTimeOffset Now = new(2026, 10, 12, 9, 30, 0, TimeSpan.Zero);
 
@@ -94,9 +95,10 @@ public sealed class KubernetesCommandEligibilityTests
         _repository.GetCandidateForMachineAsync(TenantId, MachineId, Arg.Any<CancellationToken>()).Returns(candidate);
     }
 
-    private async Task<ServiceResult<bool>> CheckAsync(string commandType, string? commandParams = null)
+    private async Task<ServiceResult<bool>> CheckAsync(string commandType, string? commandParams = null, bool remoteCommandsEnabled = true)
     {
-        return await CreateEligibility().CheckAsync(TenantId, BuildMachine(), commandType, commandParams, CancellationToken.None);
+        return await CreateEligibility().CheckAsync(
+            TenantId, BuildMachine(), commandType, commandParams, remoteCommandsEnabled, CancellationToken.None);
     }
 
     private async Task AssertRejectedAsync(ServiceResult<bool> result, string message)
@@ -338,6 +340,113 @@ public sealed class KubernetesCommandEligibilityTests
         await AssertRejectedAsync(result, CannotEnrolMessage);
     }
 
+    // ========== Uninstall on a host with remote commands off ==========
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOffAndNeverEnrolled_IsRejectedWithTheRemoteCommandsReason()
+    {
+        // Intent: the capability check does not apply to a cleanup command, so a host with remote commands
+        // off can still be cleaned up, but only when it ever enrolled. A control plane that never did has
+        // nothing of ours to remove, and sending it the command would be an uninstall from a host whose
+        // owner switched remote commands off.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(false);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, UninstallNeedsEnrolmentMessage);
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOffAndACandidateRow_IsEligible()
+    {
+        // Intent: a candidate row is evidence the host enrolled even when its latest report does not say
+        // so, for instance because the agent was reconfigured after enrolling.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(true);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOffAndTheReportSaysEnrolled_IsEligibleWithoutLookingForACandidateRow()
+    {
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true));
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await _repository.DidNotReceiveWithAnyArgs().GetCandidateForMachineAsync(default, default, default);
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOnAndNeverEnrolled_IsStillEligible()
+    {
+        // Intent: with remote commands on nothing changes. Uninstall stays no stricter than enrol so it can
+        // clean up an orphaned install whose server-side state was already collected, and it does not even
+        // look for a candidate row.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(false);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: true);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await _repository.DidNotReceiveWithAnyArgs().GetCandidateForMachineAsync(default, default, default);
+    }
+
+    [Test]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    public async Task Uninstall_RemoteCommandsOffAndNotAnEligibleControlPlane_IsRejectedWithTheEnrolReason(bool controlPlane, bool adminCredentialPresent)
+    {
+        // Intent: the credential rule comes first, so an enrolled candidate that lacks an admin credential
+        // still hears about the credential, not about remote commands.
+        GivenLatestPayload(PayloadJson(controlPlane: controlPlane, adminCredentialPresent: adminCredentialPresent, reporterEnrolled: true));
+        GivenCandidate(true);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, CannotEnrolMessage);
+    }
+
+    [Test]
+    public async Task Enrol_RemoteCommandsOffAndNeverEnrolled_IsEligibleHere()
+    {
+        // Intent: the capability refusal for enrol belongs to the capability check, which names its own
+        // reason. This check judges the machine's Kubernetes state only.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(false);
+
+        ServiceResult<bool> result = await CheckAsync(Enrol, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task Unenrol_RemoteCommandsOffAndNotEnrolled_IsRejected()
+    {
+        // Intent: unenrol always needed evidence of enrolment, whatever the host's remote commands switch.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(false);
+
+        ServiceResult<bool> result = await CheckAsync(Unenrol, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, NotEnrolledMessage);
+    }
+
+    [Test]
+    public async Task Unenrol_RemoteCommandsOffAndACandidateRow_IsEligible()
+    {
+        GivenLatestPayload(null);
+        GivenCandidate(true);
+
+        ServiceResult<bool> result = await CheckAsync(Unenrol, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
     // ========== Unenrol ==========
 
     [Test]
@@ -469,7 +578,7 @@ public sealed class KubernetesCommandEligibilityTests
         GivenCandidate(true);
 
         ServiceResult<bool> result = await CreateEligibility().CheckAsync(
-            TenantId, BuildMachine(tenantId: TenantId + 1), commandType, null, CancellationToken.None);
+            TenantId, BuildMachine(tenantId: TenantId + 1), commandType, null, true, CancellationToken.None);
 
         await AssertRejectedAsync(result, message);
         await AssertNothingWasReadAsync();
@@ -481,7 +590,7 @@ public sealed class KubernetesCommandEligibilityTests
         // Intent: the tenant guard belongs to the Kubernetes commands only. The other commands are
         // not this class's business and keep their own checks in the service.
         ServiceResult<bool> result = await CreateEligibility().CheckAsync(
-            TenantId, BuildMachine(tenantId: TenantId + 1), "reboot", null, CancellationToken.None);
+            TenantId, BuildMachine(tenantId: TenantId + 1), "reboot", null, true, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -490,13 +599,13 @@ public sealed class KubernetesCommandEligibilityTests
     public async Task Check_NullMachine_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await CreateEligibility().CheckAsync(TenantId, null!, Enrol, null, CancellationToken.None));
+            await CreateEligibility().CheckAsync(TenantId, null!, Enrol, null, true, CancellationToken.None));
     }
 
     [Test]
     public async Task Check_NullCommandType_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await CreateEligibility().CheckAsync(TenantId, BuildMachine(), null!, null, CancellationToken.None));
+            await CreateEligibility().CheckAsync(TenantId, BuildMachine(), null!, null, true, CancellationToken.None));
     }
 }
