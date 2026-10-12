@@ -439,6 +439,61 @@ public class KubernetesClusterQueryRepositoryTests
     }
 
     [Test]
+    public async Task GetLatestKubernetesNodePayloads_WindowAndOrderFollowTheServersClockNotTheAgents()
+    {
+        // Intent: ReceivedAt comes from the agent's own clock, so it says nothing about how recent a
+        // report is. A machine whose clock runs slow, so that ReceivedAt is old but the server accepted
+        // the report a moment ago, must still be found; one whose clock runs fast, so that ReceivedAt
+        // is fresh but the server accepted the report long ago, must not be; and of two reports the
+        // one the server accepted last wins whatever the agent's timestamps say.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        int tenantId = await SeedTenantAsync(db);
+        long slowClock = await SeedMachineAsync(db, tenantId, "slow-clock");
+        long fastClock = await SeedMachineAsync(db, tenantId, "fast-clock");
+        long reordered = await SeedMachineAsync(db, tenantId, "reordered");
+        DateTimeOffset serverReceivedAfter = T0.AddDays(-7);
+        await InsertKubernetesTelemetryAsync(
+            db, tenantId, slowClock, 14, "slow-clock-report", receivedAt: serverReceivedAfter.AddHours(-1), serverReceivedAt: T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(
+            db, tenantId, fastClock, 14, "fast-clock-report", receivedAt: T0, serverReceivedAt: serverReceivedAfter.AddHours(-1));
+        await InsertKubernetesTelemetryAsync(
+            db, tenantId, reordered, 14, "accepted-first-but-stamped-later", receivedAt: T0, serverReceivedAt: T0.AddMinutes(-30));
+        await InsertKubernetesTelemetryAsync(
+            db, tenantId, reordered, 14, "accepted-last-but-stamped-earlier", receivedAt: T0.AddHours(-3), serverReceivedAt: T0.AddMinutes(-1));
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [slowClock, fastClock, reordered], serverReceivedAfter, CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(2);
+        await Assert.That(payloads[slowClock]).IsEqualTo("slow-clock-report");
+        await Assert.That(payloads.ContainsKey(fastClock)).IsFalse();
+        await Assert.That(payloads[reordered]).IsEqualTo("accepted-last-but-stamped-earlier");
+    }
+
+    [Test]
+    public async Task GetLatestKubernetesNodePayloads_ReportsAcceptedAtTheSameInstant_TheLaterRowWins()
+    {
+        // Intent: "latest" must be deterministic. When two reports of one machine were accepted at the
+        // same instant, the one stored last, with the higher id, is the answer, in whatever order
+        // the rows come back.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        int tenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId, "tie");
+        await InsertKubernetesTelemetryAsync(db, tenantId, machineId, 14, "stored-first", T0.AddMinutes(-2), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, machineId, 14, "stored-last", T0.AddMinutes(-3), T0.AddMinutes(-1));
+        await InsertKubernetesTelemetryAsync(db, tenantId, machineId, 14, "stored-before-the-tie", T0.AddMinutes(-9), T0.AddMinutes(-9));
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [machineId], T0.AddDays(-7), CancellationToken.None);
+
+        await Assert.That(payloads[machineId]).IsEqualTo("stored-last");
+    }
+
+    [Test]
     public async Task GetLatestKubernetesNodePayloads_NoMachineIds_ReturnsEmpty()
     {
         using TestDatabaseFactory dbFactory = new();

@@ -888,6 +888,100 @@ public sealed class RemoteCommandServiceTests
         await _kubernetesEligibility.DidNotReceiveWithAnyArgs().CheckAsync(default, default!, default!, default, default);
     }
 
+    [Test]
+    public async Task SubmitCommand_IneligibleAndPausedHost_GetsTheEligibilityRefusalNotThePauseConflict()
+    {
+        // Intent: the eligibility check comes before the pause check, so a refusal that no waiting can
+        // fix is not reported as a pause that might lift. The pause lookup is never made.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        _kubernetesEligibility
+            .CheckAsync(Arg.Any<int>(), Arg.Any<Machine>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(ServiceResult<bool>.BadRequest("This machine is not an enrolled reporter"));
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_unenrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("This machine is not an enrolled reporter");
+        await _quotaPause.DidNotReceiveWithAnyArgs().IsPausedAsync(default, default, default);
+    }
+
+    [Test]
+    public async Task SubmitCommand_IneligibleHostWithoutTheCommandsCapability_GetsTheEligibilityRefusal()
+    {
+        // Intent: the eligibility check also comes before the capability check, so the reason the
+        // caller sees is about the machine's Kubernetes state, not about a setting that, once changed,
+        // would only lead to the next refusal.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _pingService.SetAgentCapabilitiesAsync(1, 0UL).GetAwaiter().GetResult();
+        _kubernetesEligibility
+            .CheckAsync(Arg.Any<int>(), Arg.Any<Machine>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(ServiceResult<bool>.BadRequest("Only control-plane machines with an admin credential can enrol"));
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_enrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Only control-plane machines with an admin credential can enrol");
+    }
+
+    [Test]
+    public async Task SubmitCommand_EligibleHostWithoutTheCommandsCapability_IsStillRefusedForTheCapability()
+    {
+        // Intent: passing the eligibility check does not bypass the capability check that follows it.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _pingService.SetAgentCapabilitiesAsync(1, 0UL).GetAwaiter().GetResult();
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(
+            BuildSignedCommand(privateKey, commandType: "k8s_reporter_enrol"), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Remote commands are not enabled on this machine");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments(" ")]
+    [Arguments("\t\n")]
+    public async Task SubmitCommand_BlankParams_AreStoredAsNull(string blankParams)
+    {
+        // Intent: parameters are stored as JSON, and a blank string is not valid JSON, so a database that
+        // checks it would refuse the insert. A blank value means no parameters and is stored as none.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommand command = BuildSignedCommand(privateKey, commandType: "reboot");
+        command.Params = blankParams;
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await _remoteCommandRepository.Received(1).CreateRemoteCommandAsync(
+            Arg.Is<RemoteCommand>(c => c.Params == null), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitCommand_RealParams_AreStoredUnchanged()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        RemoteCommand command = BuildSignedCommand(privateKey, commandType: "kill_process");
+        command.Params = """{"pid":"42"}""";
+        RemoteCommandService service = CreateService();
+
+        await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await _remoteCommandRepository.Received(1).CreateRemoteCommandAsync(
+            Arg.Is<RemoteCommand>(c => c.Params == """{"pid":"42"}"""), Arg.Any<CancellationToken>());
+    }
+
     // ========== SubmitCommandAsync — Signing key not authorized for machine ==========
 
     [Test]

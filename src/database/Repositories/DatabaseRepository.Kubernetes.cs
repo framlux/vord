@@ -180,7 +180,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
 
     /// <inheritdoc/>
     public async Task<IReadOnlyDictionary<long, string>> GetLatestKubernetesNodePayloadsAsync(
-        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset receivedAfter, CancellationToken ct)
+        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset serverReceivedAfter, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(machineIds);
 
@@ -190,25 +190,32 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         }
 
         long[] ids = machineIds.Distinct().ToArray();
+
+        // ReceivedAt is derived from the agent's own clock, so it is no measure of recency: it only
+        // bounds which partitions are read. Recency is ServerReceivedAt, the server's own clock, and
+        // ingestion clamps ReceivedAt to a window of this many days, so no row the server-time bound
+        // keeps can sit below the partition bound.
+        DateTimeOffset partitionLowerBound = serverReceivedAfter.AddDays(-TelemetryPartitionPruningLookbackDays);
         List<MachineTelemetry> rows;
 
         if (_db.DataProvider.Name.Contains("PostgreSQL"))
         {
             // One statement for every machine asked about, however many: DISTINCT ON keeps the first row
-            // of each machine in the requested order, which is the newest by server receipt time. The type
-            // is a SQL literal for the same reason as in the projector's batch read, and the lower bound
-            // on ReceivedAt, the partition key, lets Postgres skip partitions older than the window.
+            // of each machine in the requested order, which is the newest by server receipt time, with the
+            // row id breaking a tie. The type is a SQL literal for the same reason as in the projector's
+            // batch read.
             rows = await _db.QueryToListAsync<MachineTelemetry>(
                 """
                 SELECT DISTINCT ON ("MachineId") "MachineId", "Payload" FROM "MachineTelemetry"
                 WHERE "TenantId" = @tenantId AND "TelemetryType" = 14 AND "MachineId" = ANY(@machineIds)
-                  AND "ReceivedAt" > @receivedAfter
-                ORDER BY "MachineId", "ServerReceivedAt" DESC
+                  AND "ServerReceivedAt" > @serverReceivedAfter AND "ReceivedAt" > @partitionLowerBound
+                ORDER BY "MachineId", "ServerReceivedAt" DESC, "Id" DESC
                 """,
                 ct,
                 new DataParameter("@tenantId", tenantId),
                 new DataParameter("@machineIds", ids),
-                new DataParameter("@receivedAfter", receivedAfter));
+                new DataParameter("@serverReceivedAfter", serverReceivedAfter),
+                new DataParameter("@partitionLowerBound", partitionLowerBound));
         }
         else
         {
@@ -217,9 +224,10 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
                 .Where(t => (t.TenantId == tenantId)
                     && (t.TelemetryType == KubernetesNodeTelemetryType)
                     && ids.Contains(t.MachineId)
-                    && (t.ReceivedAt > receivedAfter))
+                    && (t.ServerReceivedAt > serverReceivedAfter)
+                    && (t.ReceivedAt > partitionLowerBound))
                 .GroupBy(t => t.MachineId)
-                .Select(g => g.OrderByDescending(t => t.ServerReceivedAt).First())
+                .Select(g => g.OrderByDescending(t => t.ServerReceivedAt).ThenByDescending(t => t.Id).First())
                 .ToListAsync(ct);
         }
 

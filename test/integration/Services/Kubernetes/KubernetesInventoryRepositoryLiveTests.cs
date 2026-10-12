@@ -490,6 +490,51 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LatestNodePayloads_FollowTheServersClockAndBreakTiesByRowId()
+    {
+        // Intent: on the production database the window and the ordering use the server's receipt time,
+        // never the agent-derived ReceivedAt, which only bounds the partitions read. A slow agent clock
+        // (old ReceivedAt, fresh ServerReceivedAt) is found, a fast one (fresh ReceivedAt, old
+        // ServerReceivedAt) is not, and two reports accepted at the same instant resolve to the later row.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long slowClock = await SeedMachineAsync(db, tenantId);
+        long fastClock = await SeedMachineAsync(db, tenantId);
+        long tie = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset serverReceivedAfter = now.AddMinutes(-5);
+
+        async Task InsertAsync(long machineId, string payload, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
+        {
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = machineId,
+                TenantId = tenantId,
+                TelemetryType = 14,
+                Payload = payload,
+                ReceivedAt = receivedAt,
+                ServerReceivedAt = serverReceivedAt,
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+        }
+
+        await InsertAsync(slowClock, "slow-clock-report", now.AddDays(-3), now.AddMinutes(-1));
+        await InsertAsync(fastClock, "fast-clock-report", now, now.AddMinutes(-10));
+        DateTimeOffset tied = now.AddMinutes(-2);
+        await InsertAsync(tie, "tie-stored-first", now.AddMinutes(-2), tied);
+        await InsertAsync(tie, "tie-stored-last", now.AddMinutes(-4), tied);
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [slowClock, fastClock, tie], serverReceivedAfter, CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(2);
+        await Assert.That(payloads[slowClock]).IsEqualTo("slow-clock-report");
+        await Assert.That(payloads.ContainsKey(fastClock)).IsFalse();
+        await Assert.That(payloads[tie]).IsEqualTo("tie-stored-last");
+    }
+
+    [Test]
     public async Task Live_CandidateForMachine_ScopesToTheTenant()
     {
         await using DatabaseContext db = CreateContext();

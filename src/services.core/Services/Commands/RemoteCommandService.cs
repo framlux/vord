@@ -199,6 +199,13 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.Conflict("Nonce already used");
         }
 
+        // The parameters are stored as JSON, so a blank value that is not valid JSON would fail the insert.
+        // A command with no parameters is stored with none.
+        if (string.IsNullOrWhiteSpace(command.Params))
+        {
+            command.Params = null;
+        }
+
         command.Status = RemoteCommandStatus.Pending;
         command.CreatedAt = DateTimeOffset.UtcNow;
 

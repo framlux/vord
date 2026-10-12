@@ -191,17 +191,19 @@ public interface IKubernetesInventoryRepository
 
     /// <summary>
     /// Returns the payload of the latest local node report (telemetry type 14) of each of the given
-    /// machines, by server receipt time, in one query for however many machines are asked about. Only
-    /// the tenant's own rows received after <paramref name="receivedAfter"/> are considered, and a
-    /// machine with no such row is absent from the result. Never reads any other telemetry type.
+    /// machines, in one query for however many machines are asked about. The latest report is the one
+    /// the server accepted last, with the higher row id winning a tie, and only reports the server
+    /// accepted after <paramref name="serverReceivedAfter"/> are considered, so an agent with a skewed
+    /// clock can neither hide a fresh report nor keep a stale one alive. Only the tenant's own rows are
+    /// read and a machine with no such row is absent from the result. Never reads any other telemetry type.
     /// </summary>
     /// <param name="tenantId">The tenant the telemetry rows must belong to.</param>
     /// <param name="machineIds">The machines whose latest report is wanted.</param>
-    /// <param name="receivedAfter">The start of the read window, exclusive.</param>
+    /// <param name="serverReceivedAfter">The start of the read window on the server's clock, exclusive.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>The raw JSON payload of each machine's latest report, keyed by machine id.</returns>
     Task<IReadOnlyDictionary<long, string>> GetLatestKubernetesNodePayloadsAsync(
-        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset receivedAfter, CancellationToken ct);
+        int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset serverReceivedAfter, CancellationToken ct);
 
     /// <summary>
     /// Returns the tenant's clusters that hold a CA fingerprint, oldest first. Several can share one

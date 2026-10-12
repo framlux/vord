@@ -42,9 +42,9 @@ public sealed class KubernetesCommandEligibilityTests
         return new KubernetesCommandEligibility(_repository, _time);
     }
 
-    private static Machine BuildMachine()
+    private static Machine BuildMachine(int tenantId = TenantId)
     {
-        Machine machine = TestDataBuilder.BuildMachine(TenantId);
+        Machine machine = TestDataBuilder.BuildMachine(tenantId);
         machine.Id = MachineId;
 
         return machine;
@@ -413,10 +413,10 @@ public sealed class KubernetesCommandEligibilityTests
     [Arguments(Enrol)]
     [Arguments(Unenrol)]
     [Arguments(Uninstall)]
-    public async Task Check_ReadsOnlyTheTargetMachinesLatestLocalReportFromTheLastSevenDays(string commandType)
+    public async Task Check_ReadsOnlyTheTargetMachinesLatestLocalReportTheServerAcceptedInTheLastSevenDays(string commandType)
     {
         // Intent: the report comes from the single-type query for this one machine in this tenant,
-        // never the all-types read, and only a report received in the last seven days counts.
+        // never the all-types read, and only a report the server accepted in the last seven days counts.
         GivenLatestPayload(PayloadJson(reporterEnrolled: true));
 
         await CheckAsync(commandType);
@@ -452,6 +452,38 @@ public sealed class KubernetesCommandEligibilityTests
         await CheckAsync(Unenrol);
 
         await _repository.Received(1).GetCandidateForMachineAsync(TenantId, MachineId, Arg.Any<CancellationToken>());
+    }
+
+    // ========== Machine of another tenant ==========
+
+    [Test]
+    [Arguments(Enrol, CannotEnrolMessage)]
+    [Arguments(Uninstall, CannotEnrolMessage)]
+    [Arguments(Unenrol, NotEnrolledMessage)]
+    public async Task Check_MachineOfAnotherTenant_IsRefusedWithoutAnyRead(string commandType, string message)
+    {
+        // Intent: the caller loads the machine for the command's tenant, so this should never happen, but
+        // if it does nothing is read for the other tenant's machine, and even a report and a candidate row
+        // that would make it eligible cannot let the command through.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true));
+        GivenCandidate(true);
+
+        ServiceResult<bool> result = await CreateEligibility().CheckAsync(
+            TenantId, BuildMachine(tenantId: TenantId + 1), commandType, null, CancellationToken.None);
+
+        await AssertRejectedAsync(result, message);
+        await AssertNothingWasReadAsync();
+    }
+
+    [Test]
+    public async Task Check_MachineOfAnotherTenantAndACommandThatIsNotAKubernetesCommand_StillPasses()
+    {
+        // Intent: the tenant guard belongs to the Kubernetes commands only. The other commands are
+        // not this class's business and keep their own checks in the service.
+        ServiceResult<bool> result = await CreateEligibility().CheckAsync(
+            TenantId, BuildMachine(tenantId: TenantId + 1), "reboot", null, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]

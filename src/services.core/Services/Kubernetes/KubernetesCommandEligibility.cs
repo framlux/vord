@@ -84,9 +84,19 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
             return ServiceResult<bool>.BadRequest(NoParametersMessage);
         }
 
+        bool isUnenrol = string.Equals(kubernetesType, KubernetesCommandTypes.Unenrol, StringComparison.Ordinal);
+
+        // The caller loads the machine for the command's tenant, so a machine of another tenant should never
+        // arrive. If one does, nothing about it is read and it is refused as a machine that has no report and
+        // no reporter state.
+        if (machine.TenantId != tenantId)
+        {
+            return ServiceResult<bool>.BadRequest(isUnenrol ? NotEnrolledMessage : CannotEnrolMessage);
+        }
+
         KubernetesNodePayload? report = await GetLatestReportAsync(tenantId, machine.Id, ct);
 
-        if (string.Equals(kubernetesType, KubernetesCommandTypes.Unenrol, StringComparison.Ordinal))
+        if (isUnenrol)
         {
             return await CheckUnenrolAsync(tenantId, machine.Id, report, ct);
         }
@@ -117,15 +127,15 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     }
 
     /// <summary>
-    /// Reads the machine's latest local report from the last seven days through the single-type query, and
-    /// normalises it the way the inventory projection does. A missing report, one that cannot be read and
-    /// one the projection would refuse all count as no report.
+    /// Reads the machine's latest local report that the server accepted in the last seven days through the
+    /// single-type query, and normalises it the way the inventory projection does. A missing report, one
+    /// that cannot be read and one the projection would refuse all count as no report.
     /// </summary>
     private async Task<KubernetesNodePayload?> GetLatestReportAsync(int tenantId, long machineId, CancellationToken ct)
     {
-        DateTimeOffset receivedAfter = _timeProvider.GetUtcNow() - ReportWindow;
+        DateTimeOffset serverReceivedAfter = _timeProvider.GetUtcNow() - ReportWindow;
         IReadOnlyDictionary<long, string> payloads = await _repository.GetLatestKubernetesNodePayloadsAsync(
-            tenantId, [machineId], receivedAfter, ct);
+            tenantId, [machineId], serverReceivedAfter, ct);
 
         if (payloads.TryGetValue(machineId, out string? json) == false)
         {
