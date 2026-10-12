@@ -64,4 +64,58 @@ public sealed class KubernetesNode
     /// <summary>When the node's own machine last reported it, or null if only another source has.</summary>
     [Column("LastLocalReportAt"), Nullable]
     public DateTimeOffset? LastLocalReportAt { get; set; }
+
+    /// <summary>
+    /// The <c>/etc/machine-id</c> the cluster reports for the node (its <c>systemUUID</c> or
+    /// <c>machineID</c>), used to tell which enrolled machine the node is. Null until a cluster
+    /// snapshot lists the node.
+    /// </summary>
+    [Column("NodeMachineId"), Nullable, MaxLength(64)]
+    public string? NodeMachineId { get; set; }
+
+    /// <summary>
+    /// The node's roles as a JSON array of strings, for example <c>["control-plane","etcd"]</c>, or
+    /// null until a cluster snapshot lists the node.
+    /// </summary>
+    [Column("Roles"), Nullable]
+    public string? Roles { get; set; }
+
+    /// <summary>The status of the node's <c>Ready</c> condition: <c>True</c>, <c>False</c> or <c>Unknown</c>.</summary>
+    [Column("ReadyStatus"), Nullable, MaxLength(16)]
+    public string? ReadyStatus { get; set; }
+
+    /// <summary>When the node's <c>Ready</c> condition last changed.</summary>
+    [Column("ReadySince"), Nullable]
+    public DateTimeOffset? ReadySince { get; set; }
+
+    /// <summary>
+    /// The node's conditions as a JSON array of objects with <c>type</c>, <c>status</c> and
+    /// <c>lastTransitionTime</c>, or null until a cluster snapshot lists the node.
+    /// </summary>
+    [Column("Conditions"), Nullable]
+    public string? Conditions { get; set; }
+
+    /// <summary>True while the node is cordoned and takes no new pods.</summary>
+    [Column("Unschedulable"), NotNull]
+    public bool Unschedulable { get; set; }
+
+    /// <summary>When the node was cordoned, or null when it is schedulable or the time is unknown.</summary>
+    [Column("UnschedulableSince"), Nullable]
+    public DateTimeOffset? UnschedulableSince { get; set; }
+
+    /// <summary>The container runtime and version the node runs, for example <c>containerd://1.7.23</c>.</summary>
+    [Column("ContainerRuntimeVersion"), Nullable, MaxLength(64)]
+    public string? ContainerRuntimeVersion { get; set; }
+
+    /// <summary>The number of pods scheduled on the node, or null when the snapshot did not count them.</summary>
+    [Column("PodCount"), Nullable]
+    public int? PodCount { get; set; }
+
+    /// <summary>The number of pods the node can run.</summary>
+    [Column("PodCapacity"), Nullable]
+    public int? PodCapacity { get; set; }
+
+    /// <summary>When a cluster snapshot last listed the node, or null if only local reports have.</summary>
+    [Column("LastReporterSeenAt"), Nullable]
+    public DateTimeOffset? LastReporterSeenAt { get; set; }
 }

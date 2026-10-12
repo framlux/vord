@@ -15,7 +15,9 @@ namespace Framlux.FleetManagement.Test.Integration.Migrations;
 /// <summary>
 /// Verifies the Kubernetes inventory migration on a real Postgres: the indexes the projection
 /// depends on exist, the partial index on the partitioned telemetry table reaches its daily
-/// partitions, the foreign keys behave as designed, and the migration can be rolled back.
+/// partitions, the foreign keys behave as designed, and the migration can be rolled back. It
+/// verifies the cluster reporting migration the same way: its columns, the per-tenant cluster UID
+/// index, the reporter candidates table and its constraints, and the rollback.
 /// </summary>
 public sealed class KubernetesInventoryMigrationTests
 {
@@ -276,6 +278,343 @@ public sealed class KubernetesInventoryMigrationTests
         await Assert.That(await IndexExistsAsync(connectionString, TelemetryIndexName)).IsTrue();
     }
 
+    [Test]
+    public async Task ReportingMigration_ClusterColumns_HaveTheDesignedTypesAndDefaults()
+    {
+        Dictionary<string, string> columns = await DescribeColumnsAsync("KubernetesClusters");
+
+        await Assert.That(columns["KubeSystemUid"]).IsEqualTo("character varying(64) NULL");
+        await Assert.That(columns["ClusterVersion"]).IsEqualTo("character varying(64) NULL");
+        await Assert.That(columns["ReporterError"]).IsEqualTo("character varying(32) NULL");
+        await Assert.That(columns["RoleOutdated"]).IsEqualTo("boolean NOT NULL DEFAULT false");
+        await Assert.That(columns["Truncated"]).IsEqualTo("boolean NOT NULL DEFAULT false");
+        await Assert.That(columns["LeaseTransitions"]).IsEqualTo("bigint NOT NULL DEFAULT 0");
+        await Assert.That(columns["ActiveReporterMachineId"]).IsEqualTo("bigint NULL");
+        await Assert.That(columns["LastSnapshotReceivedAt"]).IsEqualTo("timestamp with time zone NULL");
+        await Assert.That(columns["LastSnapshotTelemetryId"]).IsEqualTo("bigint NULL");
+        await Assert.That(columns["LeaseUid"]).IsEqualTo("character varying(64) NULL");
+        await Assert.That(columns["LeaseCreatedAt"]).IsEqualTo("timestamp with time zone NULL");
+    }
+
+    [Test]
+    public async Task ReportingMigration_NodeColumns_HaveTheDesignedTypesAndDefaults()
+    {
+        Dictionary<string, string> columns = await DescribeColumnsAsync("KubernetesNodes");
+
+        await Assert.That(columns["NodeMachineId"]).IsEqualTo("character varying(64) NULL");
+        await Assert.That(columns["Roles"]).IsEqualTo("text NULL");
+        await Assert.That(columns["ReadyStatus"]).IsEqualTo("character varying(16) NULL");
+        await Assert.That(columns["ReadySince"]).IsEqualTo("timestamp with time zone NULL");
+        await Assert.That(columns["Conditions"]).IsEqualTo("text NULL");
+        await Assert.That(columns["Unschedulable"]).IsEqualTo("boolean NOT NULL DEFAULT false");
+        await Assert.That(columns["UnschedulableSince"]).IsEqualTo("timestamp with time zone NULL");
+        await Assert.That(columns["ContainerRuntimeVersion"]).IsEqualTo("character varying(64) NULL");
+        await Assert.That(columns["PodCount"]).IsEqualTo("integer NULL");
+        await Assert.That(columns["PodCapacity"]).IsEqualTo("integer NULL");
+        await Assert.That(columns["LastReporterSeenAt"]).IsEqualTo("timestamp with time zone NULL");
+    }
+
+    [Test]
+    public async Task ReportingMigration_CandidateColumns_HaveTheDesignedTypesAndDefaults()
+    {
+        Dictionary<string, string> columns = await DescribeColumnsAsync("KubernetesReporterCandidates");
+
+        await Assert.That(columns.Count).IsEqualTo(5);
+        await Assert.That(columns["TenantId"]).IsEqualTo("integer NOT NULL");
+        await Assert.That(columns["ClusterId"]).IsEqualTo("bigint NOT NULL");
+        await Assert.That(columns["MachineId"]).IsEqualTo("bigint NOT NULL");
+        await Assert.That(columns["ReporterError"]).IsEqualTo("character varying(32) NULL");
+        await Assert.That(columns["LastReportAt"]).IsEqualTo("timestamp with time zone NOT NULL");
+    }
+
+    [Test]
+    public async Task ClusterKubeSystemUidIndex_IsUniqueAndPartialOverReportedUidsOnly()
+    {
+        string? definition = await GetIndexDefinitionAsync("KubernetesClusters", "IX_KubernetesClusters_TenantId_KubeSystemUid");
+
+        await Assert.That(definition).IsNotNull();
+        await Assert.That(definition!).Contains("UNIQUE");
+        await Assert.That(definition!).Contains("(\"TenantId\", \"KubeSystemUid\")");
+        await Assert.That(definition!).Contains("WHERE (\"KubeSystemUid\" IS NOT NULL)");
+    }
+
+    [Test]
+    public async Task Cluster_SameKubeSystemUidInOneTenant_ViolatesUniqueIndex()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        await InsertClusterAsync(connection, tenantId, "f1", kubeSystemUid: "uid-one");
+
+        PostgresException? violation = null;
+        try
+        {
+            await InsertClusterAsync(connection, tenantId, "f2", kubeSystemUid: "uid-one");
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.UniqueViolation);
+    }
+
+    [Test]
+    public async Task Cluster_SameKubeSystemUidInTwoTenants_IsAllowed()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int firstTenantId = await InsertTenantAsync(connection);
+        int secondTenantId = await InsertTenantAsync(connection);
+        await InsertClusterAsync(connection, firstTenantId, "f3", kubeSystemUid: "shared-uid");
+
+        long secondClusterId = await InsertClusterAsync(connection, secondTenantId, "f3", kubeSystemUid: "shared-uid");
+
+        await Assert.That(secondClusterId).IsGreaterThan(0L);
+    }
+
+    [Test]
+    public async Task Cluster_NullKubeSystemUids_NeverConflictInOneTenant()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        await InsertClusterAsync(connection, tenantId, "f4");
+        long secondClusterId = await InsertClusterAsync(connection, tenantId, "f5");
+        long thirdClusterId = await InsertClusterAsync(connection, tenantId, "f6");
+
+        await Assert.That(secondClusterId).IsGreaterThan(0L);
+        await Assert.That(thirdClusterId).IsGreaterThan(0L);
+    }
+
+    [Test]
+    public async Task Cluster_ActiveReporterMachineIdMustReferenceAnExistingMachine()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long machineId = await InsertMachineAsync(connection, tenantId);
+        long clusterId = await InsertClusterAsync(connection, tenantId, "f7");
+
+        await Execute(
+            connection,
+            """UPDATE "KubernetesClusters" SET "ActiveReporterMachineId" = @machineId WHERE "Id" = @clusterId""",
+            ("machineId", machineId),
+            ("clusterId", clusterId));
+
+        PostgresException? violation = null;
+        try
+        {
+            await Execute(
+                connection,
+                """UPDATE "KubernetesClusters" SET "ActiveReporterMachineId" = @machineId WHERE "Id" = @clusterId""",
+                ("machineId", machineId + 1_000_000),
+                ("clusterId", clusterId));
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.ForeignKeyViolation);
+    }
+
+    [Test]
+    public async Task CandidatePrimaryKey_CoversClusterAndMachine()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        string? definition = await Scalar<string?>(
+            connection,
+            """
+            SELECT pg_get_constraintdef(oid) FROM pg_constraint
+            WHERE conrelid = '"KubernetesReporterCandidates"'::regclass AND contype = 'p'
+            """);
+
+        await Assert.That(definition).IsEqualTo("PRIMARY KEY (\"ClusterId\", \"MachineId\")");
+    }
+
+    [Test]
+    public async Task CandidateMachineIndex_IsUniqueOverMachine()
+    {
+        string? definition = await GetIndexDefinitionAsync("KubernetesReporterCandidates", "IX_KubernetesReporterCandidates_MachineId");
+
+        await Assert.That(definition).IsNotNull();
+        await Assert.That(definition!).Contains("UNIQUE");
+        await Assert.That(definition!).Contains("(\"MachineId\")");
+    }
+
+    [Test]
+    public async Task CandidateTenantIndex_CoversTenant()
+    {
+        string? definition = await GetIndexDefinitionAsync("KubernetesReporterCandidates", "IX_KubernetesReporterCandidates_TenantId");
+
+        await Assert.That(definition).IsNotNull();
+        await Assert.That(definition!).Contains("(\"TenantId\")");
+        await Assert.That(definition!).DoesNotContain("UNIQUE");
+    }
+
+    [Test]
+    public async Task DeletingCluster_CascadesToItsCandidates_AndLeavesOtherClustersCandidates()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long doomedClusterId = await InsertClusterAsync(connection, tenantId, "g1");
+        long survivingClusterId = await InsertClusterAsync(connection, tenantId, "g2");
+        await InsertCandidateAsync(connection, tenantId, doomedClusterId, await InsertMachineAsync(connection, tenantId));
+        await InsertCandidateAsync(connection, tenantId, doomedClusterId, await InsertMachineAsync(connection, tenantId));
+        await InsertCandidateAsync(connection, tenantId, survivingClusterId, await InsertMachineAsync(connection, tenantId));
+
+        await Execute(connection, """DELETE FROM "KubernetesClusters" WHERE "Id" = @id""", ("id", doomedClusterId));
+
+        long doomedCandidates = await Scalar<long>(connection, """SELECT count(*) FROM "KubernetesReporterCandidates" WHERE "ClusterId" = @id""", ("id", doomedClusterId));
+        long survivingCandidates = await Scalar<long>(connection, """SELECT count(*) FROM "KubernetesReporterCandidates" WHERE "ClusterId" = @id""", ("id", survivingClusterId));
+
+        await Assert.That(doomedCandidates).IsEqualTo(0L);
+        await Assert.That(survivingCandidates).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task Candidate_SameMachineInTwoClusters_ViolatesUniqueIndex()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long firstClusterId = await InsertClusterAsync(connection, tenantId, "g3");
+        long secondClusterId = await InsertClusterAsync(connection, tenantId, "g4");
+        long machineId = await InsertMachineAsync(connection, tenantId);
+        await InsertCandidateAsync(connection, tenantId, firstClusterId, machineId);
+
+        PostgresException? violation = null;
+        try
+        {
+            await InsertCandidateAsync(connection, tenantId, secondClusterId, machineId);
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.UniqueViolation);
+    }
+
+    [Test]
+    public async Task Candidate_MachineIdMustReferenceAnExistingMachine()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long clusterId = await InsertClusterAsync(connection, tenantId, "g5");
+        long machineId = await InsertMachineAsync(connection, tenantId);
+
+        PostgresException? violation = null;
+        try
+        {
+            await InsertCandidateAsync(connection, tenantId, clusterId, machineId + 1_000_000);
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.ForeignKeyViolation);
+    }
+
+    [Test]
+    public async Task Candidate_TenantIdMustReferenceAnExistingTenant()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long clusterId = await InsertClusterAsync(connection, tenantId, "g6");
+        long machineId = await InsertMachineAsync(connection, tenantId);
+
+        PostgresException? violation = null;
+        try
+        {
+            await InsertCandidateAsync(connection, tenantId + 1_000_000, clusterId, machineId);
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.ForeignKeyViolation);
+    }
+
+    [Test]
+    public async Task Candidate_ClusterIdMustReferenceAnExistingCluster()
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        int tenantId = await InsertTenantAsync(connection);
+        long clusterId = await InsertClusterAsync(connection, tenantId, "g7");
+        long machineId = await InsertMachineAsync(connection, tenantId);
+
+        PostgresException? violation = null;
+        try
+        {
+            await InsertCandidateAsync(connection, tenantId, clusterId + 1_000_000, machineId);
+        }
+        catch (PostgresException ex)
+        {
+            violation = ex;
+        }
+
+        await Assert.That(violation).IsNotNull();
+        await Assert.That(violation!.SqlState).IsEqualTo(PostgresErrorCodes.ForeignKeyViolation);
+    }
+
+    [Test]
+    public async Task ReportingMigrateDown_RemovesTheReportingSchema_AndKeepsTheInventoryTables()
+    {
+        string connectionString = await CreateIsolatedDatabaseAsync();
+        long previousVersion = typeof(AddKubernetesReporting).GetCustomAttribute<MigrationAttribute>()!.Version - 1;
+
+        await using ServiceProvider provider = BuildMigrationServices(connectionString);
+        using IServiceScope scope = provider.CreateScope();
+        IMigrationRunner runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+
+        runner.MigrateUp();
+
+        await Assert.That(await TableExistsAsync(connectionString, "KubernetesReporterCandidates")).IsTrue();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesClusters", "KubeSystemUid")).IsTrue();
+
+        runner.MigrateDown(previousVersion);
+
+        await Assert.That(await TableExistsAsync(connectionString, "KubernetesReporterCandidates")).IsFalse();
+        await Assert.That(await IndexExistsAsync(connectionString, "IX_KubernetesClusters_TenantId_KubeSystemUid")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesClusters", "KubeSystemUid")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesClusters", "ActiveReporterMachineId")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesClusters", "LeaseCreatedAt")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesNodes", "Conditions")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connectionString, "KubernetesNodes", "LastReporterSeenAt")).IsFalse();
+        await Assert.That(await TableExistsAsync(connectionString, "KubernetesClusters")).IsTrue();
+        await Assert.That(await TableExistsAsync(connectionString, "KubernetesNodes")).IsTrue();
+        await Assert.That(await IndexExistsAsync(connectionString, TelemetryIndexName)).IsTrue();
+
+        runner.MigrateUp();
+
+        await Assert.That(await TableExistsAsync(connectionString, "KubernetesReporterCandidates")).IsTrue();
+        await Assert.That(await IndexExistsAsync(connectionString, "IX_KubernetesClusters_TenantId_KubeSystemUid")).IsTrue();
+    }
+
     private static ServiceProvider BuildMigrationServices(string connectionString)
     {
         ServiceCollection services = new();
@@ -331,6 +670,46 @@ public sealed class KubernetesInventoryMigrationTests
             ("name", tableName));
     }
 
+    private static async Task<bool> ColumnExistsAsync(string connectionString, string tableName, string columnName)
+    {
+        await using NpgsqlConnection connection = new(connectionString);
+        await connection.OpenAsync();
+
+        return await Scalar<bool>(
+            connection,
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = @table AND column_name = @column)",
+            ("table", tableName),
+            ("column", columnName));
+    }
+
+    private static async Task<Dictionary<string, string>> DescribeColumnsAsync(string tableName)
+    {
+        await using NpgsqlConnection connection = new(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await using NpgsqlCommand command = new(
+            """
+            SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = @table
+            """,
+            connection);
+        command.Parameters.AddWithValue("table", tableName);
+
+        Dictionary<string, string> columns = [];
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            string length = reader.IsDBNull(2) ? string.Empty : $"({reader.GetInt32(2)})";
+            string nullability = (reader.GetString(3) == "YES") ? "NULL" : "NOT NULL";
+            string defaultValue = reader.IsDBNull(4) ? string.Empty : $" DEFAULT {reader.GetString(4)}";
+
+            columns[reader.GetString(0)] = $"{reader.GetString(1)}{length} {nullability}{defaultValue}";
+        }
+
+        return columns;
+    }
+
     private static async Task<bool> IndexExistsAsync(string connectionString, string indexName)
     {
         await using NpgsqlConnection connection = new(connectionString);
@@ -375,17 +754,31 @@ public sealed class KubernetesInventoryMigrationTests
             ("systemId", unique[16..]));
     }
 
-    private static async Task<long> InsertClusterAsync(NpgsqlConnection connection, int tenantId, string fingerprintSeed)
+    private static async Task<long> InsertClusterAsync(NpgsqlConnection connection, int tenantId, string fingerprintSeed, string? kubeSystemUid = null)
     {
         return await Scalar<long>(
             connection,
             """
-            INSERT INTO "KubernetesClusters" ("TenantId", "CaFingerprint", "Distro", "FirstSeenAt", "LastSeenAt")
-            VALUES (@tenantId, @fingerprint, 'k3s', now(), now())
+            INSERT INTO "KubernetesClusters" ("TenantId", "CaFingerprint", "Distro", "FirstSeenAt", "LastSeenAt", "KubeSystemUid")
+            VALUES (@tenantId, @fingerprint, 'k3s', now(), now(), @kubeSystemUid)
             RETURNING "Id"
             """,
             ("tenantId", tenantId),
-            ("fingerprint", fingerprintSeed.PadRight(64, '0')));
+            ("fingerprint", fingerprintSeed.PadRight(64, '0')),
+            ("kubeSystemUid", (object?)kubeSystemUid ?? DBNull.Value));
+    }
+
+    private static async Task InsertCandidateAsync(NpgsqlConnection connection, int tenantId, long clusterId, long machineId)
+    {
+        await Execute(
+            connection,
+            """
+            INSERT INTO "KubernetesReporterCandidates" ("TenantId", "ClusterId", "MachineId", "LastReportAt")
+            VALUES (@tenantId, @clusterId, @machineId, now())
+            """,
+            ("tenantId", tenantId),
+            ("clusterId", clusterId),
+            ("machineId", machineId));
     }
 
     private static async Task<long> InsertNodeAsync(NpgsqlConnection connection, int tenantId, long clusterId, string nodeName, long? machineId)

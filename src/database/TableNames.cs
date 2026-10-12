@@ -39,4 +39,5 @@ internal static class TableNames
     public const string KubernetesClusters = "KubernetesClusters";
     public const string KubernetesNodes = "KubernetesNodes";
     public const string KubernetesInventoryProjectionCursor = "KubernetesInventoryProjectionCursor";
+    public const string KubernetesReporterCandidates = "KubernetesReporterCandidates";
 }
