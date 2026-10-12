@@ -58,7 +58,10 @@ public interface ITenantDeletionRepository
     /// <c>InitialMigration.Down()</c>: children before parents. Tables with no <c>TenantId</c>
     /// column are scoped by a subquery on their parent's <c>TenantId</c>. Every delete predicate is
     /// scoped to <paramref name="tenantId"/> (directly or via subquery), so re-running this method
-    /// on an already-purged tenant deletes zero rows and does not throw — it is idempotent.
+    /// on an already-purged tenant deletes zero rows and does not throw — it is idempotent. The
+    /// tenant's Kubernetes nodes and clusters are removed ahead of its machines, under the tenant's
+    /// Kubernetes lock, so the caller must be inside a transaction for that lock to cover the whole
+    /// purge. The Kubernetes projection cursor is global and is not touched.
     /// </summary>
     Task PurgeTenantOperationalDataAsync(int tenantId, CancellationToken ct);
 

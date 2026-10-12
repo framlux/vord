@@ -122,6 +122,15 @@ public partial class DatabaseRepository : ITenantDeletionRepository
         await _db.RegistrationTokens.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
         await _db.UserSigningKeys.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
         await _db.DataExportJobs.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
+
+        // Kubernetes nodes reference both their machine and their tenant without cascading, so they
+        // have to go before the machines. The tenant's Kubernetes lock keeps the projection from
+        // writing a node between these deletes; it is held until the caller's transaction ends. Nodes
+        // go before clusters so the cluster delete has nothing left to cascade. The projection cursor
+        // is global and is deliberately left alone.
+        await AcquireKubernetesTenantLockAsync(tenantId, ct);
+        await _db.KubernetesNodes.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
+        await _db.KubernetesClusters.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
         await _db.Machines.Where(x => x.TenantId == tenantId).DeleteAsync(ct);
         await _db.TenantOidcConfigurations.Where(x => x.TenantId == tenantId).DeleteAsync(ct); // drops encrypted OIDC secret
         await _db.TenantInvitations.Where(x => x.TenantId == tenantId).DeleteAsync(ct);

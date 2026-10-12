@@ -299,6 +299,101 @@ public class MachineStateRepositoryTests
         await Assert.That(result[0].MachineId).IsEqualTo(activeMachineId);
     }
 
+    // ========== SoftDeleteMachineAsync Kubernetes node tests ==========
+
+    private static async Task<long> SeedKubernetesNodeAsync(
+        TestDatabaseFactory dbFactory, int tenantId, string nodeName, long? machineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+        });
+
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = nodeName,
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
+        });
+    }
+
+    [Test]
+    public async Task SoftDelete_UnlinksKubernetesNode()
+    {
+        // Intent: a soft delete only flips IsDeleted, so the foreign key from the node to the machine
+        // never fires; the repository has to clear the link itself. The node row is inventory the
+        // cluster still owns, so it survives with no machine rather than being deleted.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long nodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "node-1", machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, userId, CancellationToken.None);
+
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync(n => n.Id == nodeId);
+        await Assert.That(deletedKeyHash).IsNotNull();
+        await Assert.That(node.MachineId).IsNull();
+        await Assert.That(node.NodeName).IsEqualTo("node-1");
+        await Assert.That(await dbFactory.Context.KubernetesClusters.CountAsync(c => c.Id == node.ClusterId)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SoftDelete_OtherTenantNodeUntouched()
+    {
+        // Intent: only the deleted machine's own node is unlinked. A node linked to another machine of
+        // the same tenant, a node of another tenant linked to that tenant's machine, and a node of
+        // another tenant that were ever to carry the deleted machine's id are all left as they were.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long siblingMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long otherTenantMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: otherTenantId));
+        long siblingNodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "sibling", siblingMachineId);
+        long otherTenantNodeId = await SeedKubernetesNodeAsync(dbFactory, otherTenantId, "other-tenant", otherTenantMachineId);
+        long foreignNodeId = await SeedKubernetesNodeAsync(dbFactory, otherTenantId, "foreign", doomedMachineId);
+        long ownNodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "own", null);
+
+        await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+
+        Dictionary<long, long?> links = await dbFactory.Context.KubernetesNodes.ToDictionaryAsync(n => n.Id, n => n.MachineId);
+        await Assert.That(links[siblingNodeId]).IsEqualTo(siblingMachineId);
+        await Assert.That(links[otherTenantNodeId]).IsEqualTo(otherTenantMachineId);
+        await Assert.That(links[foreignNodeId]).IsEqualTo(doomedMachineId);
+        await Assert.That(links[ownNodeId]).IsNull();
+    }
+
+    [Test]
+    public async Task SoftDelete_MachineOfAnotherTenant_LeavesNodeLinked()
+    {
+        // Intent: a delete that matches no active machine of the caller's tenant changes nothing, the
+        // node link included, so a foreign machine id cannot be used to detach another tenant's node.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long nodeId = await SeedKubernetesNodeAsync(dbFactory, tenantId, "node-1", machineId);
+
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, otherTenantId, userId, CancellationToken.None);
+
+        KubernetesNode node = await dbFactory.Context.KubernetesNodes.SingleAsync(n => n.Id == nodeId);
+        await Assert.That(deletedKeyHash).IsNull();
+        await Assert.That(node.MachineId).IsEqualTo(machineId);
+    }
+
     // ========== GetHostnameMapAsync tests ==========
 
     [Test]

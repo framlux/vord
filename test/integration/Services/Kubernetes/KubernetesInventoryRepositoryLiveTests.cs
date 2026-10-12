@@ -271,6 +271,98 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_SoftDeleteMachine_WaitsForTheTenantLockThenUnlinksTheNode()
+    {
+        // Intent: soft-deleting a machine rewrites its node row, which is a Kubernetes write, so it
+        // takes the tenant's lock inside the caller's transaction. While another transaction holds the
+        // lock the delete must wait with the node still linked, and once the holder finishes the delete
+        // completes and leaves the node unlinked. The wait is observed in the server's lock table,
+        // never by sleeping.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long machineId = await SeedMachineAsync(seedDb, tenantId);
+        long nodeId = await SeedLinkedNodeAsync(seedDb, tenantId, machineId);
+        string deleterName = NewApplicationName("deleter");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task<string?> delete;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            delete = Task.Run(async () =>
+            {
+                await using DatabaseContext deleterDb = CreateContext(deleterName);
+                DatabaseRepository deleter = CreateRepo(deleterDb);
+                using IDatabaseTransaction deleteTransaction = await deleter.BeginTransactionAsync(CancellationToken.None);
+                string? keyHash = await deleter.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
+                await deleteTransaction.CommitAsync(CancellationToken.None);
+
+                return keyHash;
+            });
+            bool blocked = await PostgresLockProbe.WaitUntilBlockedAsync(
+                _migratedConnectionString, deleterName, delete, failsafe.Token);
+
+            await Assert.That(blocked).IsTrue();
+            await Assert.That((await seedDb.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsEqualTo(machineId);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        string? deletedKeyHash = await delete;
+
+        await Assert.That(deletedKeyHash).IsNotNull();
+        await Assert.That((await seedDb.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
+        await Assert.That((await seedDb.Machines.SingleAsync(m => m.Id == machineId)).IsDeleted).IsTrue();
+    }
+
+    [Test]
+    public async Task Live_TenantPurge_WaitsForTheTenantLockThenRemovesTheKubernetesRows()
+    {
+        // Intent: the purge deletes a tenant's Kubernetes rows under the same per-tenant lock as the
+        // projection, so a report being applied cannot recreate a node between the purge's deletes. While
+        // another transaction holds the lock the purge must wait with the rows still present, and once the
+        // holder finishes the purge removes the nodes, the clusters and the machines. The wait is observed
+        // in the server's lock table, never by sleeping.
+        using CancellationTokenSource failsafe = new(TimeSpan.FromMinutes(2));
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long machineId = await SeedMachineAsync(seedDb, tenantId);
+        await SeedLinkedNodeAsync(seedDb, tenantId, machineId);
+        string purgerName = NewApplicationName("purger");
+
+        await using DatabaseContext holderDb = CreateContext();
+        DatabaseRepository holder = CreateRepo(holderDb);
+        Task purge;
+        using (IDatabaseTransaction transaction = await holder.BeginTransactionAsync(CancellationToken.None))
+        {
+            await holder.AcquireKubernetesTenantLockAsync(tenantId, CancellationToken.None);
+
+            purge = Task.Run(async () =>
+            {
+                await using DatabaseContext purgerDb = CreateContext(purgerName);
+                DatabaseRepository purger = CreateRepo(purgerDb);
+                using IDatabaseTransaction purgeTransaction = await purger.BeginTransactionAsync(CancellationToken.None);
+                await purger.PurgeTenantOperationalDataAsync(tenantId, CancellationToken.None);
+                await purgeTransaction.CommitAsync(CancellationToken.None);
+            });
+            bool blocked = await PostgresLockProbe.WaitUntilBlockedAsync(
+                _migratedConnectionString, purgerName, purge, failsafe.Token);
+
+            await Assert.That(blocked).IsTrue();
+            await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(1);
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        await purge;
+
+        await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
+        await Assert.That(await seedDb.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
+        await Assert.That(await seedDb.Machines.CountAsync(m => m.TenantId == tenantId)).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Live_CursorUpsert_CreatesAdvancesAndNeverMovesBackwards()
     {
         // Intent: the Postgres cursor upsert creates the single row on first use, advances it, and
@@ -365,6 +457,28 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             await using DatabaseContext db = CreateContext(applicationName);
 
             return await CreateRepo(db).ApplyLocalNodeReportAsync(report, report.ServerReceivedAt, CancellationToken.None);
+        });
+    }
+
+    private static async Task<long> SeedLinkedNodeAsync(DatabaseContext db, int tenantId, long machineId)
+    {
+        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            Distro = "k3s",
+            FirstSeenAt = seenAt,
+            LastSeenAt = seenAt,
+        });
+
+        return await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        {
+            TenantId = tenantId,
+            ClusterId = clusterId,
+            NodeName = "linked-node",
+            MachineId = machineId,
+            LastLocalReportAt = seenAt,
         });
     }
 

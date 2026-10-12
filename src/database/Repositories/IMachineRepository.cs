@@ -91,7 +91,9 @@ public interface IMachineRepository
     /// <summary>
     /// Soft-deletes a machine within a tenant. Returns the SHA-256 hash of the deleted machine's API
     /// key so the caller can invalidate its auth cache entry, or null when no active machine matched
-    /// (already deleted, wrong tenant, or not found).
+    /// (already deleted, wrong tenant, or not found). A Kubernetes node linked to the machine is
+    /// unlinked, not deleted, under the tenant's Kubernetes lock, so the caller must be inside a
+    /// transaction for that lock to cover the whole delete.
     /// </summary>
     /// <param name="machineId">The machine to soft-delete.</param>
     /// <param name="tenantId">The tenant that must own the machine.</param>
