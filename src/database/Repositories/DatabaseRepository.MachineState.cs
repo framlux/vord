@@ -418,11 +418,13 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryPerTypeAsync(long machineId, int daysBack, CancellationToken cancellationToken)
+    public async Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryPerTypeAsync(
+        long machineId, int daysBack, IReadOnlyCollection<short>? excludedTypes, CancellationToken cancellationToken)
     {
         DateTimeOffset recencyCutoff = DateTimeOffset.UtcNow.AddDays(-daysBack);
+        short[] excluded = excludedTypes?.Distinct().ToArray() ?? [];
         List<MachineTelemetry> latest = await _db.MachineTelemetry
-            .Where(t => (t.MachineId == machineId) && (t.ServerReceivedAt > recencyCutoff))
+            .Where(t => (t.MachineId == machineId) && (t.ServerReceivedAt > recencyCutoff) && (excluded.Contains(t.TelemetryType) == false))
             .GroupBy(t => t.TelemetryType)
             .Select(g => g.OrderByDescending(t => t.ServerReceivedAt).First())
             .ToListAsync(cancellationToken);

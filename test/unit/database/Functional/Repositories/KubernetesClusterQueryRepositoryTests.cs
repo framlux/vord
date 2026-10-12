@@ -374,6 +374,90 @@ public class KubernetesClusterQueryRepositoryTests
         await Assert.That(foreign).IsNull();
     }
 
+    [Test]
+    public async Task ListCandidates_ReturnsTheCandidatesOfTheRequestedClustersInClusterThenMachineOrder()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineA = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-a");
+        long machineB = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-b");
+        long machineC = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-c");
+        long first = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long second = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB);
+        long unrelated = await SeedClusterAsync(dbFactory.Context, tenantId, "c" + FingerprintA[1..]);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = second, MachineId = machineC, LastReportAt = T0 });
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = first, MachineId = machineB, ReporterError = "tls_ca_changed", LastReportAt = T0 });
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = first, MachineId = machineA, LastReportAt = T0.AddMinutes(1) });
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = unrelated, MachineId = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-d"), LastReportAt = T0 });
+
+        IReadOnlyList<KubernetesReporterCandidate> candidates = await repo.ListCandidatesAsync(tenantId, [first, second], CancellationToken.None);
+
+        await Assert.That(candidates.Select(c => (c.ClusterId, c.MachineId)).ToArray())
+            .IsEquivalentTo(new[] { (first, machineA), (first, machineB), (second, machineC) });
+        await Assert.That(candidates[0].MachineId).IsEqualTo(machineA);
+        await Assert.That(candidates[1].ReporterError).IsEqualTo("tls_ca_changed");
+        await Assert.That(candidates[2].ClusterId).IsEqualTo(second);
+    }
+
+    [Test]
+    public async Task ListCandidates_ClusterOfAnotherTenantOrNoClusterIds_ReturnsNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        int otherTenantId = await SeedTenantAsync(dbFactory.Context);
+        long foreignMachine = await SeedMachineAsync(dbFactory.Context, otherTenantId, "foreign");
+        long foreignCluster = await SeedClusterAsync(dbFactory.Context, otherTenantId, FingerprintA);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = otherTenantId,
+            ClusterId = foreignCluster,
+            MachineId = foreignMachine,
+            LastReportAt = T0,
+        });
+
+        IReadOnlyList<KubernetesReporterCandidate> foreign = await repo.ListCandidatesAsync(tenantId, [foreignCluster], CancellationToken.None);
+        IReadOnlyList<KubernetesReporterCandidate> none = await repo.ListCandidatesAsync(tenantId, [], CancellationToken.None);
+
+        await Assert.That(foreign.Count).IsEqualTo(0);
+        await Assert.That(none.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetMachineNamesInTenant_ReturnsTheNamesOfTheTenantsMachinesOnly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        int otherTenantId = await SeedTenantAsync(dbFactory.Context);
+        long own = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-own");
+        long ownToo = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-two");
+        long notAsked = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-quiet");
+        long foreign = await SeedMachineAsync(dbFactory.Context, otherTenantId, "cp-foreign");
+
+        IReadOnlyDictionary<long, string> names = await repo.GetMachineNamesInTenantAsync(
+            tenantId, [own, ownToo, foreign, 987654], CancellationToken.None);
+
+        await Assert.That(names.Count).IsEqualTo(2);
+        await Assert.That(names[own]).IsEqualTo("cp-own");
+        await Assert.That(names[ownToo]).IsEqualTo("cp-two");
+        await Assert.That(names.ContainsKey(foreign)).IsFalse();
+        await Assert.That(names.ContainsKey(notAsked)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetMachineNamesInTenant_NoMachineIds_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+
+        IReadOnlyDictionary<long, string> names = await repo.GetMachineNamesInTenantAsync(tenantId, [], CancellationToken.None);
+
+        await Assert.That(names.Count).IsEqualTo(0);
+    }
+
     private static async Task InsertKubernetesTelemetryAsync(
         DatabaseContext db, int tenantId, long machineId, short type, string payload, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
     {

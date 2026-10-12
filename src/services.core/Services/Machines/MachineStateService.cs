@@ -22,6 +22,8 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// </summary>
 public sealed class MachineStateService : IMachineStateService
 {
+    private static readonly short[] DetailExcludedTelemetryTypes = [TelemetryTypeIds.KubernetesCluster];
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly ILogger<MachineStateService> _logger;
@@ -198,7 +200,10 @@ public sealed class MachineStateService : IMachineStateService
         DateTimeOffset? lastPing = MachineLiveness.LastSeen(state?.LastSeenAt, state?.LastHeartbeatAt);
 
         // Fetch latest raw telemetry per type for this machine.
-        Dictionary<short, MachineTelemetry> latestByType = await machineStateRepo.GetLatestTelemetryPerTypeAsync(machineId, 7, ct);
+        // The cluster snapshot a reporter holder sends can be 256 KB and nothing on this page shows it, so
+        // its type is left out of the query instead of being loaded and ignored.
+        Dictionary<short, MachineTelemetry> latestByType = await machineStateRepo.GetLatestTelemetryPerTypeAsync(
+            machineId, 7, DetailExcludedTelemetryTypes, ct);
 
         SystemInfoPayload? systemInfo = DeserializePayload<SystemInfoPayload>(latestByType, TelemetryTypeIds.SystemInfo);
         OsVersionPayload? osVersion = DeserializePayload<OsVersionPayload>(latestByType, TelemetryTypeIds.OsVersion);

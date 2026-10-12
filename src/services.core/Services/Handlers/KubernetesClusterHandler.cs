@@ -19,24 +19,32 @@ public sealed class KubernetesClusterHandler
     private const int DisplayNameMaxLength = 100;
 
     private readonly IKubernetesInventoryRepository _kubernetesRepo;
+    private readonly KubernetesReporterMachineReader _reporterMachines;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="KubernetesClusterHandler"/> class.
     /// </summary>
     public KubernetesClusterHandler(
         IKubernetesInventoryRepository kubernetesRepo,
+        KubernetesReporterMachineReader reporterMachines,
         IDatabaseTransactionProvider transactionProvider,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(kubernetesRepo);
+        ArgumentNullException.ThrowIfNull(reporterMachines);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _kubernetesRepo = kubernetesRepo;
+        _reporterMachines = reporterMachines;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>
@@ -53,10 +61,23 @@ public sealed class KubernetesClusterHandler
         }
 
         IReadOnlyList<KubernetesCluster> clusters = await _kubernetesRepo.ListClustersAsync(tenantId.Value, ct);
-        ILookup<long, KubernetesNodeWithMachine> nodesByCluster = await LoadNodesAsync(tenantId.Value, clusters, ct);
+        if (clusters.Count == 0)
+        {
+            return ServiceResult<List<KubernetesClusterSummaryDto>>.Ok([]);
+        }
+
+        List<long> clusterIds = clusters.Select(c => c.Id).ToList();
+        ILookup<long, KubernetesNodeWithMachine> nodesByCluster = (await _kubernetesRepo.ListNodesAsync(tenantId.Value, clusterIds, ct))
+            .ToLookup(n => n.Node.ClusterId);
+        ILookup<long, KubernetesReporterCandidate> candidatesByCluster = (await _kubernetesRepo.ListCandidatesAsync(tenantId.Value, clusterIds, ct))
+            .ToLookup(c => c.ClusterId);
+        IReadOnlyDictionary<long, string> machineNames = await LoadMachineNamesAsync(
+            tenantId.Value, clusters, candidatesByCluster.SelectMany(g => g), ct);
+        DateTimeOffset now = _timeProvider.GetUtcNow();
 
         List<KubernetesClusterSummaryDto> summaries = clusters
-            .Select(c => KubernetesClusterMapper.ToSummary(c, nodesByCluster[c.Id].ToList()))
+            .Select(c => KubernetesClusterMapper.ToSummary(
+                c, nodesByCluster[c.Id].ToList(), candidatesByCluster[c.Id].ToList(), machineNames, now))
             .ToList();
 
         return ServiceResult<List<KubernetesClusterSummaryDto>>.Ok(summaries);
@@ -83,8 +104,12 @@ public sealed class KubernetesClusterHandler
         }
 
         IReadOnlyList<KubernetesNodeWithMachine> nodes = await _kubernetesRepo.ListNodesAsync(tenantId.Value, [cluster.Id], ct);
+        IReadOnlyList<KubernetesReporterCandidate> candidates = await _kubernetesRepo.ListCandidatesAsync(tenantId.Value, [cluster.Id], ct);
+        IReadOnlyDictionary<long, string> machineNames = await LoadMachineNamesAsync(tenantId.Value, [cluster], candidates, ct);
+        KubernetesReporterMachines machines = await _reporterMachines.LoadAsync(tenantId.Value, cluster, nodes, candidates, machineNames, ct);
 
-        return ServiceResult<KubernetesClusterDetailDto>.Ok(KubernetesClusterMapper.ToDetail(cluster, nodes));
+        return ServiceResult<KubernetesClusterDetailDto>.Ok(
+            KubernetesClusterMapper.ToDetail(cluster, nodes, candidates, machineNames, machines, _timeProvider.GetUtcNow()));
     }
 
     /// <summary>
@@ -150,21 +175,30 @@ public sealed class KubernetesClusterHandler
         }
 
         IReadOnlyList<KubernetesNodeWithMachine> nodes = await _kubernetesRepo.ListNodesAsync(tenantId.Value, [cluster.Id], ct);
+        IReadOnlyList<KubernetesReporterCandidate> candidates = await _kubernetesRepo.ListCandidatesAsync(tenantId.Value, [cluster.Id], ct);
+        IReadOnlyDictionary<long, string> machineNames = await LoadMachineNamesAsync(tenantId.Value, [cluster], candidates, ct);
 
-        return ServiceResult<KubernetesClusterSummaryDto>.Ok(KubernetesClusterMapper.ToSummary(cluster, nodes));
+        return ServiceResult<KubernetesClusterSummaryDto>.Ok(
+            KubernetesClusterMapper.ToSummary(cluster, nodes, candidates, machineNames, _timeProvider.GetUtcNow()));
     }
 
-    private async Task<ILookup<long, KubernetesNodeWithMachine>> LoadNodesAsync(
-        int tenantId, IReadOnlyList<KubernetesCluster> clusters, CancellationToken ct)
+    /// <summary>
+    /// Loads, in one query, the names of the machines that hold the clusters' reporter Leases and of the
+    /// candidates, which the reporting state and the holder are described with.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<long, string>> LoadMachineNamesAsync(
+        int tenantId,
+        IEnumerable<KubernetesCluster> clusters,
+        IEnumerable<KubernetesReporterCandidate> candidates,
+        CancellationToken ct)
     {
-        if (clusters.Count == 0)
-        {
-            return Enumerable.Empty<KubernetesNodeWithMachine>().ToLookup(n => n.Node.ClusterId);
-        }
+        List<long> machineIds = clusters
+            .Where(c => c.ActiveReporterMachineId is not null)
+            .Select(c => c.ActiveReporterMachineId!.Value)
+            .Concat(candidates.Select(c => c.MachineId))
+            .Distinct()
+            .ToList();
 
-        IReadOnlyList<KubernetesNodeWithMachine> nodes = await _kubernetesRepo.ListNodesAsync(
-            tenantId, clusters.Select(c => c.Id).ToList(), ct);
-
-        return nodes.ToLookup(n => n.Node.ClusterId);
+        return await _kubernetesRepo.GetMachineNamesInTenantAsync(tenantId, machineIds, ct);
     }
 }

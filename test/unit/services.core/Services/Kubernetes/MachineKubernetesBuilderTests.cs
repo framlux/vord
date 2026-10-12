@@ -221,4 +221,153 @@ public class MachineKubernetesBuilderTests
         await repo.DidNotReceive().ListClustersByFingerprintAsync(
             Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    // ========== Reporter candidates ==========
+
+    private static KubernetesReporterCandidate CandidateRow(long clusterId, string? reporterError = null)
+    {
+        return new KubernetesReporterCandidate
+        {
+            TenantId = 5,
+            ClusterId = clusterId,
+            MachineId = 9,
+            ReporterError = reporterError,
+            LastReportAt = T0.AddMinutes(7),
+        };
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWhoHoldsTheLease_IsMarkedAsTheHolderOnItsNode()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 9;
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11, "credentials_rejected"));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+
+        await Assert.That(block!.Candidate).IsNotNull();
+        await Assert.That(block.Candidate!.ClusterId).IsEqualTo(11L);
+        await Assert.That(block.Candidate.IsHolder).IsTrue();
+        await Assert.That(block.Candidate.ReporterError).IsEqualTo("credentials_rejected");
+        await Assert.That(block.Candidate.LastReportAt).IsEqualTo(T0.AddMinutes(7));
+        await Assert.That(block.Node).IsNotNull();
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWhileAnotherMachineHoldsTheLease_IsNotTheHolder()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 77;
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+
+        await Assert.That(block!.Candidate!.IsHolder).IsFalse();
+        await Assert.That(block.Candidate.ReporterError).IsNull();
+    }
+
+    [Test]
+    public async Task BuildAsync_MachineThatIsNotACandidate_HasNoCandidateState()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+
+        await Assert.That(block!.Candidate).IsNull();
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWithoutANode_IsGroupedWithTheCandidatesCluster()
+    {
+        // Intent: a control-plane host with no kubelet, such as a k0s controller, is never a node but
+        // does take part in reporting, so its candidate row places it in a cluster even where its CA
+        // fingerprint alone could not (here the fingerprint is held by two clusters).
+        KubernetesCluster cluster = Cluster(11, "Production");
+        KubernetesCluster sibling = Cluster(12, "Staging");
+        IKubernetesInventoryRepository repo = Substitute.For<IKubernetesInventoryRepository>();
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+        repo.GetClusterAsync(5, 11, Arg.Any<CancellationToken>()).Returns(cluster);
+        repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([cluster, sibling]);
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false), CancellationToken.None);
+
+        await Assert.That(block!.Grouping).IsEqualTo("grouped");
+        await Assert.That(block.ClusterId).IsEqualTo(11L);
+        await Assert.That(block.ClusterName).IsEqualTo("Production");
+        await Assert.That(block.Node).IsNull();
+        await Assert.That(block.Candidate!.ClusterId).IsEqualTo(11L);
+        await repo.DidNotReceive().ListClustersByFingerprintAsync(
+            Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWithoutANodeOrAReport_StillHasABlock()
+    {
+        // Intent: the candidate row alone is enough to say where the machine reports, even when its
+        // last local report has aged out of the seven-day window.
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 9;
+        IKubernetesInventoryRepository repo = Substitute.For<IKubernetesInventoryRepository>();
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+        repo.GetClusterAsync(5, 11, Arg.Any<CancellationToken>()).Returns(cluster);
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", null, CancellationToken.None);
+
+        await Assert.That(block).IsNotNull();
+        await Assert.That(block!.Local).IsNull();
+        await Assert.That(block.Grouping).IsEqualTo("grouped");
+        await Assert.That(block.ClusterId).IsEqualTo(11L);
+        await Assert.That(block.Candidate!.IsHolder).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateInAnotherClusterThanTheNode_KeepsTheNodesClusterAndReportsTheCandidateAsStored()
+    {
+        // Intent: while the two disagree, established membership by node decides the cluster the
+        // machine is shown in, and the candidate state is reported truthfully for the cluster it names.
+        KubernetesCluster nodeCluster = Cluster(11, "Production");
+        KubernetesCluster candidateCluster = Cluster(12, "Staging");
+        candidateCluster.ActiveReporterMachineId = 9;
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(nodeCluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(12));
+        repo.GetClusterAsync(5, 12, Arg.Any<CancellationToken>()).Returns(candidateCluster);
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+
+        await Assert.That(block!.ClusterId).IsEqualTo(11L);
+        await Assert.That(block.Candidate!.ClusterId).IsEqualTo(12L);
+        await Assert.That(block.Candidate.IsHolder).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWhoseClusterIsGone_HasNoCandidateState()
+    {
+        IKubernetesInventoryRepository repo = Substitute.For<IKubernetesInventoryRepository>();
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+        repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([]);
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false), CancellationToken.None);
+
+        await Assert.That(block!.Candidate).IsNull();
+        await Assert.That(block.Grouping).IsEqualTo("ungrouped");
+    }
+
+    [Test]
+    public async Task BuildAsync_NodeKubeletSkew_IsJudgedAgainstTheClusterVersion()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ClusterVersion = "v1.34.1+k3s1";
+        KubernetesNode node = Node(1, 11, "cp-1", 9, controlPlane: true);
+        node.KubeletVersion = "v1.30.4+k3s1";
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, node);
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+
+        await Assert.That(block!.Node!.KubeletSkew).IsTrue();
+    }
 }

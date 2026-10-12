@@ -35,11 +35,11 @@ public class KubernetesClusterNamesTests
     {
         // Intent: the name identifies the cluster by its control plane, so a worker that sorts first
         // must not take the name from a control-plane node.
-        (string NodeName, bool ControlPlane)[] nodes =
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
         [
-            ("a-worker", false),
-            ("m-control", true),
-            ("z-control", true),
+            ("a-worker", false, []),
+            ("m-control", true, []),
+            ("z-control", true, []),
         ];
 
         string name = KubernetesClusterNames.Derive("k3s", Fingerprint, nodes);
@@ -50,10 +50,10 @@ public class KubernetesClusterNamesTests
     [Test]
     public async Task Derive_NoControlPlane_UsesTheSmallestNodeName()
     {
-        (string NodeName, bool ControlPlane)[] nodes =
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
         [
-            ("worker-b", false),
-            ("worker-a", false),
+            ("worker-b", false, []),
+            ("worker-a", false, []),
         ];
 
         string name = KubernetesClusterNames.Derive("rke2", Fingerprint, nodes);
@@ -72,7 +72,7 @@ public class KubernetesClusterNamesTests
     [Test]
     public async Task Derive_UnknownDistro_IsLabelledKubernetes()
     {
-        string name = KubernetesClusterNames.Derive("unknown", Fingerprint, [("node-1", true)]);
+        string name = KubernetesClusterNames.Derive("unknown", Fingerprint, [("node-1", true, [])]);
 
         await Assert.That(name).IsEqualTo("Kubernetes node-1");
     }
@@ -82,10 +82,10 @@ public class KubernetesClusterNamesTests
     {
         // Intent: ordering must not depend on culture or letter case, so every replica derives the
         // same name. In ordinal order every upper-case letter sorts before every lower-case one.
-        (string NodeName, bool ControlPlane)[] nodes =
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
         [
-            ("alpha", true),
-            ("Zulu", true),
+            ("alpha", true, []),
+            ("Zulu", true, []),
         ];
 
         string name = KubernetesClusterNames.Derive("kubeadm", Fingerprint, nodes);
@@ -99,5 +99,55 @@ public class KubernetesClusterNamesTests
         string name = KubernetesClusterNames.Derive("k0s", "abc", []);
 
         await Assert.That(name).IsEqualTo("k0s abc");
+    }
+
+    [Test]
+    [Arguments("control-plane")]
+    [Arguments("master")]
+    public async Task Derive_ReporterRolesMakeAnAgentlessNodeNameTheCluster(string role)
+    {
+        // Intent: a control-plane node no agent runs on is known only from the cluster reporter's roles,
+        // and it must name the cluster just as a control-plane host that reports itself does.
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
+        [
+            ("a-worker", false, ["worker"]),
+            ("z-agentless-cp", false, [role, "etcd"]),
+        ];
+
+        string name = KubernetesClusterNames.Derive("k3s", Fingerprint, nodes);
+
+        await Assert.That(name).IsEqualTo("k3s z-agentless-cp");
+    }
+
+    [Test]
+    public async Task Derive_OtherRolesDoNotMakeANodeControlPlane()
+    {
+        // Intent: only the control-plane and master roles count. etcd and worker nodes do not take the
+        // name from a smaller worker, and a role that merely contains the text does not match.
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
+        [
+            ("a-worker", false, ["worker"]),
+            ("b-etcd", false, ["etcd"]),
+            ("c-lookalike", false, ["control-plane-like", "Control-Plane"]),
+        ];
+
+        string name = KubernetesClusterNames.Derive("k3s", Fingerprint, nodes);
+
+        await Assert.That(name).IsEqualTo("k3s a-worker");
+    }
+
+    [Test]
+    public async Task Derive_LocalAndReporterControlPlaneNodesCompeteForTheSmallestName()
+    {
+        (string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)[] nodes =
+        [
+            ("m-local", true, []),
+            ("c-reporter", false, ["control-plane"]),
+            ("a-worker", false, []),
+        ];
+
+        string name = KubernetesClusterNames.Derive("rke2", Fingerprint, nodes);
+
+        await Assert.That(name).IsEqualTo("RKE2 c-reporter");
     }
 }

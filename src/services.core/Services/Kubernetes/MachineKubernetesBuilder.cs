@@ -16,9 +16,11 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 internal static class MachineKubernetesBuilder
 {
     /// <summary>
-    /// Builds the block, or returns null when the machine has neither a recent local report nor a
-    /// linked node. A linked node decides the cluster. Without one, the cluster is the single cluster
-    /// of the tenant that holds the report's CA fingerprint, which places a host that runs no kubelet.
+    /// Builds the block, or returns null when the machine has no recent local report, no linked node and no
+    /// candidate row. A linked node decides the cluster. Without one, a candidate row does, which places a
+    /// reporter that is no node, such as a k0s controller, even where its CA fingerprint is held by several
+    /// clusters. Without either, the cluster is the single cluster of the tenant that holds the report's CA
+    /// fingerprint, which places a host that runs no kubelet and is not yet enrolled.
     /// </summary>
     /// <param name="repo">The Kubernetes inventory repository.</param>
     /// <param name="tenantId">The tenant that owns the machine.</param>
@@ -50,7 +52,10 @@ internal static class MachineKubernetesBuilder
             }
         }
 
-        if ((payload == null) && (node == null))
+        (KubernetesReporterCandidate Row, KubernetesCluster Cluster)? candidate = await FindCandidateAsync(
+            repo, tenantId, machineId, cluster, ct);
+
+        if ((payload == null) && (node == null) && (candidate == null))
         {
             return null;
         }
@@ -58,13 +63,22 @@ internal static class MachineKubernetesBuilder
         MachineKubernetesDto block = new()
         {
             Local = payload == null ? null : ToLocalDto(payload),
+            Candidate = candidate == null ? null : ToCandidateDto(candidate.Value.Row, candidate.Value.Cluster, machineId),
         };
 
         if ((node != null) && (cluster != null))
         {
-            block.Node = KubernetesClusterMapper.ToNodeDto(node, machineName);
+            block.Node = KubernetesClusterMapper.ToNodeDto(node, machineName, cluster.ClusterVersion);
             block.Grouping = KubernetesGrouping.Grouped;
             await PlaceInClusterAsync(block, repo, tenantId, cluster, ct);
+
+            return block;
+        }
+
+        if (candidate != null)
+        {
+            block.Grouping = KubernetesGrouping.Grouped;
+            await PlaceInClusterAsync(block, repo, tenantId, candidate.Value.Cluster, ct);
 
             return block;
         }
@@ -93,6 +107,37 @@ internal static class MachineKubernetesBuilder
         }
 
         return block;
+    }
+
+    /// <summary>
+    /// Finds the machine's candidate row with the cluster it names. A row whose cluster cannot be found is
+    /// treated as absent: it cannot be shown without the cluster it belongs to.
+    /// </summary>
+    private static async Task<(KubernetesReporterCandidate Row, KubernetesCluster Cluster)?> FindCandidateAsync(
+        IKubernetesInventoryRepository repo, int tenantId, long machineId, KubernetesCluster? nodeCluster, CancellationToken ct)
+    {
+        KubernetesReporterCandidate? row = await repo.GetCandidateForMachineAsync(tenantId, machineId, ct);
+        if (row == null)
+        {
+            return null;
+        }
+
+        KubernetesCluster? cluster = (nodeCluster != null) && (nodeCluster.Id == row.ClusterId)
+            ? nodeCluster
+            : await repo.GetClusterAsync(tenantId, row.ClusterId, ct);
+
+        return cluster == null ? null : (row, cluster);
+    }
+
+    private static MachineKubernetesCandidateDto ToCandidateDto(KubernetesReporterCandidate row, KubernetesCluster cluster, long machineId)
+    {
+        return new MachineKubernetesCandidateDto
+        {
+            ClusterId = row.ClusterId,
+            IsHolder = cluster.ActiveReporterMachineId == machineId,
+            ReporterError = row.ReporterError,
+            LastReportAt = row.LastReportAt,
+        };
     }
 
     private static async Task PlaceInClusterAsync(

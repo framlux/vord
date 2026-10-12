@@ -18,6 +18,15 @@ public sealed class KubernetesClusterDetailDto : KubernetesClusterSummaryDto
     /// </summary>
     public bool HasFingerprintMismatch { get; set; }
 
+    /// <summary>The UID of the cluster's <c>kube-system</c> namespace, or null while no snapshot has reported it.</summary>
+    public string? KubeSystemUid { get; set; }
+
     /// <summary>The cluster's nodes, ordered by node name.</summary>
     public List<KubernetesNodeDto> Nodes { get; set; } = [];
+
+    /// <summary>The machines enrolled as reporters for the cluster, ordered by machine name.</summary>
+    public List<KubernetesCandidateDto> Candidates { get; set; } = [];
+
+    /// <summary>The machines that could be enrolled as reporters for the cluster, ordered by machine name.</summary>
+    public List<KubernetesEligibleMachineDto> EligibleMachines { get; set; } = [];
 }

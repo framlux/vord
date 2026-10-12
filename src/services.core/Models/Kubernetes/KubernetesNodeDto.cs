@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Models.Telemetry;
+
 namespace Framlux.FleetManagement.Services.Core.Models.Kubernetes;
 
 /// <summary>
@@ -32,4 +34,40 @@ public sealed class KubernetesNodeDto
 
     /// <summary>When the node's own machine last reported it, or null if only another source has.</summary>
     public DateTimeOffset? LastLocalReportAt { get; set; }
+
+    /// <summary>The roles the cluster reporter lists for the node, such as <c>control-plane</c> or <c>etcd</c>; empty when it has not listed the node.</summary>
+    public List<string> Roles { get; set; } = [];
+
+    /// <summary>The status of the node's <c>Ready</c> condition (<c>True</c>, <c>False</c> or <c>Unknown</c>), or null when no snapshot has listed the node.</summary>
+    public string? ReadyStatus { get; set; }
+
+    /// <summary>When the node's <c>Ready</c> condition last changed.</summary>
+    public DateTimeOffset? ReadySince { get; set; }
+
+    /// <summary>The node's pressure and network conditions whose status is not <c>False</c>.</summary>
+    public List<KubernetesNodeConditionDto> Conditions { get; set; } = [];
+
+    /// <summary>True while the node is cordoned and takes no new pods.</summary>
+    public bool Unschedulable { get; set; }
+
+    /// <summary>When the node was cordoned, or null when it is schedulable or the time is unknown.</summary>
+    public DateTimeOffset? UnschedulableSince { get; set; }
+
+    /// <summary>The container runtime and version the node runs, such as <c>containerd://1.7.23</c>.</summary>
+    public string? ContainerRuntimeVersion { get; set; }
+
+    /// <summary>The number of pods scheduled on the node, or null when the snapshot did not count them.</summary>
+    public int? PodCount { get; set; }
+
+    /// <summary>The number of pods the node can run.</summary>
+    public int? PodCapacity { get; set; }
+
+    /// <summary>When a cluster snapshot last listed the node, or null if only local reports have.</summary>
+    public DateTimeOffset? LastReporterSeenAt { get; set; }
+
+    /// <summary>
+    /// True when the node's kubelet version and the cluster's version both read as versions, and the kubelet
+    /// is more than three minor versions behind the cluster or newer than it.
+    /// </summary>
+    public bool KubeletSkew { get; set; }
 }

@@ -34,7 +34,7 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     /// How old a local report may be and still describe the machine. It is the window the machine page
     /// reads its latest report from.
     /// </summary>
-    private static readonly TimeSpan ReportWindow = TimeSpan.FromDays(7);
+    internal static readonly TimeSpan ReportWindow = TimeSpan.FromDays(7);
 
     private static readonly string[] KubernetesTypes =
     [
@@ -101,12 +101,22 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
             return await CheckUnenrolAsync(tenantId, machine.Id, report, ct);
         }
 
-        if ((report is not null) && report.ControlPlane && report.AdminCredentialPresent)
+        if (CanEnrol(report))
         {
             return ServiceResult<bool>.Ok(true);
         }
 
         return ServiceResult<bool>.BadRequest(CannotEnrolMessage);
+    }
+
+    /// <summary>
+    /// Reports whether a machine's latest report makes it eligible to enrol (and so to uninstall): it runs a
+    /// control plane and holds a cluster-admin credential. The cluster page lists machines by the same rule.
+    /// </summary>
+    /// <param name="report">The machine's normalised latest report, or null when it has none.</param>
+    internal static bool CanEnrol(KubernetesNodePayload? report)
+    {
+        return (report is not null) && report.ControlPlane && report.AdminCredentialPresent;
     }
 
     private async Task<ServiceResult<bool>> CheckUnenrolAsync(
@@ -142,22 +152,7 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
             return null;
         }
 
-        KubernetesNodePayload? payload;
-        try
-        {
-            payload = JsonSerializer.Deserialize<KubernetesNodePayload>(json, JsonDefaults.SnakeCase);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-
-        if (payload is null)
-        {
-            return null;
-        }
-
-        return KubernetesNodePayloadNormaliser.Normalise(payload);
+        return KubernetesNodePayloadNormaliser.NormaliseJson(json);
     }
 
     /// <summary>

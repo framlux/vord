@@ -16,6 +16,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -1503,5 +1504,107 @@ public class MachineStateServiceTests
         string json = System.Text.Json.JsonSerializer.Serialize(result!.Kubernetes);
         await Assert.That(json.Contains(KubernetesFingerprintA, StringComparison.Ordinal)).IsFalse();
         await Assert.That(json.Contains("CaFingerprint", StringComparison.OrdinalIgnoreCase)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_ExcludesTheClusterSnapshotTypeFromTheTelemetryItLoads()
+    {
+        // Intent: the machine whose agent holds the cluster's reporter Lease has a cluster snapshot of up
+        // to 256 KB as its latest type-15 row, and its page has no use for it, so the telemetry read
+        // must leave that type out rather than load it and drop it.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        IMachineStateRepository stateRepo = Substitute.For<IMachineStateRepository>();
+        stateRepo.GetLatestTelemetryPerTypeAsync(
+                Arg.Any<long>(), Arg.Any<int>(), Arg.Any<IReadOnlyCollection<short>?>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<short, MachineTelemetry>());
+        stateRepo.GetRecentTelemetryAsync(Arg.Any<long>(), Arg.Any<short>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+        TestServiceScopeFactory scopeFactory = new(
+            dbFactory.Context, new Dictionary<Type, object> { [typeof(IMachineStateRepository)] = stateRepo });
+        MachineStateService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineStateService>.Instance);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await stateRepo.Received(1).GetLatestTelemetryPerTypeAsync(
+            machineId, 7, Arg.Is<IReadOnlyCollection<short>?>(types => (types != null) && types.Contains(TelemetryTypeIds.KubernetesCluster)), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_HolderWithAStoredClusterSnapshot_StillShowsItsLocalKubernetesReport()
+    {
+        // Intent: leaving the snapshot out must not cost the page its other Kubernetes data. A holder has
+        // both a local node report and a snapshot, and only the local report is shown.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory, name: "cp-host");
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        await SeedKubernetesNodeAsync(dbFactory, 1, clusterId, "cp-1", machineId, controlPlane: true);
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machineId, tenantId: 1, telemetryType: TelemetryTypeIds.KubernetesCluster, payload: new string('x', 4096)));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes!.Local).IsNotNull();
+        await Assert.That(result.Kubernetes.Node).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_CandidateWithoutANode_IsGroupedInTheCandidatesClusterWithItsCandidateState()
+    {
+        // Intent: a control-plane host with no kubelet is not a node, but once it is a reporter candidate
+        // its page places it in that cluster and shows whether it holds the Lease and what it last reported.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory, name: "k0s-controller");
+        long clusterId = await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA, displayName: "Production");
+        await SeedKubernetesClusterAsync(dbFactory, 1, KubernetesFingerprintA);
+        DateTimeOffset reported = DateTimeOffset.UtcNow.AddMinutes(-4);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = 1,
+            ClusterId = clusterId,
+            MachineId = machineId,
+            ReporterError = "credentials_rejected",
+            LastReportAt = reported,
+        });
+        await dbFactory.Context.KubernetesClusters.Where(c => c.Id == clusterId)
+            .Set(c => c.ActiveReporterMachineId, machineId).UpdateAsync();
+        await SeedKubernetesPayloadAsync(dbFactory, machineId, KubernetesPayload(KubernetesFingerprintA, nodeName: "", hasKubelet: false));
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        MachineKubernetesDto kubernetes = result!.Kubernetes!;
+        await Assert.That(kubernetes.Grouping).IsEqualTo("grouped");
+        await Assert.That(kubernetes.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.ClusterName).IsEqualTo("Production");
+        await Assert.That(kubernetes.Node).IsNull();
+        await Assert.That(kubernetes.Candidate).IsNotNull();
+        await Assert.That(kubernetes.Candidate!.ClusterId).IsEqualTo(clusterId);
+        await Assert.That(kubernetes.Candidate.IsHolder).IsTrue();
+        await Assert.That(kubernetes.Candidate.ReporterError).IsEqualTo("credentials_rejected");
+        await Assert.That(kubernetes.Candidate.LastReportAt).IsEqualTo(reported);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_AnotherTenantsCandidateRow_IsNeverShown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedKubernetesMachineAsync(dbFactory);
+        long foreignClusterId = await SeedKubernetesClusterAsync(dbFactory, 2, KubernetesFingerprintA, displayName: "Other tenant's cluster");
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate
+        {
+            TenantId = 2,
+            ClusterId = foreignClusterId,
+            MachineId = machineId,
+            LastReportAt = DateTimeOffset.UtcNow,
+        });
+        MachineStateService service = CreateKubernetesDetailService(dbFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result!.Kubernetes).IsNull();
     }
 }

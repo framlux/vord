@@ -100,4 +100,36 @@ public class KubernetesNodePayloadNormaliserTests
 
         await Assert.That(payload!.ReporterError).IsNull();
     }
+
+    // ========== NormaliseJson ==========
+
+    [Test]
+    public async Task NormaliseJson_StoredReport_ReadsAndNormalisesIt()
+    {
+        const string stored = "{\"distro\":\"docker-desktop\",\"kubelet_version\":\"v1.30.4+k3s1\",\"node_name\":\"cp-1\",\"has_kubelet\":true,\"control_plane\":true,\"admin_credential_present\":true,\"reporter_enrolled\":true}";
+
+        KubernetesNodePayload? payload = KubernetesNodePayloadNormaliser.NormaliseJson(stored);
+
+        await Assert.That(payload).IsNotNull();
+        await Assert.That(payload!.Distro).IsEqualTo("unknown");
+        await Assert.That(payload.NodeName).IsEqualTo("cp-1");
+        await Assert.That(payload.ControlPlane).IsTrue();
+        await Assert.That(payload.AdminCredentialPresent).IsTrue();
+        await Assert.That(payload.ReporterEnrolled).IsTrue();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("not json")]
+    [Arguments("{ \"distro\": ")]
+    [Arguments("null")]
+    [Arguments("[]")]
+    [Arguments("{}")]
+    [Arguments("{\"distro\":\"k3s\",\"node_name\":\"Not_A_Node\",\"has_kubelet\":true}")]
+    public async Task NormaliseJson_ReportThatCannotBeReadOrThatTheProjectionWouldRefuse_IsNull(string stored)
+    {
+        // Intent: every reader of a stored report must agree on what counts as one, so text that does not
+        // parse and a report that normalisation refuses are both simply no report.
+        await Assert.That(KubernetesNodePayloadNormaliser.NormaliseJson(stored)).IsNull();
+    }
 }

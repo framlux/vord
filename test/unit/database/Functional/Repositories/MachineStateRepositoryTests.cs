@@ -870,6 +870,67 @@ public class MachineStateRepositoryTests
         await Assert.That(result.ContainsKey(2)).IsTrue();
     }
 
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_ExcludedTypes_AreNeverReturnedOrLoaded()
+    {
+        // Intent: a holder's cluster snapshot can be 256 KB, so a caller that has no use for it must be
+        // able to leave it out of the query, not just ignore it afterwards.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 14, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 70, tenantId: 1, telemetryType: type, payload: $$"""{"type":{{type}}}""");
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> result = await repo.GetLatestTelemetryPerTypeAsync(70, daysBack: 1, [15]);
+
+        await Assert.That(result.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 14 });
+    }
+
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_SeveralExcludedTypes_AreAllLeftOut()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 2, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 71, tenantId: 1, telemetryType: type);
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> result = await repo.GetLatestTelemetryPerTypeAsync(71, daysBack: 1, [2, 15]);
+
+        await Assert.That(result.Keys.ToArray()).IsEquivalentTo(new short[] { 1 });
+    }
+
+    [Test]
+    public async Task GetLatestTelemetryPerTypeAsync_NoExcludedTypes_ReturnsEveryType()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 15 })
+        {
+            MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 72, tenantId: 1, telemetryType: type);
+            row.ReceivedAt = now.AddMinutes(-5);
+            row.ServerReceivedAt = now.AddMinutes(-5);
+            await repo.InsertTelemetryAsync(row);
+        }
+
+        Dictionary<short, MachineTelemetry> unspecified = await repo.GetLatestTelemetryPerTypeAsync(72, daysBack: 1);
+        Dictionary<short, MachineTelemetry> empty = await repo.GetLatestTelemetryPerTypeAsync(72, daysBack: 1, []);
+
+        await Assert.That(unspecified.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 15 });
+        await Assert.That(empty.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 15 });
+    }
+
     // ========== GetRecentTelemetryAsync tests ==========
 
     [Test]

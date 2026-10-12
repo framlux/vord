@@ -129,8 +129,13 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             everyScanUsesPartialIndex = everyScanUsesPartialIndex && ancestors.Contains(PartialIndexName);
         }
 
-        await Assert.That(rows.Count).IsEqualTo(5);
-        await Assert.That(rows.All(r => r.TelemetryType == 14)).IsTrue();
+        // The database is shared with the other tests of the class, which also store Kubernetes rows, so
+        // the machine seeded here identifies its rows, and the thousands of other-type rows it seeded
+        // must be absent whatever else the class has stored.
+        List<MachineTelemetry> ownRows = rows.Where(r => r.MachineId == machineId).ToList();
+        await Assert.That(ownRows.Count).IsEqualTo(5);
+        await Assert.That(ownRows.All(r => r.TelemetryType == 14)).IsTrue();
+        await Assert.That(rows.All(r => (r.TelemetryType == 14) || (r.TelemetryType == 15))).IsTrue();
         await Assert.That(loadedPartition).StartsWith("MachineTelemetry_Short_");
         await Assert.That(loadedPartitionScans.Count).IsGreaterThan(0);
         await Assert.That(everyScanUsesPartialIndex).IsTrue();
@@ -551,6 +556,119 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await Assert.That(own).IsNotNull();
         await Assert.That(own!.ClusterId).IsEqualTo(clusterId);
         await Assert.That(foreign).IsNull();
+    }
+
+    [Test]
+    public async Task Live_ListCandidatesAndMachineNames_ScopeToTheTenant()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long machineA = await SeedMachineAsync(db, tenantId);
+        long machineB = await SeedMachineAsync(db, tenantId);
+        long foreignMachine = await SeedMachineAsync(db, otherTenantId);
+        long first = await SeedLiveClusterAsync(db, tenantId, NewFingerprint());
+        long second = await SeedLiveClusterAsync(db, tenantId, NewFingerprint());
+        long foreignCluster = await SeedLiveClusterAsync(db, otherTenantId, NewFingerprint());
+        await SeedLiveCandidateAsync(db, tenantId, second, machineB, DateTimeOffset.UtcNow);
+        await SeedLiveCandidateAsync(db, tenantId, first, machineA, DateTimeOffset.UtcNow);
+        await SeedLiveCandidateAsync(db, otherTenantId, foreignCluster, foreignMachine, DateTimeOffset.UtcNow);
+
+        IReadOnlyList<KubernetesReporterCandidate> candidates = await repo.ListCandidatesAsync(
+            tenantId, [first, second, foreignCluster], CancellationToken.None);
+        IReadOnlyDictionary<long, string> names = await repo.GetMachineNamesInTenantAsync(
+            tenantId, [machineA, machineB, foreignMachine], CancellationToken.None);
+
+        await Assert.That(candidates.Select(c => (c.ClusterId, c.MachineId)).ToArray())
+            .IsEquivalentTo(new[] { (first, machineA), (second, machineB) });
+        await Assert.That(candidates[0].ClusterId).IsEqualTo(first);
+        await Assert.That(names.Keys.Order().ToArray()).IsEquivalentTo(new[] { machineA, machineB }.Order().ToArray());
+    }
+
+    [Test]
+    public async Task Live_LatestTelemetryPerType_LeavesOutTheExcludedTypesOnPostgres()
+    {
+        // Intent: the machine page's read must not load the cluster snapshot on the production database
+        // either, where the per-type grouping is a window function over the partitioned table.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (short type in new short[] { 1, 14, 15 })
+        {
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = machineId,
+                TenantId = tenantId,
+                TelemetryType = type,
+                Payload = "{}",
+                ReceivedAt = now.AddMinutes(-2),
+                ServerReceivedAt = now.AddMinutes(-2),
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+        }
+
+        Dictionary<short, MachineTelemetry> everything = await repo.GetLatestTelemetryPerTypeAsync(machineId, 7, null, CancellationToken.None);
+        Dictionary<short, MachineTelemetry> withoutSnapshot = await repo.GetLatestTelemetryPerTypeAsync(machineId, 7, [15], CancellationToken.None);
+
+        await Assert.That(everything.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 14, 15 });
+        await Assert.That(withoutSnapshot.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 1, 14 });
+    }
+
+    [Test]
+    public async Task Live_ActiveSigningKeyIdsForMachines_CountOnlyUnrevokedKeysOfTheTenantOnPostgres()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        int otherTenantId = await SeedTenantAsync(db);
+        long machineA = await SeedMachineAsync(db, tenantId);
+        long machineB = await SeedMachineAsync(db, tenantId);
+        long foreignMachine = await SeedMachineAsync(db, otherTenantId);
+
+        async Task<int> KeyAsync(int keyTenantId, DateTimeOffset? revokedAt = null)
+        {
+            return await db.InsertWithInt32IdentityAsync(new UserSigningKey
+            {
+                UserId = 1,
+                TenantId = keyTenantId,
+                Label = "Live Key",
+                PublicKey = Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+                PublicKeyFingerprint = Guid.NewGuid().ToString("N"),
+                CreatedAt = DateTimeOffset.UtcNow,
+                RevokedAt = revokedAt,
+            });
+        }
+
+        async Task AuthorizeAsync(long machine, int key, int authTenantId, DateTimeOffset? revokedAt = null)
+        {
+            await db.InsertWithInt32IdentityAsync(new MachineAuthorizedKey
+            {
+                MachineId = machine,
+                SigningKeyId = key,
+                TenantId = authTenantId,
+                AuthorizedAt = DateTimeOffset.UtcNow,
+                AuthorizedByUserId = 1,
+                RevokedAt = revokedAt,
+            });
+        }
+
+        int active = await KeyAsync(tenantId);
+        int revokedKey = await KeyAsync(tenantId, DateTimeOffset.UtcNow);
+        int revokedAuthorization = await KeyAsync(tenantId);
+        int foreignKey = await KeyAsync(otherTenantId);
+        await AuthorizeAsync(machineA, active, tenantId);
+        await AuthorizeAsync(machineA, revokedKey, tenantId);
+        await AuthorizeAsync(machineB, revokedAuthorization, tenantId, DateTimeOffset.UtcNow);
+        await AuthorizeAsync(foreignMachine, foreignKey, otherTenantId);
+
+        IReadOnlyDictionary<long, IReadOnlyList<int>> result = await repo.GetActiveSigningKeyIdsForMachinesAsync(
+            tenantId, [machineA, machineB, foreignMachine], CancellationToken.None);
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[machineA].ToArray()).IsEquivalentTo(new[] { active });
     }
 
     [Test]

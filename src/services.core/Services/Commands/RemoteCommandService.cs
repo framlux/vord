@@ -18,8 +18,6 @@ namespace Framlux.FleetManagement.Services.Core.Commands;
 /// </summary>
 public sealed class RemoteCommandService
 {
-    private const ulong CapabilityRemoteCommands = 1UL;
-
     private const string HostPausedMessage = "Host is paused: your plan's host limit is reached.";
 
     private static readonly HashSet<string> AllowedCommandTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -180,7 +178,7 @@ public sealed class RemoteCommandService
 
         // Reject commands when the agent has not reported the remote commands capability.
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
-        if ((capabilities & CapabilityRemoteCommands) == 0)
+        if (AgentCapabilities.HasRemoteCommands(capabilities) == false)
         {
             return ServiceResult<RemoteCommand>.BadRequest("Remote commands are not enabled on this machine");
         }

@@ -382,6 +382,87 @@ public class SigningKeyRepositoryTests
         await Assert.That(result.Count).IsEqualTo(0);
     }
 
+    // ========== GetActiveSigningKeyIdsForMachinesAsync tests ==========
+
+    [Test]
+    public async Task GetActiveSigningKeyIdsForMachinesAsync_SeveralMachines_ReturnsEachMachinesActiveKeyIdsInOrder()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        (int userId, int tenantId, long machineA) = await SeedUserTenantMachineAsync(dbFactory);
+        long machineB = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        long machineC = await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        UserSigningKey key1 = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        UserSigningKey key2 = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(machineId: machineA, signingKeyId: key2.Id, tenantId: tenantId, authorizedByUserId: userId));
+        await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(machineId: machineA, signingKeyId: key1.Id, tenantId: tenantId, authorizedByUserId: userId));
+        await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(machineId: machineB, signingKeyId: key2.Id, tenantId: tenantId, authorizedByUserId: userId));
+
+        IReadOnlyDictionary<long, IReadOnlyList<int>> result = await repo.GetActiveSigningKeyIdsForMachinesAsync(
+            tenantId, [machineA, machineB, machineC]);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await Assert.That(result[machineA].ToArray()).IsEquivalentTo(new[] { key1.Id, key2.Id });
+        await Assert.That(result[machineA][0]).IsEqualTo(key1.Id);
+        await Assert.That(result[machineB].ToArray()).IsEquivalentTo(new[] { key2.Id });
+        await Assert.That(result.ContainsKey(machineC)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetActiveSigningKeyIdsForMachinesAsync_RevokedAuthorizationOrRevokedKey_IsExcluded()
+    {
+        // Intent: a key counts only while both the authorization and the key itself are unrevoked,
+        // the same rule as for a single machine.
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+        UserSigningKey authRevoked = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        UserSigningKey keyRevoked = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        UserSigningKey active = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        foreach (UserSigningKey key in new[] { authRevoked, keyRevoked, active })
+        {
+            await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(
+                machineId: machineId, signingKeyId: key.Id, tenantId: tenantId, authorizedByUserId: userId));
+        }
+
+        await repo.RevokeMachineAuthorizationAsync(machineId, authRevoked.Id, tenantId, userId);
+        await repo.RevokeSigningKeyAsync(keyRevoked.Id, tenantId, userId);
+
+        IReadOnlyDictionary<long, IReadOnlyList<int>> result = await repo.GetActiveSigningKeyIdsForMachinesAsync(tenantId, [machineId]);
+
+        await Assert.That(result[machineId].ToArray()).IsEquivalentTo(new[] { active.Id });
+    }
+
+    [Test]
+    public async Task GetActiveSigningKeyIdsForMachinesAsync_OtherTenantsAuthorization_IsNeverReturned()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+        (int otherUserId, int otherTenantId, long otherMachineId) = await SeedUserTenantMachineAsync(dbFactory);
+        UserSigningKey key = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId));
+        UserSigningKey otherKey = await repo.CreateSigningKeyAsync(TestDataBuilder.BuildSigningKey(userId: otherUserId, tenantId: otherTenantId));
+        await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(machineId: machineId, signingKeyId: key.Id, tenantId: tenantId, authorizedByUserId: userId));
+        await repo.CreateMachineAuthorizationAsync(TestDataBuilder.BuildMachineAuthorizedKey(machineId: otherMachineId, signingKeyId: otherKey.Id, tenantId: otherTenantId, authorizedByUserId: otherUserId));
+
+        IReadOnlyDictionary<long, IReadOnlyList<int>> result = await repo.GetActiveSigningKeyIdsForMachinesAsync(tenantId, [machineId, otherMachineId]);
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result.ContainsKey(otherMachineId)).IsFalse();
+        await Assert.That(result[machineId].ToArray()).IsEquivalentTo(new[] { key.Id });
+    }
+
+    [Test]
+    public async Task GetActiveSigningKeyIdsForMachinesAsync_NoMachineIds_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        IReadOnlyDictionary<long, IReadOnlyList<int>> result = await repo.GetActiveSigningKeyIdsForMachinesAsync(1, []);
+
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
+
     // ========== IsKeyAuthorizedForMachineAsync tests ==========
 
     [Test]

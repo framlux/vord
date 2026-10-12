@@ -2,7 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
+using System.Text.Json;
 
 namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 
@@ -80,6 +82,35 @@ internal static class KubernetesNodePayloadNormaliser
             ReporterEnrolled = payload.ReporterEnrolled,
             ReporterError = NormaliseReporterError(payload.ReporterError),
         };
+    }
+
+    /// <summary>
+    /// Reads a stored node report and normalises it, so that every reader of the stored text agrees on what
+    /// counts as a report. Text that is not a report, a JSON <c>null</c>, and a report that
+    /// <see cref="Normalise"/> refuses are all no report.
+    /// </summary>
+    /// <param name="json">The stored payload text.</param>
+    /// <returns>The normalised report, or null when there is none.</returns>
+    public static KubernetesNodePayload? NormaliseJson(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+
+        KubernetesNodePayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<KubernetesNodePayload>(json, JsonDefaults.SnakeCase);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (payload is null)
+        {
+            return null;
+        }
+
+        return Normalise(payload);
     }
 
     /// <summary>

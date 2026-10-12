@@ -190,6 +190,28 @@ public interface IKubernetesInventoryRepository
     Task<KubernetesReporterCandidate?> GetCandidateForMachineAsync(int tenantId, long machineId, CancellationToken ct);
 
     /// <summary>
+    /// Returns the reporter candidates of the given clusters, ordered by cluster and then machine.
+    /// Only candidates of the tenant are returned, so an id belonging to another tenant's cluster
+    /// matches nothing.
+    /// </summary>
+    /// <param name="tenantId">The tenant the clusters must belong to.</param>
+    /// <param name="clusterIds">The clusters whose candidates are wanted.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyList<KubernetesReporterCandidate>> ListCandidatesAsync(
+        int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the names of the given machines in one query. Only machines of the tenant are
+    /// returned, so an id belonging to another tenant's machine is absent from the result, as is an
+    /// unknown id.
+    /// </summary>
+    /// <param name="tenantId">The tenant the machines must belong to.</param>
+    /// <param name="machineIds">The machines whose names are wanted.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<IReadOnlyDictionary<long, string>> GetMachineNamesInTenantAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, CancellationToken ct);
+
+    /// <summary>
     /// Returns the payload of the latest local node report (telemetry type 14) of each of the given
     /// machines, in one query for however many machines are asked about. The latest report is the one
     /// the server accepted last, with the higher row id winning a tie, and only reports the server

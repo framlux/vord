@@ -13,6 +13,9 @@ namespace Framlux.FleetManagement.Database.Repositories;
 /// </summary>
 public partial class DatabaseRepository : ISigningKeyRepository
 {
+    /// <summary>A machine with the id of a signing key authorized on it.</summary>
+    private sealed record MachineKeyId(long MachineId, int KeyId);
+
     /// <inheritdoc/>
     public async Task<UserSigningKey> CreateSigningKeyAsync(UserSigningKey key, CancellationToken cancellationToken = default)
     {
@@ -89,6 +92,34 @@ public partial class DatabaseRepository : ISigningKeyRepository
                   (k.RevokedAt == null)
             select k
         ).ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<long, IReadOnlyList<int>>> GetActiveSigningKeyIdsForMachinesAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(machineIds);
+
+        if (machineIds.Count == 0)
+        {
+            return new Dictionary<long, IReadOnlyList<int>>();
+        }
+
+        List<long> ids = machineIds.Distinct().ToList();
+        List<MachineKeyId> pairs = await (
+            from a in _db.MachineAuthorizedKeys
+            join k in _db.UserSigningKeys on a.SigningKeyId equals k.Id
+            where (a.TenantId == tenantId) &&
+                  (k.TenantId == tenantId) &&
+                  ids.Contains(a.MachineId) &&
+                  (a.RevokedAt == null) &&
+                  (k.RevokedAt == null)
+            select new MachineKeyId(a.MachineId, k.Id)
+        ).ToListAsync(cancellationToken);
+
+        return pairs
+            .GroupBy(p => p.MachineId)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<int>)g.Select(p => p.KeyId).Distinct().Order().ToList());
     }
 
     /// <inheritdoc/>

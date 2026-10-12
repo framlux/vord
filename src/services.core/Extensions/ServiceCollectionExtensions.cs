@@ -360,6 +360,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<UserHandler>();
         services.AddScoped<MachineDetailHandler>();
         services.AddScoped<KubernetesClusterHandler>();
+        services.AddScoped<KubernetesReporterMachineReader>();
         services.AddScoped<IDataExportHandler, DataExportHandler>();
         services.AddScoped<ISigningKeyService, SigningKeyService>();
         services.AddScoped<MachineAuthorizedKeyService>();

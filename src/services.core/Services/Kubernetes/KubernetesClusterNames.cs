@@ -10,6 +10,8 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 public static class KubernetesClusterNames
 {
     private const int FingerprintPrefixLength = 12;
+    private const string ControlPlaneRole = "control-plane";
+    private const string MasterRole = "master";
 
     /// <summary>
     /// Returns the label for a distribution: its usual spelling for the distributions Vord detects,
@@ -32,22 +34,34 @@ public static class KubernetesClusterNames
     /// <summary>
     /// Derives a cluster's default name, "&lt;label&gt; &lt;name&gt;". The name is the smallest control-plane
     /// node name when there is one, else the smallest node name, else the start of the CA fingerprint.
-    /// Names are compared ordinally so every replica derives the same name.
+    /// A node counts as control-plane when its own machine reported that it runs a control plane or the
+    /// cluster reporter lists it with the <c>control-plane</c> or <c>master</c> role, so nodes no agent runs
+    /// on name the cluster too. Names are compared ordinally so every replica derives the same name.
     /// </summary>
     /// <param name="distro">The cluster's distribution.</param>
     /// <param name="caFingerprint">The cluster's CA fingerprint.</param>
-    /// <param name="nodes">The cluster's nodes, each with whether it runs a control plane.</param>
-    public static string Derive(string distro, string caFingerprint, IEnumerable<(string NodeName, bool ControlPlane)> nodes)
+    /// <param name="nodes">
+    /// The cluster's nodes, each with whether its machine reported a control plane and the roles the cluster
+    /// reporter lists for it (empty when it has not listed the node).
+    /// </param>
+    public static string Derive(
+        string distro, string caFingerprint, IEnumerable<(string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)> nodes)
     {
         ArgumentNullException.ThrowIfNull(nodes);
 
-        List<(string NodeName, bool ControlPlane)> named = nodes.Where(n => string.IsNullOrEmpty(n.NodeName) == false).ToList();
+        List<(string NodeName, bool ControlPlane, IReadOnlyCollection<string> Roles)> named =
+            nodes.Where(n => string.IsNullOrEmpty(n.NodeName) == false).ToList();
 
-        string? name = SmallestOrdinal(named.Where(n => n.ControlPlane).Select(n => n.NodeName))
+        string? name = SmallestOrdinal(named.Where(n => n.ControlPlane || HasControlPlaneRole(n.Roles)).Select(n => n.NodeName))
             ?? SmallestOrdinal(named.Select(n => n.NodeName))
             ?? FingerprintPrefix(caFingerprint);
 
         return DistroLabel(distro) + " " + name;
+    }
+
+    private static bool HasControlPlaneRole(IReadOnlyCollection<string> roles)
+    {
+        return roles.Any(r => string.Equals(r, ControlPlaneRole, StringComparison.Ordinal) || string.Equals(r, MasterRole, StringComparison.Ordinal));
     }
 
     private static string? SmallestOrdinal(IEnumerable<string> names)

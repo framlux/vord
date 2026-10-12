@@ -179,6 +179,46 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyList<KubernetesReporterCandidate>> ListCandidatesAsync(
+        int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(clusterIds);
+
+        if (clusterIds.Count == 0)
+        {
+            return [];
+        }
+
+        List<long> ids = clusterIds.ToList();
+        List<KubernetesReporterCandidate> candidates = await _db.KubernetesReporterCandidates
+            .Where(c => (c.TenantId == tenantId) && ids.Contains(c.ClusterId))
+            .OrderBy(c => c.ClusterId)
+            .ThenBy(c => c.MachineId)
+            .ToListAsync(ct);
+
+        return candidates;
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<long, string>> GetMachineNamesInTenantAsync(
+        int tenantId, IReadOnlyCollection<long> machineIds, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(machineIds);
+
+        if (machineIds.Count == 0)
+        {
+            return new Dictionary<long, string>();
+        }
+
+        List<long> ids = machineIds.Distinct().ToList();
+        Dictionary<long, string> names = await _db.Machines
+            .Where(m => (m.TenantId == tenantId) && ids.Contains(m.Id))
+            .ToDictionaryAsync(m => m.Id, m => m.Name, ct);
+
+        return names;
+    }
+
+    /// <inheritdoc/>
     public async Task<IReadOnlyDictionary<long, string>> GetLatestKubernetesNodePayloadsAsync(
         int tenantId, IReadOnlyCollection<long> machineIds, DateTimeOffset serverReceivedAfter, CancellationToken ct)
     {
