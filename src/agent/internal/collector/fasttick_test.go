@@ -318,6 +318,9 @@ tmpfs /run tmpfs rw 0 0
 
 // Intent: safeInt64 clamps uint64 values exceeding math.MaxInt64 to prevent overflow.
 func TestSafeInt64_Overflow(t *testing.T) {
+	// A typed constant: an untyped math.MaxInt64 passed to Errorf would default to int and overflow on 32-bit targets.
+	const maxInt64 int64 = math.MaxInt64
+
 	// Value within int64 range should pass through unchanged.
 	if got := safeInt64(1000); got != 1000 {
 		t.Errorf("safeInt64(1000) = %d, want 1000", got)
@@ -329,18 +332,18 @@ func TestSafeInt64_Overflow(t *testing.T) {
 	}
 
 	// math.MaxInt64 should pass through.
-	if got := safeInt64(uint64(math.MaxInt64)); got != math.MaxInt64 {
-		t.Errorf("safeInt64(MaxInt64) = %d, want %d", got, math.MaxInt64)
+	if got := safeInt64(uint64(math.MaxInt64)); got != maxInt64 {
+		t.Errorf("safeInt64(MaxInt64) = %d, want %d", got, maxInt64)
 	}
 
 	// math.MaxInt64 + 1 should clamp.
-	if got := safeInt64(uint64(math.MaxInt64) + 1); got != math.MaxInt64 {
-		t.Errorf("safeInt64(MaxInt64+1) = %d, want %d", got, math.MaxInt64)
+	if got := safeInt64(uint64(math.MaxInt64) + 1); got != maxInt64 {
+		t.Errorf("safeInt64(MaxInt64+1) = %d, want %d", got, maxInt64)
 	}
 
 	// math.MaxUint64 should clamp.
-	if got := safeInt64(math.MaxUint64); got != math.MaxInt64 {
-		t.Errorf("safeInt64(MaxUint64) = %d, want %d", got, math.MaxInt64)
+	if got := safeInt64(math.MaxUint64); got != maxInt64 {
+		t.Errorf("safeInt64(MaxUint64) = %d, want %d", got, maxInt64)
 	}
 }
 
