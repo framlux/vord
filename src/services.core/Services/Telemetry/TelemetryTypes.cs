@@ -48,4 +48,7 @@ public static class TelemetryTypeIds
 
     /// <summary>The running agent's build version.</summary>
     public const short AgentVersion = 13;
+
+    /// <summary>The identity of a Kubernetes node, read from local files on the host.</summary>
+    public const short KubernetesNode = 14;
 }

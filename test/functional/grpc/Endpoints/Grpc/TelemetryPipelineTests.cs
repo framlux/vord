@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -20,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 
@@ -386,6 +388,72 @@ public sealed class TelemetryPipelineTests
         MachineStateDetail? detail = await db.MachineStateDetails
             .FirstOrDefaultAsync(d => d.MachineId == machineId);
         await Assert.That(detail!.AgentVersion).IsEqualTo("1.15.3");
+    }
+
+    [Test]
+    public async Task Pipeline_KubernetesNode_StoresSnakeCasePayloadUnderTelemetryType14()
+    {
+        // Intent: a Kubernetes node report must be retained in MachineTelemetry under type 14 with the
+        // snake_case field names the read side deserializes, so every property survives the trip.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-kubernetes-node-key";
+        await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.KubernetesNodeType,
+                    KubernetesNode = new KubernetesNodeRecord
+                    {
+                        Distro = "k3s",
+                        KubeletVersion = "v1.31.4+k3s1",
+                        NodeName = "cp-1",
+                        NodeNameSource = "certificate",
+                        HasKubelet = true,
+                        ControlPlane = true,
+                        CaFingerprint = "ab",
+                        AdminCredentialPresent = true,
+                        ReporterEnrolled = true
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.TelemetryType).IsEqualTo((short)14);
+        await Assert.That(row.TelemetryType).IsEqualTo(TelemetryTypeIds.KubernetesNode);
+        await Assert.That(row.Payload).Contains("\"node_name\"");
+
+        KubernetesNodePayload? payload = JsonSerializer.Deserialize<KubernetesNodePayload>(row.Payload, JsonDefaults.SnakeCase);
+        await Assert.That(payload).IsNotNull();
+        await Assert.That(payload!.Distro).IsEqualTo("k3s");
+        await Assert.That(payload.KubeletVersion).IsEqualTo("v1.31.4+k3s1");
+        await Assert.That(payload.NodeName).IsEqualTo("cp-1");
+        await Assert.That(payload.NodeNameSource).IsEqualTo("certificate");
+        await Assert.That(payload.HasKubelet).IsTrue();
+        await Assert.That(payload.ControlPlane).IsTrue();
+        await Assert.That(payload.CaFingerprint).IsEqualTo("ab");
+        await Assert.That(payload.AdminCredentialPresent).IsTrue();
+        await Assert.That(payload.ReporterEnrolled).IsTrue();
     }
 
     [Test]

@@ -223,6 +223,7 @@ func TestPayloadDispatch_AllTypesRegistered(t *testing.T) {
 		db.TelemetryPackageUpdates,
 		db.TelemetryServiceStatus,
 		db.TelemetryAgentVersion,
+		db.TelemetryKubernetesNode,
 	}
 
 	for _, tt := range allTypes {
@@ -367,6 +368,38 @@ func TestSetPayload_AgentVersion(t *testing.T) {
 	}
 	if versionPayload.Version != "1.16.0" {
 		t.Errorf("expected Version=1.16.0, got %q", versionPayload.Version)
+	}
+}
+
+// Intent: Kubernetes node JSON correctly maps to the proto KubernetesNode payload so the server receives
+// the node identity on the slow tier instead of an empty oneof.
+func TestSetPayload_KubernetesNode(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
+
+	telItem := &pb.TelemetryItem{}
+	item := db.TelemetryQueueItem{
+		ID:       "test-kubernetes-node",
+		ItemType: db.TelemetryKubernetesNode,
+		Payload: `{"distro": "k3s", "kubeletVersion": "v1.31.4+k3s1", "nodeName": "cp-1", "nodeNameSource": "certificate", ` +
+			`"hasKubelet": true, "controlPlane": true, "caFingerprint": "ab", "adminCredentialPresent": true, "reporterEnrolled": true}`,
+	}
+
+	s.setPayload(telItem, item)
+
+	node := telItem.GetKubernetesNode()
+	if node == nil {
+		t.Fatal("expected KubernetesNode payload, got nil")
+	}
+	if node.Distro != "k3s" || node.KubeletVersion != "v1.31.4+k3s1" || node.NodeName != "cp-1" || node.NodeNameSource != "certificate" {
+		t.Errorf("unexpected string fields: %+v", node)
+	}
+	if node.HasKubelet == false || node.ControlPlane == false || node.AdminCredentialPresent == false || node.ReporterEnrolled == false {
+		t.Errorf("expected every bool field true, got %+v", node)
+	}
+	if node.CaFingerprint != "ab" {
+		t.Errorf("expected CaFingerprint=ab, got %q", node.CaFingerprint)
 	}
 }
 
@@ -772,6 +805,7 @@ func TestRunTier_SlowTypes(t *testing.T) {
 		db.TelemetryHardwareHealth: true,
 		db.TelemetryPackageUpdates: true,
 		db.TelemetryAgentVersion:   true,
+		db.TelemetryKubernetesNode: true,
 	}
 
 	for _, tt := range SlowTypes {

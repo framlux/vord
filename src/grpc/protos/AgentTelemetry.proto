@@ -43,6 +43,7 @@ message TelemetryItem {
     PackageUpdatesRecord package_updates = 20;
     ServiceStatusRecord service_status = 21;
     AgentVersionRecord agent_version = 22;
+    KubernetesNodeRecord kubernetes_node = 23;
   }
 }
 
@@ -70,6 +71,7 @@ enum TelemetryTypes {
     PACKAGE_UPDATES_TYPE = 11;
     SERVICE_STATUS_TYPE = 12;
     AGENT_VERSION_TYPE = 13;
+    KUBERNETES_NODE_TYPE = 14;
 }
 
 message SystemInfoRecord {
@@ -248,6 +250,19 @@ message ServiceEntry {
 
 message AgentVersionRecord {
     string version = 1;
+}
+
+// Identity of a Kubernetes node, read from local files on the host.
+message KubernetesNodeRecord {
+    string distro = 1;
+    string kubelet_version = 2;
+    string node_name = 3;
+    string node_name_source = 4;
+    bool has_kubelet = 5;
+    bool control_plane = 6;
+    string ca_fingerprint = 7;
+    bool admin_credential_present = 8;
+    bool reporter_enrolled = 9;
 }
 
 message SshSessionRecord {
