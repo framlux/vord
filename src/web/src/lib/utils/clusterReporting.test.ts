@@ -449,6 +449,90 @@ describe('planDisable', () => {
 		expect(plan.commands).toEqual([]);
 	});
 
+	it('does not uninstall through a cloned host with remote commands disabled, whose record was copied from another host', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true })
+				],
+				candidates: [candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' })]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands).toEqual([]);
+	});
+
+	it('uninstalls through a host that enrolled itself and unenrols the cloned one, instead of dropping the cloned token alone', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true }),
+					machine({ machineId: 2, machineName: 'real', remoteCommandsEnabled: false, enrolled: true })
+				],
+				candidates: [
+					candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' }),
+					candidate({ machineId: 2, machineName: 'real' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.machineId, c.commandType])).toEqual([
+			[2, AGENT_UNINSTALL],
+			[1, AGENT_UNENROL]
+		]);
+	});
+
+	it('sends nothing, not even an unenrol, when the only machine that could uninstall is a clone', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true })
+				],
+				candidates: [
+					candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' }),
+					candidate({ machineId: 3, machineName: 'elsewhere' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands).toEqual([]);
+	});
+
+	it('prefers a host that enrolled itself to a clone when remote commands are enabled on both, and still allows the clone', () => {
+		const eligibleMachines = [
+			machine({ machineId: 1, machineName: 'clone', enrolled: true }),
+			machine({ machineId: 2, machineName: 'real', enrolled: true })
+		];
+		const candidates = [
+			candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' }),
+			candidate({ machineId: 2, machineName: 'real' })
+		];
+
+		expect(planDisable(context({ eligibleMachines, candidates }), [KEY]).commands[0]).toMatchObject({
+			machineId: 2,
+			commandType: AGENT_UNINSTALL
+		});
+		expect(
+			planDisable(context({ eligibleMachines: [eligibleMachines[0]], candidates: [candidates[0]] }), [KEY])
+				.commands
+		).toMatchObject([{ machineId: 1, commandType: AGENT_UNINSTALL }]);
+	});
+
+	it('still uninstalls through a host with remote commands disabled whose reporter reports another error', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [machine({ machineId: 1, remoteCommandsEnabled: false, enrolled: true })],
+				candidates: [candidate({ machineId: 1, reporterError: 'credentials_rejected' })]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.machineId, c.commandType])).toEqual([[1, AGENT_UNINSTALL]]);
+	});
+
 	it('ranks the active reporter, then an enrolled machine, then the rest, whatever the capability says', () => {
 		const eligibleMachines = [
 			machine({ machineId: 7, machineName: 'plain' }),
@@ -590,6 +674,35 @@ describe('disableBlock', () => {
 		expect(disableBlock(ctx, [KEY])).toBeNull();
 	});
 
+	it('lists a cloned host with remote commands disabled as unable to take the uninstall, whatever its report says', () => {
+		const ctx = context({
+			eligibleMachines: [machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true })],
+			candidates: [candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' })]
+		});
+
+		expect(disableBlock(ctx, [KEY])?.machines).toEqual([
+			{ machineId: 1, machineName: 'clone', reason: 'remote_commands_disabled' }
+		]);
+		expect(disableBlock(ctx, null)?.machines).toEqual([
+			{ machineId: 1, machineName: 'clone', reason: 'remote_commands_disabled' }
+		]);
+	});
+
+	it('is clear when a host that enrolled itself can take the uninstall beside a clone that cannot', () => {
+		const ctx = context({
+			eligibleMachines: [
+				machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true }),
+				machine({ machineId: 2, machineName: 'real', remoteCommandsEnabled: false, enrolled: true })
+			],
+			candidates: [
+				candidate({ machineId: 1, machineName: 'clone', reporterError: 'state_copied' }),
+				candidate({ machineId: 2, machineName: 'real' })
+			]
+		});
+
+		expect(disableBlock(ctx, [KEY])).toBeNull();
+	});
+
 	it('still names remote commands for a disabled machine that never enrolled', () => {
 		const block = disableBlock(
 			context({
@@ -641,13 +754,18 @@ describe('disableBlock', () => {
 
 		for (const overrides of cases) {
 			for (const isCandidate of [true, false]) {
-				const ctx = context({
-					eligibleMachines: [machine(overrides)],
-					candidates: isCandidate ? [candidate({ online: overrides.online ?? true })] : []
-				});
-				const sendsNothing = planDisable(ctx, [KEY]).commands.length === 0;
+				for (const reporterError of [null, 'state_copied']) {
+					const ctx = context({
+						eligibleMachines: [machine(overrides)],
+						candidates: isCandidate ? [candidate({ online: overrides.online ?? true, reporterError })] : []
+					});
+					const sendsNothing = planDisable(ctx, [KEY]).commands.length === 0;
 
-				expect(disableBlock(ctx, [KEY]) !== null, JSON.stringify({ overrides, isCandidate })).toBe(sendsNothing);
+					expect(
+						disableBlock(ctx, [KEY]) !== null,
+						JSON.stringify({ overrides, isCandidate, reporterError })
+					).toBe(sendsNothing);
+				}
 			}
 		}
 	});

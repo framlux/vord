@@ -22,7 +22,9 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 /// <item>Unenrol needs a machine that is a reporter candidate or whose latest report says it is enrolled.</item>
 /// <item>Uninstall on a host whose agent has remote commands switched off needs that same evidence of
 /// enrolment. The command skips the capability check so a host that enrolled can still be cleaned up, and
-/// this keeps it from reaching a control plane whose owner switched commands off without ever enrolling.</item>
+/// this keeps it from reaching a control plane whose owner switched commands off without ever enrolling.
+/// A record copied from another host (<c>state_copied</c>) is evidence for unenrol but not for this: that
+/// host never enrolled, and its agent refuses an uninstall it has no record of its own for.</item>
 /// <item>All three take no parameters.</item>
 /// </list>
 /// </remarks>
@@ -33,6 +35,8 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     private const string CannotEnrolMessage = "Only control-plane machines with an admin credential can enrol";
     private const string NotEnrolledMessage = "This machine is not an enrolled reporter";
     private const string UninstallNeedsEnrolmentMessage = "This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it";
+    private const string UninstallCopiedStateMessage = "This host has remote commands disabled and its reporter state was copied from another host; unenrol it, or enable remote commands to uninstall from it";
+    private const string StateCopiedError = "state_copied";
 
     /// <summary>
     /// How old a local report may be and still describe the machine. It is the window the machine page
@@ -115,7 +119,15 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
         bool isUninstall = string.Equals(kubernetesType, KubernetesCommandTypes.Uninstall, StringComparison.Ordinal);
         if (isUninstall && (remoteCommandsEnabled == false))
         {
-            bool enrolled = await HasEnrolmentEvidenceAsync(tenantId, machine.Id, report, ct);
+            // Only a record this host wrote itself makes it a host that enrolled. The agent accepts the
+            // cleanup with remote commands off on that basis alone, and refuses an uninstall on a copy.
+            bool copied = IsCopiedState(report?.ReporterError);
+            if (copied)
+            {
+                return ServiceResult<bool>.BadRequest(UninstallCopiedStateMessage);
+            }
+
+            bool enrolled = await HasEnrolmentEvidenceAsync(tenantId, machine.Id, report, ignoreCopiedState: true, ct);
             if (enrolled == false)
             {
                 return ServiceResult<bool>.BadRequest(UninstallNeedsEnrolmentMessage);
@@ -138,7 +150,7 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
     private async Task<ServiceResult<bool>> CheckUnenrolAsync(
         int tenantId, long machineId, KubernetesNodePayload? report, CancellationToken ct)
     {
-        if (await HasEnrolmentEvidenceAsync(tenantId, machineId, report, ct))
+        if (await HasEnrolmentEvidenceAsync(tenantId, machineId, report, ignoreCopiedState: false, ct))
         {
             return ServiceResult<bool>.Ok(true);
         }
@@ -148,19 +160,32 @@ public sealed class KubernetesCommandEligibility : IKubernetesCommandEligibility
 
     /// <summary>
     /// Reports whether the machine ever enrolled as a reporter: its latest report says it is enrolled, or it
-    /// has a candidate row. The report is tried first because it costs no further read.
+    /// has a candidate row. The report is tried first because it costs no further read. A host that holds a
+    /// record copied from another host reports itself enrolled and keeps a candidate row, so
+    /// <paramref name="ignoreCopiedState"/> says whether those two count: unenrol removes the copy and
+    /// accepts them, while an uninstall must not treat the copy as the host's own enrolment.
     /// </summary>
     private async Task<bool> HasEnrolmentEvidenceAsync(
-        int tenantId, long machineId, KubernetesNodePayload? report, CancellationToken ct)
+        int tenantId, long machineId, KubernetesNodePayload? report, bool ignoreCopiedState, CancellationToken ct)
     {
-        if ((report is not null) && report.ReporterEnrolled)
+        if ((report is not null) && report.ReporterEnrolled && CountsAsEvidence(report.ReporterError, ignoreCopiedState))
         {
             return true;
         }
 
         KubernetesReporterCandidate? candidate = await _repository.GetCandidateForMachineAsync(tenantId, machineId, ct);
 
-        return candidate is not null;
+        return (candidate is not null) && CountsAsEvidence(candidate.ReporterError, ignoreCopiedState);
+    }
+
+    private static bool CountsAsEvidence(string? reporterError, bool ignoreCopiedState)
+    {
+        return (ignoreCopiedState == false) || (IsCopiedState(reporterError) == false);
+    }
+
+    private static bool IsCopiedState(string? reporterError)
+    {
+        return string.Equals(reporterError, StateCopiedError, StringComparison.Ordinal);
     }
 
     /// <summary>

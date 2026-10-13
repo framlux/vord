@@ -32,6 +32,7 @@ public sealed class KubernetesCommandEligibilityTests
     private const string CannotEnrolMessage = "Only control-plane machines with an admin credential can enrol";
     private const string NotEnrolledMessage = "This machine is not an enrolled reporter";
     private const string UninstallNeedsEnrolmentMessage = "This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it";
+    private const string UninstallCopiedStateMessage = "This host has remote commands disabled and its reporter state was copied from another host; unenrol it, or enable remote commands to uninstall from it";
 
     private static readonly DateTimeOffset Now = new(2026, 10, 12, 9, 30, 0, TimeSpan.Zero);
 
@@ -55,7 +56,8 @@ public sealed class KubernetesCommandEligibilityTests
         bool controlPlane = true,
         bool adminCredentialPresent = true,
         bool reporterEnrolled = false,
-        string distro = "k3s")
+        string distro = "k3s",
+        string? reporterError = null)
     {
         KubernetesNodePayload payload = new()
         {
@@ -68,6 +70,7 @@ public sealed class KubernetesCommandEligibilityTests
             CaFingerprint = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718",
             AdminCredentialPresent = adminCredentialPresent,
             ReporterEnrolled = reporterEnrolled,
+            ReporterError = reporterError,
         };
 
         return JsonSerializer.Serialize(payload, JsonDefaults.SnakeCase);
@@ -86,10 +89,10 @@ public sealed class KubernetesCommandEligibilityTests
             .Returns(payloads);
     }
 
-    private void GivenCandidate(bool isCandidate)
+    private void GivenCandidate(bool isCandidate, string? reporterError = null)
     {
         KubernetesReporterCandidate? candidate = isCandidate
-            ? new KubernetesReporterCandidate { TenantId = TenantId, ClusterId = 3, MachineId = MachineId, LastReportAt = Now }
+            ? new KubernetesReporterCandidate { TenantId = TenantId, ClusterId = 3, MachineId = MachineId, LastReportAt = Now, ReporterError = reporterError }
             : null;
 
         _repository.GetCandidateForMachineAsync(TenantId, MachineId, Arg.Any<CancellationToken>()).Returns(candidate);
@@ -382,6 +385,75 @@ public sealed class KubernetesCommandEligibilityTests
     }
 
     [Test]
+    public async Task Uninstall_RemoteCommandsOffAndTheReportSaysEnrolledOnACopiedRecord_IsRejectedWithTheCopiedStateReason()
+    {
+        // Intent: a disk clone of an enrolled control plane reports itself enrolled with state_copied, but
+        // it never enrolled itself, and its agent refuses an uninstall it holds no record of its own for.
+        // The server must not hand it one, or the user is told the cleanup was accepted when it was not.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true, reporterError: "state_copied"));
+        GivenCandidate(true, "state_copied");
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, UninstallCopiedStateMessage);
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOffAndTheReportSaysCopiedWithOtherwiseValidEvidence_IsRejectedWithoutLookingForACandidateRow()
+    {
+        // Intent: the latest report is the host's own word on its state, so a copied record in it settles
+        // the question whatever a candidate row says.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true, reporterError: "state_copied"));
+        GivenCandidate(true);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, UninstallCopiedStateMessage);
+        await _repository.DidNotReceiveWithAnyArgs().GetCandidateForMachineAsync(default, default, default);
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOffAndOnlyTheCandidateRowCarriesACopiedRecord_IsRejectedAsNeverEnrolled()
+    {
+        // Intent: a candidate row that still carries state_copied while the latest report no longer says the
+        // host is enrolled is the copy being cleaned up. It is not evidence the host enrolled.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: false));
+        GivenCandidate(true, "state_copied");
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await AssertRejectedAsync(result, UninstallNeedsEnrolmentMessage);
+    }
+
+    [Test]
+    [Arguments("credentials_rejected")]
+    [Arguments("tls_ca_changed")]
+    public async Task Uninstall_RemoteCommandsOffAndTheHostReportsAnotherReporterError_IsStillEligible(string reporterError)
+    {
+        // Intent: only a copied record says the host never enrolled. A rejected credential or a changed CA
+        // is a host that did enrol and is exactly what the cleanup bypass exists for.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true, reporterError: reporterError));
+        GivenCandidate(true, reporterError);
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_RemoteCommandsOnAndACopiedRecord_IsStillEligible()
+    {
+        // Intent: the copied record only matters while the capability check is skipped. With remote commands
+        // on, uninstall works by label across the whole cluster whatever this host holds.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true, reporterError: "state_copied"));
+        GivenCandidate(true, "state_copied");
+
+        ServiceResult<bool> result = await CheckAsync(Uninstall, remoteCommandsEnabled: true);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
     public async Task Uninstall_RemoteCommandsOnAndNeverEnrolled_IsStillEligible()
     {
         // Intent: with remote commands on nothing changes. Uninstall stays no stricter than enrol so it can
@@ -480,6 +552,30 @@ public sealed class KubernetesCommandEligibilityTests
         GivenCandidate(false);
 
         ServiceResult<bool> result = await CheckAsync(Unenrol);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task Unenrol_RemoteCommandsOffAndACopiedRecord_IsEligible()
+    {
+        // Intent: removing the copy is the remedy for a cloned host, and the agent accepts the unenrol of a
+        // copied record with remote commands off, so the server must send it.
+        GivenLatestPayload(PayloadJson(reporterEnrolled: true, reporterError: "state_copied"));
+        GivenCandidate(true, "state_copied");
+
+        ServiceResult<bool> result = await CheckAsync(Unenrol, remoteCommandsEnabled: false);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task Unenrol_CandidateRowThatCarriesACopiedRecordWithoutAReport_IsEligible()
+    {
+        GivenLatestPayload(null);
+        GivenCandidate(true, "state_copied");
+
+        ServiceResult<bool> result = await CheckAsync(Unenrol, remoteCommandsEnabled: false);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }

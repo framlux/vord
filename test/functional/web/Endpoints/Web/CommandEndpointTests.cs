@@ -751,11 +751,13 @@ public sealed class CommandEndpointTests
 
     private const string KubernetesFingerprint = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
 
-    private static string LocalReportJson(bool controlPlane, bool adminCredentialPresent, bool reporterEnrolled)
+    private static string LocalReportJson(bool controlPlane, bool adminCredentialPresent, bool reporterEnrolled, string? reporterError = null)
     {
+        string errorField = (reporterError is null) ? string.Empty : $",\"reporter_error\":\"{reporterError}\"";
+
         return "{\"distro\":\"k3s\",\"kubelet_version\":\"v1.30.4+k3s1\",\"node_name\":\"cp-1\",\"node_name_source\":\"certificate\","
             + $"\"has_kubelet\":true,\"control_plane\":{(controlPlane ? "true" : "false")},\"ca_fingerprint\":\"{KubernetesFingerprint}\","
-            + $"\"admin_credential_present\":{(adminCredentialPresent ? "true" : "false")},\"reporter_enrolled\":{(reporterEnrolled ? "true" : "false")}}}";
+            + $"\"admin_credential_present\":{(adminCredentialPresent ? "true" : "false")},\"reporter_enrolled\":{(reporterEnrolled ? "true" : "false")}{errorField}}}";
     }
 
     private static async Task SeedLocalReportAsync(
@@ -766,7 +768,7 @@ public sealed class CommandEndpointTests
             machineId: machineId, tenantId: tenantId, telemetryType: 14, payload: payload, receivedAt: receivedAt, serverReceivedAt: receivedAt));
     }
 
-    private static async Task SeedCandidateAsync(DatabaseContext db, int tenantId, long machineId)
+    private static async Task SeedCandidateAsync(DatabaseContext db, int tenantId, long machineId, string? reporterError = null)
     {
         long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
         {
@@ -782,6 +784,7 @@ public sealed class CommandEndpointTests
             ClusterId = clusterId,
             MachineId = machineId,
             LastReportAt = DateTimeOffset.UtcNow,
+            ReporterError = reporterError,
         });
     }
 
@@ -1265,6 +1268,67 @@ public sealed class CommandEndpointTests
         await Assert.That(await ErrorMessageOfAsync(response))
             .IsEqualTo("This host has remote commands disabled and never enrolled; enable remote commands to uninstall from it");
         await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UninstallOnACopiedRecordWithoutTheCommandsCapability_Returns400AndStoresNothing()
+    {
+        // Intent: a disk clone of an enrolled control plane reports itself enrolled with state_copied, but
+        // its agent holds no record of its own and refuses an uninstall while remote commands are off.
+        // The server refuses it at send time rather than answering "Accepted" for a command that is then
+        // rejected on the host.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true, reporterError: "state_copied"));
+        await SeedCandidateAsync(db, tenantId, machineId, "state_copied");
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await ErrorMessageOfAsync(response))
+            .IsEqualTo("This host has remote commands disabled and its reporter state was copied from another host; unenrol it, or enable remote commands to uninstall from it");
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnenrolOnACopiedRecordWithoutTheCommandsCapability_IsStored()
+    {
+        // Intent: unenrol is the remedy for a copied record and removes only local files, so the agent
+        // accepts it with remote commands off and the server sends it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true, reporterError: "state_copied"));
+        await SeedCandidateAsync(db, tenantId, machineId, "state_copied");
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => (c.MachineId == machineId) && (c.CommandType == "k8s_reporter_unenrol"))).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitCommand_UninstallOnACopiedRecordWithTheCommandsCapability_IsStored()
+    {
+        // Intent: with remote commands on the capability check applies as it always did, and uninstall
+        // works by label across the whole cluster whatever record the host holds.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true, reporterError: "state_copied"));
+        await SeedCandidateAsync(db, tenantId, machineId, "state_copied");
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_uninstall"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
     }
 
     [Test]

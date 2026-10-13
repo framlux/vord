@@ -15,6 +15,9 @@ export const AGENT_UNINSTALL = 'k8s_reporter_uninstall';
 
 export type ReporterCommandType = typeof AGENT_ENROL | typeof AGENT_UNENROL | typeof AGENT_UNINSTALL;
 
+/** The reporter error of a host whose reporter record was written on another host (a disk clone). */
+export const REPORTER_STATE_COPIED = 'state_copied';
+
 /** Why a machine is not sent a command. */
 export type SkipReason =
 	| 'key_not_authorised'
@@ -62,7 +65,8 @@ export type MachineAssessment = { key: UsableSigningKey } | { skip: SkipReason }
 
 // Enrolling needs the remote commands capability. Unenrol and uninstall are cleanup, which a host
 // accepts with the capability off, but an uninstall only reaches such a host when it once enrolled:
-// the server wants a candidate row or a report that says so, and the agent wants its reporter record.
+// the server wants a candidate row or a report that says so, and the agent wants a reporter record
+// that it wrote itself (see hasUninstallEvidence).
 // A machine whose capabilities could not be read (null) is allowed: unknown is not disabled.
 function lacksCapabilityFor(
 	machine: KubernetesEligibleMachineDto,
@@ -83,9 +87,10 @@ type EnrolmentIndependentCommand = typeof AGENT_ENROL | typeof AGENT_UNENROL;
  * Decides whether a machine can be sent a command and with which of the user's keys. The order of
  * the reasons follows the server's: the key is checked before the pause, and the pause before the
  * capability. The capability only counts for the commands that need it (see lacksCapabilityFor).
- * An uninstall must be told whether the machine is known to be enrolled, which is the caller's to
- * decide because a candidate row of the cluster counts as well as the machine's own report (see
- * isEnrolled); the other commands do not take the flag.
+ * An uninstall must be told whether the machine is known to have enrolled on a record of its own, which
+ * is the caller's to decide because a candidate row of the cluster counts as well as the machine's own
+ * report, and a record copied from another host does not count (see hasUninstallEvidence); the other
+ * commands do not take the flag.
  */
 export function assessMachine(
 	machine: KubernetesEligibleMachineDto,
@@ -188,10 +193,23 @@ function isCandidate(context: ReportingContext, machineId: number): boolean {
 }
 
 // A machine is known to be enrolled when the cluster lists it as a candidate or its own latest report
-// says so. This is the evidence the server wants before it uninstalls through a host with remote
-// commands off.
+// says so.
 function isEnrolled(context: ReportingContext, machine: KubernetesEligibleMachineDto): boolean {
 	return machine.enrolled || isCandidate(context, machine.machineId);
+}
+
+// A host that holds a reporter record copied from another host reports itself enrolled, with the error
+// state_copied, and is a candidate of the cluster. It never enrolled, though: its agent accepts an unenrol
+// for the copy, but refuses an uninstall while remote commands are off, and the server refuses to send
+// one. So a copy is evidence for every purpose but that.
+function holdsCopiedRecord(context: ReportingContext, machineId: number): boolean {
+	return context.candidates.some((c) => c.machineId === machineId && c.reporterError === REPORTER_STATE_COPIED);
+}
+
+// The evidence the server and the agent want before an uninstall goes through a host with remote commands
+// off: the host enrolled on its own record, not on a copy of another host's.
+function hasUninstallEvidence(context: ReportingContext, machine: KubernetesEligibleMachineDto): boolean {
+	return isEnrolled(context, machine) && holdsCopiedRecord(context, machine.machineId) === false;
 }
 
 /** Enrols every eligible machine that is not enrolled yet and can be sent the command. */
@@ -238,13 +256,15 @@ const disableBlockSummary =
  * sent the uninstall. The reasons follow the order the command is refused in (key, pause, capability)
  * and offline comes last, so a machine reads as unavailable for the first thing that has to change.
  * The capability only keeps a machine out when it never enrolled: a host that did accepts the cleanup
- * with remote commands off.
+ * with remote commands off. A host holding a record copied from another host did not enrol, so it
+ * counts as never enrolled here.
  */
 export function disableBlock(context: ReportingContext, keys: UsableSigningKey[] | null): DisableBlock | null {
 	const machines: SkippedMachine[] = [];
 	for (const machine of context.eligibleMachines) {
 		const reason =
-			sendBlock(machine, keys, AGENT_UNINSTALL, isEnrolled(context, machine)) ?? (machine.online ? null : 'offline');
+			sendBlock(machine, keys, AGENT_UNINSTALL, hasUninstallEvidence(context, machine)) ??
+			(machine.online ? null : 'offline');
 		if (reason === null) {
 			return null;
 		}
@@ -258,8 +278,9 @@ export function disableBlock(context: ReportingContext, keys: UsableSigningKey[]
 /**
  * Uninstalls through one online eligible machine, preferring the active reporter, then a machine known to be
  * enrolled, and unenrols every other online candidate. A machine with remote commands off is only a
- * target once it has enrolled. Without a machine to uninstall through nothing is sent: an unenrol
- * alone would drop the hosts' tokens and leave the cluster objects behind.
+ * target once it has enrolled on a record of its own, never on a copy of another host's. Without a
+ * machine to uninstall through nothing is sent: an unenrol alone would drop the hosts' tokens and
+ * leave the cluster objects behind.
  */
 export function planDisable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
@@ -269,13 +290,13 @@ export function planDisable(context: ReportingContext, keys: UsableSigningKey[])
 		.filter((m) => m.online)
 		.map((machine) => ({
 			machine,
-			assessment: assessMachine(machine, keys, AGENT_UNINSTALL, isEnrolled(context, machine))
+			assessment: assessMachine(machine, keys, AGENT_UNINSTALL, hasUninstallEvidence(context, machine))
 		}))
 		.filter((entry): entry is { machine: KubernetesEligibleMachineDto; assessment: { key: UsableSigningKey } } =>
 			'key' in entry.assessment
 		);
 	const rank = (machine: KubernetesEligibleMachineDto): number =>
-		machine.machineId === activeReporter ? 0 : isEnrolled(context, machine) ? 1 : 2;
+		machine.machineId === activeReporter ? 0 : hasUninstallEvidence(context, machine) ? 1 : 2;
 	viable.sort((a, b) => rank(a.machine) - rank(b.machine));
 	const target = viable.at(0);
 
