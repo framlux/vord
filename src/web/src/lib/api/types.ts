@@ -36,7 +36,8 @@ export enum MachineType {
 	Desktop = 1,
 	Laptop = 2,
 	BareMetalServer = 3,
-	VirtualMachine = 4
+	VirtualMachine = 4,
+	SingleBoardComputer = 5
 }
 
 export enum UserAccountRole {

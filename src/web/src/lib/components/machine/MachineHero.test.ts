@@ -270,4 +270,18 @@ describe('MachineHero', () => {
 			expect(screen.queryByText(/Agent last checked in/)).toBeNull();
 		});
 	});
+
+	it('should name a single-board computer as one', () => {
+		render(MachineHero, {
+			props: {
+				machine: buildMachine({ name: 'raspberrypi', machineType: MachineType.SingleBoardComputer }),
+				isOnline: true,
+				isPaused: false,
+				lastPing: '2026-05-12T10:00:00Z',
+				healthStatus: MachineHealthStatus.Healthy
+			}
+		});
+
+		expect(screen.getByText('Single-board computer')).toBeInTheDocument();
+	});
 });

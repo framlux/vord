@@ -332,10 +332,10 @@ const fleetMachines: FleetMachineDto[] = [
 	},
 	{
 		id: 17,
-		name: 'nas-01',
-		hostname: 'nas-01.home.lan',
+		name: 'pi-garage',
+		hostname: 'pi-garage.home.lan',
 		ipAddress: '10.0.5.11',
-		hardwareModel: 'TrueNAS Mini X+',
+		hardwareModel: 'Raspberry Pi 4 Model B Rev 1.4',
 		healthStatus: MachineHealthStatus.Offline,
 		cpuUsagePercent: null,
 		memoryUsagePercent: null,

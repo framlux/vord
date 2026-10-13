@@ -7,6 +7,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import type { MachineSearchParams } from '$lib/api/types';
 import SearchFilterPanel from './SearchFilterPanel.svelte';
+import { getTypeFilterOptions } from '$lib/utils/enums';
 
 function renderPanel(filters: MachineSearchParams = {}) {
 	const onapply = vi.fn();
@@ -73,5 +74,47 @@ describe('SearchFilterPanel paused filter', () => {
 
 		expect(screen.getByRole('checkbox', { name: 'Paused' })).not.toBeChecked();
 		expect(onapply).toHaveBeenCalledWith({});
+	});
+});
+
+describe('SearchFilterPanel type filter', () => {
+	// The select has no label of its own; "All Types" is the option it starts on.
+	function typeSelect() {
+		return screen.getByDisplayValue('All Types') as HTMLSelectElement;
+	}
+
+	it('offers the single-board computer', () => {
+		renderPanel();
+
+		const labels = Array.from(typeSelect().options).map((o) => o.textContent?.trim());
+		expect(labels).toContain('Single-board computer');
+	});
+
+	it('asks for single-board computers by their enum name', async () => {
+		const onapply = renderPanel();
+
+		await fireEvent.change(typeSelect(), { target: { value: 'SingleBoardComputer' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+		expect(onapply).toHaveBeenCalledWith({ type: 'SingleBoardComputer' });
+	});
+
+	it('shows the type the page was opened with', () => {
+		renderPanel({ type: 'SingleBoardComputer' });
+
+		expect(screen.getByDisplayValue('Single-board computer')).toBeInTheDocument();
+	});
+
+	it('offers every machine type the enum has, so a new one cannot be left out of the filter', () => {
+		renderPanel();
+
+		// Unknown is not a kind of machine anyone searches for, so the panel leaves it out.
+		const expected = getTypeFilterOptions().filter((o) => o.value !== 'Unknown');
+		const offered = Array.from(typeSelect().options).map((o) => ({
+			value: o.value,
+			label: o.textContent?.trim()
+		}));
+
+		expect(offered).toEqual(expected);
 	});
 });

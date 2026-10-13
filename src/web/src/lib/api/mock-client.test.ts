@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { MockApiClient } from './mock-client';
 import { ApiError } from './client';
-import { MachineHealthStatus } from './types';
+import { MachineHealthStatus, MachineType } from './types';
 import { mockFleetMachines, mockMachineById, mockMachineDetailById, mockMachineList } from './mock-fixtures';
 
 // Mock mode is where the assignment picker is worked on without a live tenant, so it has to
@@ -116,5 +116,18 @@ describe('mock machine fixtures', () => {
 		for (const machine of mockMachineList.items) {
 			expect(machine.isOnline, machine.name).toBe(machine.healthStatus !== MachineHealthStatus.Offline);
 		}
+	});
+
+	it('has a Raspberry Pi, so the demo shows the single-board computer icon and model', () => {
+		const boards = mockMachineList.items.filter((m) => m.machineType === MachineType.SingleBoardComputer);
+
+		expect(boards.length).toBe(1);
+
+		// The machine list and the dashboard are two fixtures for one machine, so they must agree on
+		// who it is.
+		const onDashboard = mockFleetMachines.find((m) => m.id === boards[0].id);
+
+		expect(onDashboard?.name).toBe(boards[0].name);
+		expect(onDashboard?.hardwareModel).toBe('Raspberry Pi 4 Model B Rev 1.4');
 	});
 });
