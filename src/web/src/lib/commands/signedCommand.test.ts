@@ -85,7 +85,7 @@ describe('signedCommand', () => {
 	});
 
 	describe('the canonical payload', () => {
-		it('carries an empty params object, so the signed bytes always bind the command to no parameters', async () => {
+		it('carries an empty params object when the request has no params, so the signed bytes bind the command to none', async () => {
 			const { api, sent } = makeApi();
 
 			await sendSignedCommand(api, request());
@@ -300,11 +300,30 @@ describe('signedCommand', () => {
 	});
 
 	describe('isValidPid', () => {
-		it.each(['101', '102', '4242', '4194304'])('accepts %s', (pid) => {
+		it.each(['101', '102', '4242', '4194303', '4194304'])('accepts %s', (pid) => {
 			expect(isValidPid(pid)).toBe(true);
 		});
 
-		it.each(['', '0', '1', '99', '100', 'abc', '-5', '12a', ' 4242', '4242 ', '1.5', '0101', '+101', '1e3'])(
+		it.each([
+			'',
+			'0',
+			'1',
+			'99',
+			'100',
+			'abc',
+			'-5',
+			'12a',
+			' 4242',
+			'4242 ',
+			'1.5',
+			'0101',
+			'+101',
+			'1e3',
+			'4194305',
+			'4294967296',
+			'4294967297',
+			'99999999999999999999'
+		])(
 			'refuses %j',
 			(pid) => {
 				expect(isValidPid(pid)).toBe(false);
@@ -342,8 +361,17 @@ describe('signedCommand', () => {
 			});
 		});
 
-		it.each(['', '0', '100', 'abc', '-5'])('is null for the invalid Kill Process pid %j', (pid) => {
+		it.each(['', '0', '100', 'abc', '-5', '4194305', '4294967297'])('is null for the invalid Kill Process pid %j', (pid) => {
 			expect(buildCommandParams('kill_process', { ...blank, pid })).toBeNull();
+		});
+
+		it('accepts the highest pid Linux hands out', () => {
+			expect(buildCommandParams('kill_process', { ...blank, pid: '4194304' })).toEqual({ pid: '4194304' });
+		});
+
+		it('stays strict about whitespace, which the form trims before it gets here', () => {
+			expect(buildCommandParams('kill_process', { ...blank, pid: '4242 ' })).toBeNull();
+			expect(buildCommandParams('kill_session', { ...blank, sessionId: ' c12' })).toBeNull();
 		});
 
 		it('gives Kill Session its session_id', () => {

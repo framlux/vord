@@ -291,7 +291,7 @@ describe('machine page command parameters', () => {
 			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 		});
 
-		it.each(['0', '100', 'abc', '-5', '4 2', '1e3'])('keeps Send disabled for the PID %j', async (pid) => {
+		it.each(['0', '100', 'abc', '-5', '4 2', '1e3', '4194305', '4294967297'])('keeps Send disabled for the PID %j', async (pid) => {
 			await openCommandsTab();
 			await chooseCommand('kill_process');
 
@@ -307,11 +307,11 @@ describe('machine page command parameters', () => {
 			await chooseCommand('kill_process');
 
 			expect(screen.getByLabelText('PID')).not.toBeInvalid();
-			expect(screen.getByLabelText('PID')).not.toHaveAccessibleDescription(/greater than 100/);
+			expect(screen.getByLabelText('PID')).not.toHaveAccessibleDescription(/101 to 4194304/);
 
 			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '100' } });
 
-			expect(screen.getByLabelText('PID')).toHaveAccessibleDescription(/greater than 100/);
+			expect(screen.getByLabelText('PID')).toHaveAccessibleDescription(/101 to 4194304/);
 		});
 
 		it('signs and sends the pid alone when force is not ticked', async () => {
@@ -328,6 +328,40 @@ describe('machine page command parameters', () => {
 			expect(signed).toEqual({ pid: '4242' });
 			expect(sent).toEqual({ pid: '4242' });
 			expect(signed).not.toHaveProperty('force');
+		});
+
+		it('accepts the highest pid Linux hands out', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4194304' } });
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4194304' }, sent: { pid: '4194304' } });
+		});
+
+		it('trims pasted whitespace around the pid before validating and signing it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '  4242 ' } });
+
+			expect(screen.getByLabelText('PID')).not.toBeInvalid();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4242' }, sent: { pid: '4242' } });
+		});
+
+		it('still refuses a pid with whitespace inside it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: ' 42 42 ' } });
+
+			expect(screen.getByLabelText('PID')).toBeInvalid();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 		});
 
 		it('adds force="true" to both the signed payload and the request when the box is ticked', async () => {
@@ -382,6 +416,27 @@ describe('machine page command parameters', () => {
 			expect(api.sendCommand).not.toHaveBeenCalled();
 		});
 
+		it('trims pasted whitespace around the session id before validating and signing it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: '  c12   ' } });
+
+			expect(screen.getByLabelText('Session ID')).not.toBeInvalid();
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { session_id: 'c12' }, sent: { session_id: 'c12' } });
+		});
+
+		it('keeps Send disabled for a field that holds only whitespace', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: '   ' } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
 		it('signs and sends the session id', async () => {
 			await openCommandsTab();
 			await chooseCommand('kill_session');
@@ -391,6 +446,22 @@ describe('machine page command parameters', () => {
 
 			expect(api.sendCommand.mock.calls[0][0]).toMatchObject({ machineId: 7, commandType: 'kill_session' });
 			expect(await sentParams()).toEqual({ signed: { session_id: 'c12' }, sent: { session_id: 'c12' } });
+		});
+	});
+
+	describe('layout', () => {
+		it.each([
+			['kill_process', 'PID'],
+			['kill_process', 'Force (SIGKILL immediately)'],
+			['kill_session', 'Session ID']
+		])('puts the %s field "%s" before the Send button it gates', async (type, label) => {
+			await openCommandsTab();
+			await chooseCommand(type);
+
+			const field = screen.getByLabelText(label);
+			const send = screen.getByRole('button', { name: 'Send' });
+
+			expect(field.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		});
 	});
 

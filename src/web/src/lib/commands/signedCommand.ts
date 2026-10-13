@@ -50,13 +50,17 @@ const COMMAND_LIFETIME_MS = 10 * 60 * 1000;
 // The agent refuses to kill a process at or below this pid, so the form refuses it too.
 export const PROTECTED_PID_CEILING = 100;
 
+// The highest pid Linux hands out (PID_MAX_LIMIT). The kernel's pid_t is 32 bits and a wider number
+// would be truncated by kill(2) into some other process, so the form never offers one.
+export const MAX_PID = 4194304;
+
 const PID_PATTERN = /^[1-9][0-9]*$/;
 
 // The agent's session id rule: a leading alphanumeric keeps the id from being read as an option.
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 export function isValidPid(pid: string): boolean {
-	return PID_PATTERN.test(pid) && Number(pid) > PROTECTED_PID_CEILING;
+	return PID_PATTERN.test(pid) && Number(pid) > PROTECTED_PID_CEILING && Number(pid) <= MAX_PID;
 }
 
 export function isValidSessionId(sessionId: string): boolean {

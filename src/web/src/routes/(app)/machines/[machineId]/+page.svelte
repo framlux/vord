@@ -263,12 +263,14 @@
 		{ value: 'install_updates', label: 'Install Updates' }
 	];
 
+	// Values pasted from ps or loginctl often carry padding, so the fields are trimmed before they are
+	// validated and signed; the validators themselves stay strict.
+	const pid = $derived(killPid.trim());
+	const sessionId = $derived(killSessionId.trim());
 	// Null until the selected command's own fields are valid; an empty object for a command with none.
-	const commandParams = $derived(
-		buildCommandParams(commandType, { pid: killPid, force: killForce, sessionId: killSessionId })
-	);
-	const pidInvalid = $derived(killPid !== '' && isValidPid(killPid) === false);
-	const sessionIdInvalid = $derived(killSessionId !== '' && isValidSessionId(killSessionId) === false);
+	const commandParams = $derived(buildCommandParams(commandType, { pid, force: killForce, sessionId }));
+	const pidInvalid = $derived(pid !== '' && isValidPid(pid) === false);
+	const sessionIdInvalid = $derived(sessionId !== '' && isValidSessionId(sessionId) === false);
 
 	function clearCommandFields() {
 		killPid = '';
@@ -1381,7 +1383,7 @@
 					</p>
 				</div>
 			{:else}
-				<div class="mt-4 flex items-end gap-3">
+				<div class="mt-4 flex gap-3">
 					<div class="w-48">
 						<label for="cmd-type" class="block text-xs font-medium text-surface-600 dark:text-surface-400">Command</label>
 						<select
@@ -1407,13 +1409,6 @@
 							{/each}
 						</select>
 					</div>
-					<button
-						onclick={sendCommand}
-						disabled={sendingCommand || commandParams === null}
-						class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
-					>
-						{sendingCommand ? 'Sending...' : 'Send'}
-					</button>
 				</div>
 				{#if commandType === 'kill_process'}
 					<div class="mt-3 flex flex-wrap items-start gap-x-6 gap-y-3">
@@ -1434,7 +1429,7 @@
 							</p>
 							{#if pidInvalid}
 								<p id="cmd-pid-error" class="mt-1 text-xs text-red-600 dark:text-red-400">
-									Enter a whole number greater than 100.
+									Enter a whole number from 101 to 4194304.
 								</p>
 							{/if}
 						</div>
@@ -1469,6 +1464,15 @@
 						{/if}
 					</div>
 				{/if}
+				<div class="mt-4">
+					<button
+						onclick={sendCommand}
+						disabled={sendingCommand || commandParams === null}
+						class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
+					>
+						{sendingCommand ? 'Sending...' : 'Send'}
+					</button>
+				</div>
 			{/if}
 
 			{#if commandError}

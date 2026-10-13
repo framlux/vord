@@ -226,6 +226,63 @@ func TestKillProcess_ProtectedPID(t *testing.T) {
 	}
 }
 
+// Intent: A PID that does not fit the kernel's 32-bit pid_t must be refused. Parsed as a 64-bit int it
+// would pass the protected-range and self checks, then be truncated by kill(2): 4294967297 becomes pid 1
+// and 4294967296 becomes pid 0, the agent's own process group.
+func TestKillProcess_PIDBeyond32Bits(t *testing.T) {
+	tooBig := []string{"2147483648", "4294967295", "4294967296", "4294967297", "9223372036854775807", "99999999999999999999"}
+	for _, pid := range tooBig {
+		for _, force := range []string{"true", "false"} {
+			t.Run("pid_"+pid+"_force_"+force, func(t *testing.T) {
+				sig := &mockSignaler{}
+				e := &KillProcessExecutor{signaler: sig}
+
+				result := e.Execute(context.Background(), map[string]string{"pid": pid, "force": force})
+
+				if result.Success {
+					t.Errorf("expected Success=false for out-of-range pid %s", pid)
+				}
+				if result.Error == nil || (strings.Contains(result.Error.Error(), "invalid pid") == false) {
+					t.Errorf("expected 'invalid pid' error for pid %s, got %v", pid, result.Error)
+				}
+				if len(sig.calls) != 0 {
+					t.Errorf("no signal may be sent for pid %s, got %d call(s)", pid, len(sig.calls))
+				}
+			})
+		}
+	}
+}
+
+// Intent: The largest PID that fits pid_t is still a legitimate target, and it reaches the signaler as given.
+func TestKillProcess_LargestInt32PID(t *testing.T) {
+	sig := &mockSignaler{}
+	e := &KillProcessExecutor{signaler: sig}
+
+	result := e.Execute(context.Background(), map[string]string{"pid": "2147483647", "force": "true"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(sig.calls) != 1 || sig.calls[0].PID != 2147483647 {
+		t.Errorf("expected one signal to pid 2147483647, got %v", sig.calls)
+	}
+}
+
+// Intent: An ordinary PID is parsed and signaled exactly as given.
+func TestKillProcess_OrdinaryPIDReachesSignaler(t *testing.T) {
+	sig := &mockSignaler{}
+	e := &KillProcessExecutor{signaler: sig}
+
+	result := e.Execute(context.Background(), map[string]string{"pid": "4242", "force": "true"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(sig.calls) != 1 || sig.calls[0].PID != 4242 {
+		t.Errorf("expected one signal to pid 4242, got %v", sig.calls)
+	}
+}
+
 // Intent: PID == os.Getpid() must be rejected (self-protection).
 func TestKillProcess_SelfPID(t *testing.T) {
 	e := &KillProcessExecutor{}
