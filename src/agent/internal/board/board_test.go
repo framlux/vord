@@ -490,3 +490,33 @@ func TestLimitModel(t *testing.T) {
 		})
 	}
 }
+
+// Intent: Every family in the table names itself, fills in at least one signal, and spells its
+// match text in lower case, because the text it is compared with is lower-cased and a mixed-case
+// entry would never match, silently.
+func TestFamilies_AreWellFormed(t *testing.T) {
+	seen := map[string]bool{}
+
+	for _, f := range families {
+		if f.name == "" {
+			t.Error("a family has no name")
+		}
+		if seen[f.name] {
+			t.Errorf("family %q is listed twice", f.name)
+		}
+		seen[f.name] = true
+
+		if (f.deviceTreeVendor == "") && (f.modelPrefix == "") && (f.dmiText == "") {
+			t.Errorf("family %q matches no signal", f.name)
+		}
+		for _, text := range []string{f.deviceTreeVendor, f.modelPrefix, f.dmiText} {
+			if text != strings.ToLower(text) {
+				t.Errorf("family %q has match text %q that is not lower case", f.name, text)
+			}
+		}
+	}
+
+	if !seen[FamilyRaspberryPi] {
+		t.Errorf("the %q family is missing", FamilyRaspberryPi)
+	}
+}

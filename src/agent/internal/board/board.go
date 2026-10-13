@@ -5,10 +5,10 @@
 // Package board recognises single-board computers from what the firmware and the kernel expose.
 //
 // A board is recognised from its device tree first, because the device tree is set by the board's
-// own firmware and reads the same on every distribution, kernel and word size. Where the device tree
-// is not visible, as inside a default Docker container, the Raspberry Pi kernels still print the
-// board's model in /proc/cpuinfo. A Raspberry Pi booted through UEFI has an SMBIOS table instead of
-// a device tree, so the DMI vendor and product name are the last signal.
+// own firmware and reads the same on every distribution, kernel and word size. A Raspberry Pi booted
+// through UEFI has an SMBIOS table instead of a device tree, so the DMI vendor and product name come
+// next. Last, where neither is visible, as inside a default Docker container, the Raspberry Pi
+// kernels still print the board's model in /proc/cpuinfo.
 //
 // Only an allowlist of board families is recognised. A device tree is also how ARM laptops, phones
 // and some NAS boxes boot, so "has a device tree" says nothing about being a single-board computer.
@@ -45,30 +45,32 @@ const (
 	dmiProductName       = "sys/class/dmi/id/product_name"
 )
 
-// vendorFamilies maps the vendor prefix of a device-tree compatible entry ("raspberrypi" in
-// "raspberrypi,4-model-b") to a board family. Adding a family whose vendor makes only single-board
-// computers is one line here, with a fixture in the tests.
-var vendorFamilies = map[string]string{
-	"raspberrypi": FamilyRaspberryPi,
+// family is one recognised board family and what identifies it in each signal. Adding a family
+// whose vendor makes only single-board computers is one entry here, with a fixture for each signal
+// it fills in. A field left empty means the family has no match for that signal. Every value is
+// lower case, because the text it is compared with is lower-cased first.
+type family struct {
+	// name is the family reported in Info.Family.
+	name string
+	// deviceTreeVendor is the vendor prefix of a device-tree compatible entry, "raspberrypi" in
+	// "raspberrypi,4-model-b".
+	deviceTreeVendor string
+	// modelPrefix is the start of the device-tree model as /proc/cpuinfo prints it, for the case where
+	// the compatible list cannot be read.
+	modelPrefix string
+	// dmiText is a substring of the SMBIOS system vendor or product name. The Raspberry Pi UEFI
+	// firmware publishes the vendor "Raspberry Pi Foundation" and a product name that starts with
+	// "Raspberry Pi".
+	dmiText string
 }
 
-// modelPrefixFamilies maps the start of a device-tree model, as /proc/cpuinfo prints it, to a board
-// family, for the case where the compatible list cannot be read.
-var modelPrefixFamilies = []struct {
-	prefix string
-	family string
-}{
-	{"raspberry pi ", FamilyRaspberryPi},
-}
-
-// dmiFamilies maps a substring of the SMBIOS system vendor or product name to a board family. The
-// Raspberry Pi UEFI firmware publishes the vendor "Raspberry Pi Foundation" and a product name that
-// starts with "Raspberry Pi".
-var dmiFamilies = []struct {
-	contains string
-	family   string
-}{
-	{"raspberry pi", FamilyRaspberryPi},
+var families = []family{
+	{
+		name:             FamilyRaspberryPi,
+		deviceTreeVendor: "raspberrypi",
+		modelPrefix:      "raspberry pi ",
+		dmiText:          "raspberry pi",
+	},
 }
 
 // Info describes the board the agent runs on.
@@ -172,8 +174,11 @@ func familyFromCompatible(compatible []string) string {
 		if found == false {
 			continue
 		}
-		if family, known := vendorFamilies[vendor]; known {
-			return family
+
+		for _, candidate := range families {
+			if (candidate.deviceTreeVendor != "") && (candidate.deviceTreeVendor == vendor) {
+				return candidate.name
+			}
 		}
 	}
 
@@ -183,9 +188,9 @@ func familyFromCompatible(compatible []string) string {
 func familyFromModel(model string) string {
 	model = strings.ToLower(model)
 
-	for _, candidate := range modelPrefixFamilies {
-		if strings.HasPrefix(model, candidate.prefix) {
-			return candidate.family
+	for _, candidate := range families {
+		if (candidate.modelPrefix != "") && strings.HasPrefix(model, candidate.modelPrefix) {
+			return candidate.name
 		}
 	}
 
@@ -195,9 +200,9 @@ func familyFromModel(model string) string {
 func familyFromDMI(sysVendor string, productName string) string {
 	haystack := strings.ToLower(sysVendor) + "\n" + strings.ToLower(productName)
 
-	for _, candidate := range dmiFamilies {
-		if strings.Contains(haystack, candidate.contains) {
-			return candidate.family
+	for _, candidate := range families {
+		if (candidate.dmiText != "") && strings.Contains(haystack, candidate.dmiText) {
+			return candidate.name
 		}
 	}
 
