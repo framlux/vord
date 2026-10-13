@@ -91,6 +91,10 @@ public sealed class KubernetesReporterMachineReader
     /// <param name="nodes">The cluster's nodes, whose linked machines are members of the cluster.</param>
     /// <param name="candidates">The cluster's reporter candidates.</param>
     /// <param name="candidateNames">The candidates' machine names by machine id.</param>
+    /// <param name="now">
+    /// The time a snapshot's age is measured from when marking the active reporter. The caller passes the instant it
+    /// derives the cluster's reporting state at, so the two cannot disagree.
+    /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>The cluster's candidates and eligible machines, each ordered by machine name.</returns>
     public async Task<KubernetesReporterMachines> LoadAsync(
@@ -99,6 +103,7 @@ public sealed class KubernetesReporterMachineReader
         IReadOnlyCollection<KubernetesNodeWithMachine> nodes,
         IReadOnlyList<KubernetesReporterCandidate> candidates,
         IReadOnlyDictionary<long, string> candidateNames,
+        DateTimeOffset now,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(cluster);
@@ -120,7 +125,6 @@ public sealed class KubernetesReporterMachineReader
 
         List<long> everyMachineId = candidates.Select(c => c.MachineId).Concat(eligibleReports.Keys).Distinct().ToList();
         HashSet<long> online = await GetOnlineAsync(everyMachineId, ct);
-        DateTimeOffset now = _timeProvider.GetUtcNow();
 
         List<KubernetesCandidateDto> candidateDtos = candidates
             .Select(c => new KubernetesCandidateDto

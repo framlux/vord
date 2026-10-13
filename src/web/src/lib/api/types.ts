@@ -835,7 +835,11 @@ export interface KubernetesClusterSummaryDto {
 	notReadyCount: number;
 	unknownCount: number;
 	reportingState: KubernetesReportingState;
-	/** The machine holding the cluster's reporter Lease that sent the latest snapshot, or null when none has. */
+	/**
+	 * The machine that sent the cluster's most recent accepted snapshot (the last sender), or null when none has.
+	 * It names the last sender whether or not that snapshot is still fresh; a candidate's isActiveReporter
+	 * additionally requires it to be fresh, and neither proves the machine holds the Lease.
+	 */
 	activeReporterMachineId: number | null;
 	activeReporterMachineName: string | null;
 	/** The Kubernetes server version the latest snapshot reported, or null when there has been none. */

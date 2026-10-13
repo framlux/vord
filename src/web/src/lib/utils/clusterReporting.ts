@@ -171,6 +171,10 @@ function emptyPlan(): ReportingPlan {
 	return { commands: [], skipped: [] };
 }
 
+// On a stale cluster no candidate is marked isActiveReporter, and the fallback to activeReporterMachineId then
+// names the machine that sent the last snapshot. That is deliberate: it is still the most likely holder of the
+// Lease, so planDisable and planUpdatePermissions try it first. It only breaks ties between machines that can
+// already be sent the command.
 function activeReporterId(context: ReportingContext): number | null {
 	return context.candidates.find((c) => c.isActiveReporter)?.machineId ?? context.activeReporterMachineId;
 }

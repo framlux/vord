@@ -39,7 +39,8 @@ public class KubernetesClusterHandlerTests
         TestDatabaseFactory dbFactory,
         IAuditLogRepository? auditLog = null,
         IMachinePingService? pingService = null,
-        IKubernetesInventoryRepository? kubernetesRepo = null)
+        IKubernetesInventoryRepository? kubernetesRepo = null,
+        TimeProvider? readerClock = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
         FakeTimeProvider clock = new(Now);
@@ -52,7 +53,7 @@ public class KubernetesClusterHandlerTests
             TestQuotaPause.Nothing(),
             TestMetricsFactory.CreateQuotaPauseMetrics(),
             TestMetricsFactory.CreateKubernetesInventoryMetrics(),
-            clock,
+            readerClock ?? clock,
             NullLogger<KubernetesReporterMachineReader>.Instance);
 
         return new KubernetesClusterHandler(kubernetesRepo ?? repo, machines, repo, auditLog ?? repo, clock);
@@ -631,6 +632,29 @@ public class KubernetesClusterHandlerTests
         await Assert.That(controllerEligible.Enrolled).IsFalse();
         await Assert.That(controllerEligible.RemoteCommandsEnabled).IsFalse();
         await Assert.That(controllerEligible.Online).IsFalse();
+    }
+
+    [Test]
+    [Arguments(90, "active", true)]
+    [Arguments(91, "stale", false)]
+    public async Task GetAsync_ActiveReporterFlagAndReportingState_JudgeTheSnapshotAtTheHandlersOwnReadingOfTheClock(
+        int snapshotAgeMinutes, string expectedState, bool expectedActiveReporter)
+    {
+        // Intent: the page shows the reporting state beside the "Reporting" chip, so both must come from
+        // one reading of the clock. The reader's own clock is set three hours behind the handler's: if the
+        // reader read it for itself, the snapshot would look fresh to it whatever the state says.
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long reporter = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-host");
+        long clusterId = await SeedReportingClusterAsync(
+            dbFactory.Context, tenantId, FingerprintA, reporter, Now.AddMinutes(-snapshotAgeMinutes));
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, reporter);
+        KubernetesClusterHandler handler = CreateHandler(dbFactory, readerClock: new FakeTimeProvider(Now.AddHours(-3)));
+
+        ServiceResult<KubernetesClusterDetailDto> result = await handler.GetAsync(clusterId, tenantId, CancellationToken.None);
+
+        await Assert.That(result.Data!.ReportingState).IsEqualTo(expectedState);
+        await Assert.That(result.Data.Candidates.Single().IsActiveReporter).IsEqualTo(expectedActiveReporter);
     }
 
     [Test]

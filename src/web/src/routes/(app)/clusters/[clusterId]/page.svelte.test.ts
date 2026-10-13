@@ -542,7 +542,7 @@ describe('cluster detail', () => {
 	});
 
 	describe('reporting status', () => {
-		it('shows the reporting state and the machine that holds the reporter', () => {
+		it('shows the reporting state and the machine that last sent a snapshot', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'active',
