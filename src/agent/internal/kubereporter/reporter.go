@@ -38,6 +38,11 @@ const (
 	reasonStateWriteFailed     = "state_write_failed"
 )
 
+// reasonStateCopied is the reporter error of a host whose state file was written on another host. It joins
+// credentials_rejected and tls_ca_changed in the closed set the type-14 local report can carry, and it is never part
+// of a cluster snapshot, because a host holding copied state does not campaign for the Lease.
+const reasonStateCopied = "state_copied"
+
 // Success messages. The last two are not failures: unenrol could not delete the Secret and uninstall left
 // objects that were not the agent's.
 const (
@@ -95,6 +100,9 @@ type FactsSource func(ctx context.Context) (kubelocal.Facts, bool)
 type Options struct {
 	// DataDir is the agent data directory, which holds k8s-reporter.json.
 	DataDir string
+	// Root is the filesystem root the host's /etc/machine-id is read under, which is how a state file copied from
+	// another host is told from this host's own. Empty means the real root.
+	Root string
 	// Facts reports what this host is. Nil inspects the real host.
 	Facts FactsSource
 	// Releaser is called before unenrol and uninstall delete anything. Nil does nothing.
@@ -111,6 +119,7 @@ type Options struct {
 // a time.
 type Reporter struct {
 	dataDir        string
+	root           string
 	facts          FactsSource
 	releaser       LeaseReleaser
 	onStateChanged func(ctx context.Context)
@@ -127,6 +136,7 @@ var _ commands.KubeReporter = (*Reporter)(nil)
 func New(opts Options) *Reporter {
 	r := &Reporter{
 		dataDir:        opts.DataDir,
+		root:           opts.Root,
 		facts:          opts.Facts,
 		releaser:       opts.Releaser,
 		onStateChanged: opts.OnStateChanged,
@@ -164,6 +174,11 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// hostMachineID is this host's machine id, read when it is needed, or "" when the host has no usable one.
+func (r *Reporter) hostMachineID() string {
+	return hostMachineID(r.root)
 }
 
 // stateChanged tells the hook that the enrolment state changed. The hook gets a context of its own, bounded like

@@ -34,6 +34,7 @@ public class KubernetesNodePayloadNormaliserTests
     [Test]
     [Arguments("credentials_rejected")]
     [Arguments("tls_ca_changed")]
+    [Arguments("state_copied")]
     public async Task Normalise_KnownReporterError_PassesThrough(string reporterError)
     {
         KubernetesNodePayload? normalised = KubernetesNodePayloadNormaliser.Normalise(Payload(reporterError));
@@ -49,6 +50,8 @@ public class KubernetesNodePayloadNormaliserTests
     [Arguments("Credentials_Rejected")]
     [Arguments("credentials_rejected ")]
     [Arguments(" tls_ca_changed")]
+    [Arguments("State_Copied")]
+    [Arguments("state_copied ")]
     [Arguments("anything else")]
     public async Task Normalise_UnknownOrEmptyReporterError_BecomesNull(string? reporterError)
     {

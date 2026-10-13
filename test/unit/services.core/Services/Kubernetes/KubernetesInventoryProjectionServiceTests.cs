@@ -1188,6 +1188,22 @@ public class KubernetesInventoryProjectionServiceTests
     }
 
     [Test]
+    public async Task NormalisePayload_StateCopied_IsCarriedIntoTheReportOfAnEnrolledHost()
+    {
+        // Intent: a host whose reporter state file was copied from another host still reports itself as
+        // enrolled, so the candidate row exists and the page can offer to unenrol or enrol it again, and
+        // the reason must reach the repository as the agent sent it.
+        KubernetesNodePayload payload = ValidPayload();
+        payload.ReporterEnrolled = true;
+        payload.ReporterError = "state_copied";
+
+        LocalNodeReport? report = KubernetesInventoryProjectionService.NormalisePayload(payload, TelemetryRow());
+
+        await Assert.That(report!.ReporterEnrolled).IsTrue();
+        await Assert.That(report.ReporterError).IsEqualTo("state_copied");
+    }
+
+    [Test]
     [Arguments(null)]
     [Arguments("")]
     [Arguments("api_unreachable")]
@@ -1195,8 +1211,8 @@ public class KubernetesInventoryProjectionServiceTests
     [Arguments("something else")]
     public async Task NormalisePayload_UnrecognisedReporterError_BecomesNull(string? reporterError)
     {
-        // Intent: only the two codes an agent sends survive, so a candidate row can never hold a value
-        // outside its column or one the web has no message for.
+        // Intent: only the three codes an agent sends in a local report survive, so a candidate row can
+        // never hold a value outside its column or one the web has no message for.
         KubernetesNodePayload payload = ValidPayload();
         payload.ReporterEnrolled = true;
         payload.ReporterError = reporterError;

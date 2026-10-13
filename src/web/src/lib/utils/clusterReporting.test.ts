@@ -943,9 +943,12 @@ describe('describeSkip', () => {
 });
 
 describe('describeReporterError', () => {
-	it('words the four codes a reporter reports', () => {
+	it('words the five codes a reporter reports', () => {
 		expect(describeReporterError('credentials_rejected')).toBe('Credentials rejected');
 		expect(describeReporterError('tls_ca_changed')).toBe('Cluster CA changed');
+		expect(describeReporterError('state_copied')).toBe(
+			'Reporter state was copied from another host; unenrol or re-enrol this host'
+		);
 		expect(describeReporterError('api_unreachable')).toBe('API server unreachable');
 		expect(describeReporterError('namespace_terminating')).toBe('The vord-system namespace is terminating');
 	});

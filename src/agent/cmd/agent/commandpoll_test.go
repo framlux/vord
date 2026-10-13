@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -328,5 +330,54 @@ func TestCommandAdmission_RemoteCommandsOff_WithAStateFile_AdmitsCleanupOnly(t *
 
 	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageRefused {
 		t.Errorf("uninstall answered %q after the state file was removed, want it refused", got)
+	}
+}
+
+// writePending leaves the file an enrol that created its Secret and never wrote the state file leaves behind. It
+// names no host machine id, so the host the test runs on is never taken for another.
+func (h *admissionHost) writePending() string {
+	h.t.Helper()
+
+	path := filepath.Join(h.dataDir, kubereporter.PendingFileName)
+	if err := os.WriteFile(path, []byte(`{"instance_id":"0123456789abcdef","host_machine_id":""}`), 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+
+	return path
+}
+
+// Intent: A host whose enrol was cut off after it created its token Secret holds no state file but does hold a
+// record of the Secret. With remote commands off it still polls and admits the two cleanup commands and nothing
+// else, and it stops when the pending file goes, as it does at the end of a cleanup.
+func TestCommandAdmission_RemoteCommandsOff_WithOnlyAPendingFile_AdmitsCleanupOnly(t *testing.T) {
+	h := newAdmissionHost(t, false)
+	pending := h.writePending()
+
+	if h.shouldPoll() == false {
+		t.Fatal("a host with remote commands off and a pending file did not poll")
+	}
+
+	want := map[commands.CommandType]string{
+		commands.CommandK8sReporterUnenrol:   messageAdmitted,
+		commands.CommandK8sReporterUninstall: messageAdmitted,
+		commands.CommandK8sReporterEnrol:     messageRefused,
+		commands.CommandReboot:               messageRefused,
+	}
+	for commandType, message := range want {
+		if got := h.answerTo(commandType); got != message {
+			t.Errorf("%s answered %q, want %q", commandType, got, message)
+		}
+	}
+
+	if err := os.Remove(pending); err != nil {
+		t.Fatal(err)
+	}
+
+	if h.shouldPoll() {
+		t.Error("the host kept polling after its pending file was removed")
+	}
+
+	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageRefused {
+		t.Errorf("uninstall answered %q after the pending file was removed, want it refused", got)
 	}
 }

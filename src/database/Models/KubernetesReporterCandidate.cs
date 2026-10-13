@@ -30,8 +30,8 @@ public sealed class KubernetesReporterCandidate
     public long MachineId { get; set; }
 
     /// <summary>
-    /// The error this machine's own reporter last reported (<c>credentials_rejected</c> or
-    /// <c>tls_ca_changed</c>), or null when it reported none.
+    /// The error this machine's own reporter last reported (<c>credentials_rejected</c>,
+    /// <c>tls_ca_changed</c> or <c>state_copied</c>), or null when it reported none.
     /// </summary>
     [Column("ReporterError"), Nullable, MaxLength(32)]
     public string? ReporterError { get; set; }

@@ -8,6 +8,7 @@ package kubereporter_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/framlux/vord/internal/kube"
+	"github.com/framlux/vord/internal/kubelocal"
 	"github.com/framlux/vord/internal/kubereporter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 )
@@ -105,6 +107,7 @@ func TestK3sIntegration(t *testing.T) {
 	s.phase(t, "deleted_token_secret_is_reported", s.revokeToken)
 	s.phase(t, "uninstall_leaves_nothing_behind", s.uninstallBoth)
 	s.phase(t, "re_enrol_starts_a_new_lease_epoch", s.reEnrol)
+	s.phase(t, "interrupted_enrol_is_completed_by_the_next_enrol", s.interruptedEnrol)
 	s.phase(t, "stale_lease_write_conflicts", s.staleLeaseWrite)
 	s.phase(t, "delete_preconditions_hold", s.deletePreconditions)
 	s.phase(t, "missing_lease_is_not_found_for_the_reporter", s.missingLease)
@@ -544,6 +547,103 @@ func (s *scenario) reEnrol(t *testing.T) {
 	}
 
 	t.Logf("new epoch: uid %s created %s (old uid %s created %s), transitions %d -> %d", lease.uid, lease.created, s.firstEpoch.uid, s.firstEpoch.created, s.lastTransitions, record.LeaseTransitions)
+}
+
+// interruptedEnrol enrols a third host through a proxy that cuts off its API access as soon as the Secret exists.
+// The enrol fails with the Secret in the cluster and no state file, and it cannot delete the Secret either, so the
+// pending file is the only thing on the host that names it. A following enrol with working access must find that
+// id, replace the Secret instead of leaking it, and leave exactly one Secret for the host, a state file that holds
+// the id and no pending file.
+func (s *scenario) interruptedEnrol(t *testing.T) {
+	c := newCandidate(t, "c", s.cluster, s.clock)
+	t.Cleanup(func() { c.stop(t) })
+
+	proxy := newInterruptingProxy(t, s.cluster)
+
+	facts, _ := s.cluster.factsSource()(context.Background())
+	facts.AdminKubeconfigPath = proxy.kubeconfig(t)
+
+	interrupted := kubereporter.New(kubereporter.Options{
+		DataDir: c.dataDir,
+		Facts:   func(context.Context) (kubelocal.Facts, bool) { return facts, true },
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+
+	result := interrupted.Enrol(ctx)
+	if result.Success {
+		t.Fatalf("an enrol whose connection was cut after the Secret was created succeeded: %+v", result)
+	}
+
+	t.Logf("the interrupted enrol answered %q", result.Message)
+
+	pendingFile := filepath.Join(c.dataDir, kubereporter.PendingFileName)
+
+	data, err := os.ReadFile(pendingFile)
+	if err != nil {
+		t.Fatalf("the interrupted enrol left no pending file: %v", err)
+	}
+
+	var pending struct {
+		InstanceID string `json:"instance_id"`
+	}
+
+	if err := json.Unmarshal(data, &pending); err != nil {
+		t.Fatalf("the pending file is not JSON: %v", err)
+	}
+
+	if _, found, err := kubereporter.LoadState(c.dataDir); (err != nil) || found {
+		t.Errorf("the interrupted enrol left a state file (found=%v, err=%v)", found, err)
+	}
+
+	if kubereporter.LocalRecordPresent(c.dataDir) == false {
+		t.Error("a host whose enrol was interrupted holds no local record")
+	}
+
+	secret := secretsPath + "/" + tokenSecretPrefix + pending.InstanceID
+	s.cluster.mustGet(t, secret)
+
+	result = c.reporter.Enrol(ctx)
+	if (result.Success == false) || (result.Message != "enrolled") {
+		t.Fatalf("the enrol that follows an interrupted one answered %+v", result)
+	}
+
+	if got := c.instanceID(t); got != pending.InstanceID {
+		t.Errorf("the follow-up enrol used instance id %q, want the recorded %q", got, pending.InstanceID)
+	}
+
+	if _, err := os.Stat(pendingFile); os.IsNotExist(err) == false {
+		t.Errorf("the pending file survived the enrol that completed it: %v", err)
+	}
+
+	secrets, err := s.cluster.names(secretsPath, true)
+	if err != nil {
+		t.Fatalf("list the Secrets: %v", err)
+	}
+
+	own := 0
+
+	for _, name := range secrets {
+		if name == tokenSecretPrefix+pending.InstanceID {
+			own++
+		}
+	}
+
+	if own != 1 {
+		t.Errorf("the cluster holds %d token Secrets for the interrupted host, want exactly one (all: %v)", own, secrets)
+	}
+
+	s.cluster.requireInstalled(t, s.a.instanceID(t), s.b.instanceID(t), pending.InstanceID)
+
+	unenrol, cancelUnenrol := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancelUnenrol()
+
+	if result := c.reporter.Unenrol(unenrol); result.Success == false {
+		t.Fatalf("Unenrol of the completed host = %+v", result)
+	}
+
+	s.cluster.requireInstalled(t, s.a.instanceID(t), s.b.instanceID(t))
 }
 
 // candidatesByHolder returns the candidate that holds the Lease under the given identity, and the other one.

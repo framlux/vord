@@ -622,6 +622,22 @@ describe('cluster detail', () => {
 			expect(row.getByText('30m ago')).toBeInTheDocument();
 		});
 
+		it('words the state a candidate copied from another host, with the code as its title', () => {
+			renderPage(
+				makeCluster({
+					reportingState: 'error',
+					reporterError: 'state_copied',
+					candidates: [makeCandidate({ machineName: 'web-01', reporterError: 'state_copied' })]
+				})
+			);
+
+			const row = reporterRow(/web-01/);
+
+			expect(
+				row.getByText('Reporter state was copied from another host; unenrol or re-enrol this host')
+			).toHaveAttribute('title', 'state_copied');
+		});
+
 		it('makes a readable label of an error code it has no wording for, and keeps the code as its title', () => {
 			renderPage(
 				makeCluster({
@@ -1498,6 +1514,7 @@ describe('cluster detail', () => {
 		it.each([
 			['credentials_rejected', 'credentials-rejected-banner'],
 			['tls_ca_changed', 'tls-ca-changed-banner'],
+			['state_copied', 'state-copied-banner'],
 			['api_unreachable', 'api-unreachable-banner'],
 			['namespace_terminating', 'namespace-terminating-banner']
 		])('shows the banner for %s', (reporterError, testId) => {
@@ -1526,6 +1543,28 @@ describe('cluster detail', () => {
 			await screen.findByTestId('command-results');
 
 			expect(sentSummary()).toEqual([[7, 'k8s_reporter_enrol']]);
+		});
+
+		it('re-enrols only the host whose reporter state was copied when Re-enrol is pressed', async () => {
+			renderPage(
+				makeCluster({
+					reportingState: 'error',
+					reporterError: 'state_copied',
+					candidates: [
+						makeCandidate({ machineId: 7, machineName: 'web-01', reporterError: null }),
+						makeCandidate({ machineId: 8, machineName: 'web-02', reporterError: 'state_copied' })
+					],
+					eligibleMachines: [
+						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
+						makeEligible({ machineId: 8, machineName: 'web-02', enrolled: true })
+					]
+				})
+			);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Re-enrol' }));
+			await screen.findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([[8, 'k8s_reporter_enrol']]);
 		});
 
 		it('re-enrols every candidate when none reports the error itself', async () => {

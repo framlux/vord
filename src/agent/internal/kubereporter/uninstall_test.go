@@ -443,3 +443,76 @@ func TestUninstall_SkipsListedNamesThatAreNotNames(t *testing.T) {
 		}
 	}
 }
+
+// Intent: Uninstall is the other way to clean up a host whose enrol never reached the state file: it revokes every
+// labelled token Secret, the one the pending file names among them, and removes the pending file, so the host
+// stops counting as one with a record.
+func TestUninstall_RemovesThePendingFileAndTheSecretItNames(t *testing.T) {
+	h := newHarness(t)
+
+	secret, _ := h.seedPendingSecret()
+
+	requireSuccess(t, h.reporter.Uninstall(context.Background()))
+
+	if h.api.has(secret) {
+		t.Error("the Secret the pending file names survived uninstall")
+	}
+
+	if h.hasPending() {
+		t.Error("the pending file survived uninstall")
+	}
+
+	if localRecordPresent(h.dataDir, hostMachineIDValue) {
+		t.Error("the host still holds a local record after uninstall")
+	}
+}
+
+// Intent: A pending file beside a state file goes with it.
+func TestUninstall_RemovesALeftoverPendingFileBesideTheState(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	if err := savePending(h.dataDir, "a1b2c3d4e5f60718", hostMachineIDValue); err != nil {
+		t.Fatal(err)
+	}
+
+	requireSuccess(t, h.reporter.Uninstall(context.Background()))
+
+	if h.hasPending() || h.hasState() {
+		t.Error("a record file survived uninstall")
+	}
+}
+
+// Intent: Uninstall works by label across the whole cluster, which is what was asked of it, so records copied from
+// another host change nothing about it: the other host's Secret is revoked too, and the local copies go.
+func TestUninstall_IsNotChangedByCopiedRecords(t *testing.T) {
+	h := newHarness(t)
+	copiedID := h.seedForeignRecord()
+
+	if err := savePending(h.dataDir, copiedID, otherHostMachineID); err != nil {
+		t.Fatal(err)
+	}
+
+	requireSuccess(t, h.reporter.Uninstall(context.Background()))
+
+	if h.api.has(secretPath(copiedID)) {
+		t.Error("the labelled Secret that the copied state names survived uninstall")
+	}
+
+	if h.hasState() || h.hasPending() {
+		t.Error("a copied record file survived uninstall")
+	}
+}
+
+// Intent: An uninstall that fails keeps the pending file, which may still be the only record of a live token.
+func TestUninstall_Failure_KeepsThePendingFile(t *testing.T) {
+	h := newHarness(t)
+	h.seedPendingSecret()
+	h.api.server.Close()
+
+	requireFailure(t, h.reporter.Uninstall(context.Background()), reasonAPIUnreachable)
+
+	if h.hasPending() == false {
+		t.Error("the pending file was deleted although uninstall failed")
+	}
+}

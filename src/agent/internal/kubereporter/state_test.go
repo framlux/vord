@@ -21,6 +21,7 @@ func sampleState() State {
 		CACert:        "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
 		Token:         "secret-token-value",
 		TLSServerName: "kubernetes",
+		HostMachineID: hostMachineIDValue,
 	}
 }
 
@@ -125,12 +126,15 @@ func TestState_Load_InvalidFile_IsError(t *testing.T) {
 	cases := map[string]string{
 		"not json":           "this is not json token=secret-token-value",
 		"empty":              "",
-		"missing token":      `{"instance_id":"0123456789abcdef","server":"https://x","ca_crt":"pem"}`,
-		"missing server":     `{"instance_id":"0123456789abcdef","ca_crt":"pem","token":"t"}`,
-		"missing ca":         `{"instance_id":"0123456789abcdef","server":"https://x","token":"t"}`,
-		"short instance id":  `{"instance_id":"0123","server":"https://x","ca_crt":"pem","token":"t"}`,
-		"uppercase id":       `{"instance_id":"0123456789ABCDEF","server":"https://x","ca_crt":"pem","token":"t"}`,
-		"path in instanceid": `{"instance_id":"../../../etc/pass","server":"https://x","ca_crt":"pem","token":"t"}`,
+		"missing token":      `{"instance_id":"0123456789abcdef","server":"https://x","ca_crt":"pem","host_machine_id":""}`,
+		"missing server":     `{"instance_id":"0123456789abcdef","ca_crt":"pem","token":"t","host_machine_id":""}`,
+		"missing ca":         `{"instance_id":"0123456789abcdef","server":"https://x","token":"t","host_machine_id":""}`,
+		"short instance id":  `{"instance_id":"0123","server":"https://x","ca_crt":"pem","token":"t","host_machine_id":""}`,
+		"uppercase id":       `{"instance_id":"0123456789ABCDEF","server":"https://x","ca_crt":"pem","token":"t","host_machine_id":""}`,
+		"path in instanceid": `{"instance_id":"../../../etc/pass","server":"https://x","ca_crt":"pem","token":"t","host_machine_id":""}`,
+		"no machine id":      `{"instance_id":"0123456789abcdef","server":"https://x","ca_crt":"pem","token":"t"}`,
+		"null machine id":    `{"instance_id":"0123456789abcdef","server":"https://x","ca_crt":"pem","token":"t","host_machine_id":null}`,
+		"numeric machine id": `{"instance_id":"0123456789abcdef","server":"https://x","ca_crt":"pem","token":"t","host_machine_id":12}`,
 	}
 
 	for name, content := range cases {
@@ -317,6 +321,31 @@ func TestLocalRecordPresent_FollowsTheStateFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if localRecordPresent(dir, hostMachineIDValue) == false {
+		t.Fatal("a saved state file did not count as a local record")
+	}
+
+	if err := DeleteState(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if localRecordPresent(dir, hostMachineIDValue) {
+		t.Error("a deleted state file still counted as a local record")
+	}
+}
+
+// Intent: The exported check reads the real host's machine id, so it is only exercised with records that do not
+// name one: it must follow the files, whatever machine runs the test.
+func TestLocalRecordPresent_ExportedCheckFollowsTheFilesOfAHostWithoutAMachineID(t *testing.T) {
+	dir := t.TempDir()
+
+	state := sampleState()
+	state.HostMachineID = ""
+
+	if err := SaveState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
 	if LocalRecordPresent(dir) == false {
 		t.Fatal("a saved state file did not count as a local record")
 	}
@@ -326,7 +355,15 @@ func TestLocalRecordPresent_FollowsTheStateFile(t *testing.T) {
 	}
 
 	if LocalRecordPresent(dir) {
-		t.Error("a deleted state file still counted as a local record")
+		t.Fatal("a deleted state file still counted as a local record")
+	}
+
+	if err := savePending(dir, "0123456789abcdef", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if LocalRecordPresent(dir) == false {
+		t.Error("the exported check ignored the pending file")
 	}
 }
 
@@ -339,7 +376,7 @@ func TestLocalRecordPresent_CountsAFileThatCannotBeLoaded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if LocalRecordPresent(dir) == false {
+	if localRecordPresent(dir, hostMachineIDValue) == false {
 		t.Error("an unreadable state file did not count as a local record")
 	}
 }
@@ -354,5 +391,245 @@ func TestLocalRecordPresent_IgnoresADirectoryOfTheSameName(t *testing.T) {
 
 	if LocalRecordPresent(dir) {
 		t.Error("a directory named like the state file counted as a local record")
+	}
+}
+
+// Intent: The machine id is part of the file and may be empty, but it must be there: a file without the key was
+// not written by this version and cannot say whose it is.
+func TestState_Load_MachineIDMustBePresentButMayBeEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := sampleState()
+	empty.HostMachineID = ""
+
+	if err := SaveState(dir, empty); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := LoadState(dir)
+	if (err != nil) || (found == false) {
+		t.Fatalf("a state file with an empty host_machine_id: found %v, err %v", found, err)
+	}
+
+	if got != empty {
+		t.Errorf("loaded %+v, want %+v", got, empty)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(data), `"host_machine_id":""`) == false {
+		t.Errorf("an empty machine id must still be written out: %s", data)
+	}
+}
+
+// Intent: The pending file is saved the way the state file is: private to its owner, replaced in one step, with
+// no temporary file left behind, and it reads back as the id and machine id that were saved.
+func TestPending_RoundTrip_WritesPrivateFileAndLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := savePending(dir, "0123456789abcdef", hostMachineIDValue); err != nil {
+		t.Fatalf("savePending: %v", err)
+	}
+
+	if err := savePending(dir, "fedcba9876543210", otherHostMachineID); err != nil {
+		t.Fatalf("savePending again: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, PendingFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+
+	got, ok := readRecordedInstance(dir, PendingFileName)
+	if (ok == false) || (got != recordedInstance{InstanceID: "fedcba9876543210", HostMachineID: otherHostMachineID}) {
+		t.Errorf("read back %+v (%v)", got, ok)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if (len(entries) != 1) || (entries[0].Name() != PendingFileName) {
+		t.Errorf("directory holds %v, want only %s", entries, PendingFileName)
+	}
+
+	if err := deletePending(dir); err != nil {
+		t.Fatalf("deletePending: %v", err)
+	}
+
+	if err := deletePending(dir); err != nil {
+		t.Errorf("deleting a missing pending file: %v", err)
+	}
+
+	if regularFileExists(pendingPath(dir)) {
+		t.Error("the pending file survived its deletion")
+	}
+}
+
+// Intent: A host_machine_id the pending file lacks reads as empty, which never marks a record as copied; only the
+// instance id has to be right.
+func TestPending_WithoutMachineID_StillNamesTheInstance(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, PendingFileName), []byte(`{"instance_id":"0123456789abcdef"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := recordedInstanceID(dir, hostMachineIDValue)
+	if (ok == false) || (got != "0123456789abcdef") {
+		t.Errorf("recordedInstanceID = %q, %v", got, ok)
+	}
+}
+
+// Intent: A pending file is a record just as a state file is, and only a regular file is.
+func TestLocalRecordPresent_CountsThePendingFile(t *testing.T) {
+	dir := t.TempDir()
+
+	if localRecordPresent(dir, hostMachineIDValue) {
+		t.Fatal("an empty data directory reported a local record")
+	}
+
+	if err := savePending(dir, "0123456789abcdef", hostMachineIDValue); err != nil {
+		t.Fatal(err)
+	}
+
+	if localRecordPresent(dir, hostMachineIDValue) == false {
+		t.Error("a pending file did not count as a local record")
+	}
+
+	if err := deletePending(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Mkdir(filepath.Join(dir, PendingFileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if localRecordPresent(dir, hostMachineIDValue) {
+		t.Error("a directory named like the pending file counted as a local record")
+	}
+}
+
+// Intent: A record written on another host is that host's, not this one's, whichever file holds it and however
+// damaged it is. It is what makes a flag-off clone stop polling for cleanup commands it could never act on. A
+// record that cannot tell whose it is, or a host that cannot, still counts.
+func TestLocalRecordPresent_SkipsRecordsCopiedFromAnotherHost(t *testing.T) {
+	write := func(t *testing.T, name string, content string) string {
+		t.Helper()
+
+		dir := t.TempDir()
+
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		return dir
+	}
+
+	cases := []struct {
+		name    string
+		file    string
+		content string
+		host    string
+		want    bool
+	}{
+		{"state of this host", StateFileName, `{"host_machine_id":"` + hostMachineIDValue + `"}`, hostMachineIDValue, true},
+		{"state of another host", StateFileName, `{"host_machine_id":"` + otherHostMachineID + `"}`, hostMachineIDValue, false},
+		{"pending of another host", PendingFileName, `{"instance_id":"0123456789abcdef","host_machine_id":"` + otherHostMachineID + `"}`, hostMachineIDValue, false},
+		{"pending of this host", PendingFileName, `{"instance_id":"0123456789abcdef","host_machine_id":"` + hostMachineIDValue + `"}`, hostMachineIDValue, true},
+		{"state with no machine id recorded", StateFileName, `{"host_machine_id":""}`, hostMachineIDValue, true},
+		{"state of another host, this host has no id", StateFileName, `{"host_machine_id":"` + otherHostMachineID + `"}`, "", true},
+		{"state that is not json", StateFileName, "not json", hostMachineIDValue, true},
+		{"state that says nothing about the host", StateFileName, `{"instance_id":"0123456789abcdef"}`, hostMachineIDValue, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := localRecordPresent(write(t, tc.file, tc.content), tc.host); got != tc.want {
+				t.Errorf("localRecordPresent = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("a copied state file does not hide this host's own pending file", func(t *testing.T) {
+		dir := write(t, StateFileName, `{"host_machine_id":"`+otherHostMachineID+`"}`)
+
+		if err := savePending(dir, "0123456789abcdef", hostMachineIDValue); err != nil {
+			t.Fatal(err)
+		}
+
+		if localRecordPresent(dir, hostMachineIDValue) == false {
+			t.Error("the host's own pending file was not counted because the state file was copied")
+		}
+	})
+}
+
+// Intent: A machine id counts only when it tells hosts apart: a missing, empty or still uninitialized file is "".
+func TestHostMachineID_OnlyUsableIDsCount(t *testing.T) {
+	cases := map[string]struct {
+		content string
+		want    string
+	}{
+		"a real id":     {hostMachineIDValue + "\n", hostMachineIDValue},
+		"empty":         {"", ""},
+		"blank":         {"  \n", ""},
+		"uninitialized": {"uninitialized\n", ""},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeMachineID(t, root, tc.content)
+
+			if got := hostMachineID(root); got != tc.want {
+				t.Errorf("hostMachineID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	if got := hostMachineID(t.TempDir()); got != "" {
+		t.Errorf("hostMachineID without the file = %q, want empty", got)
+	}
+}
+
+// Intent: A record is a copy only when both sides know a machine id and the ids differ.
+func TestCopiedFromAnotherHost_NeedsBothIDsAndADifference(t *testing.T) {
+	cases := []struct {
+		recorded, host string
+		want           bool
+	}{
+		{hostMachineIDValue, hostMachineIDValue, false},
+		{otherHostMachineID, hostMachineIDValue, true},
+		{"", hostMachineIDValue, false},
+		{otherHostMachineID, "", false},
+		{"", "", false},
+	}
+
+	for _, tc := range cases {
+		if got := copiedFromAnotherHost(tc.recorded, tc.host); got != tc.want {
+			t.Errorf("copiedFromAnotherHost(%q, %q) = %v, want %v", tc.recorded, tc.host, got, tc.want)
+		}
+	}
+}
+
+// Intent: The sweep that removes the temporary files of a save that crashed also covers a pending file's.
+func TestPending_Save_SweepsStaleTemporaryFiles(t *testing.T) {
+	dir := t.TempDir()
+	stale := writeTemp(t, dir, ".k8s-reporter-abc.tmp", time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	if err := savePending(dir, "0123456789abcdef", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(stale); os.IsNotExist(err) == false {
+		t.Error("savePending left a stale temporary file")
 	}
 }

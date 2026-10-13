@@ -24,13 +24,15 @@ var objectNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])
 
 // Uninstall removes everything the agent installed in the cluster, using the host's admin kubeconfig: every
 // candidate's token Secret (which revokes the tokens of hosts that are paused, deleted or unreachable), then the
-// Lease, the roles and bindings and the ServiceAccount, then the namespace, and finally this host's state file.
+// Lease, the roles and bindings and the ServiceAccount, then the namespace, and finally this host's state file and
+// pending file. It works by label across the whole cluster, so a record copied from another host changes nothing
+// about it.
 //
 // Each object is deleted by its fixed name after its label has been checked, and the delete names the uid that
 // was checked. An object without the Vord label is left alone. That includes the namespace, when the agent did
 // not create it, and when it still holds an object that is not the agent's: deleting a namespace deletes
 // everything in it, so such a namespace is kept and the command says so. If the API cannot be reached the
-// command fails and keeps the state file so that it can be run again.
+// command fails and keeps the state file and the pending file so that it can be run again.
 func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -98,7 +100,7 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 		kept = append(kept, "Namespace")
 	}
 
-	if err := DeleteState(r.dataDir); err != nil {
+	if err := removeRecords(r.dataDir); err != nil {
 		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 

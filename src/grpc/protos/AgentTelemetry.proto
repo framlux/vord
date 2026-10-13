@@ -265,8 +265,9 @@ message KubernetesNodeRecord {
     string ca_fingerprint = 7;
     bool admin_credential_present = 8;
     bool reporter_enrolled = 9;
-    // Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed. Empty
-    // when the last Lease call worked or none has been made.
+    // Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed, or
+    // state_copied when its state file was written on another host and is not used. Empty when the last Lease
+    // call worked or none has been made.
     string reporter_error = 10;
 }
 

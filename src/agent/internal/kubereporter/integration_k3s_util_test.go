@@ -10,14 +10,21 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,4 +248,82 @@ func sameInstant(text string, instant time.Time) bool {
 	parsed, err := time.Parse(time.RFC3339Nano, text)
 
 	return (err == nil) && parsed.Equal(instant.Truncate(time.Microsecond))
+}
+
+// interruptingProxy stands between a reporter and the real API server and forwards everything, with the cluster
+// admin's credentials, until the reporter has created a Secret through it. From then on every request that
+// touches a Secret fails with a 500, as when the connection to the API dies after the Secret was written: the
+// enrol cannot read the token, and its rollback cannot delete the Secret.
+type interruptingProxy struct {
+	server  *httptest.Server
+	created atomic.Bool
+}
+
+func newInterruptingProxy(t *testing.T, cluster *k3sCluster) *interruptingProxy {
+	t.Helper()
+
+	target, err := url.Parse(cluster.config.Server)
+	if err != nil {
+		t.Fatalf("parse the cluster URL: %v", err)
+	}
+
+	forward := httputil.NewSingleHostReverseProxy(target)
+	forward.Transport = cluster.rawClient.Transport
+
+	proxy := &interruptingProxy{}
+
+	proxy.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if proxy.created.Load() && strings.HasPrefix(r.URL.Path, secretsPath) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"InternalError","code":500}`))
+
+			return
+		}
+
+		// The flag is set before the request is forwarded so that the reporter cannot receive the answer and send
+		// its next request ahead of it.
+		if (r.Method == http.MethodPost) && (r.URL.Path == secretsPath) {
+			proxy.created.Store(true)
+		}
+
+		forward.ServeHTTP(w, r)
+	}))
+
+	t.Cleanup(proxy.server.Close)
+
+	return proxy
+}
+
+// kubeconfig writes an admin kubeconfig that points at the proxy and returns its path.
+func (p *interruptingProxy) kubeconfig(t *testing.T) string {
+	t.Helper()
+
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.server.Certificate().Raw})
+
+	config := fmt.Sprintf(`apiVersion: v1
+kind: Config
+current-context: default
+clusters:
+- name: proxy
+  cluster:
+    server: %s
+    certificate-authority-data: %s
+users:
+- name: admin
+  user:
+    token: not-checked-by-the-proxy
+contexts:
+- name: default
+  context:
+    cluster: proxy
+    user: admin
+`, p.server.URL, base64.StdEncoding.EncodeToString(ca))
+
+	path := filepath.Join(t.TempDir(), "proxied.yaml")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatalf("write the proxied kubeconfig: %v", err)
+	}
+
+	return path
 }

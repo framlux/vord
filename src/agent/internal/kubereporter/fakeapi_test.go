@@ -37,8 +37,10 @@ type recordedRequest struct {
 type fault struct {
 	method string // empty matches any method
 	path   string // exact request path
-	status int
-	reason string
+	// pathPrefix, when set, matches every request path that starts with it, and path is ignored.
+	pathPrefix string
+	status     int
+	reason     string
 	// message is the Status message; causes are the reasons of details.causes.
 	message string
 	causes  []string
@@ -52,6 +54,15 @@ type fault struct {
 	// onFire runs, with the API locked, when the fault fires. A fault with no status and no raceCreate is a hook
 	// only: it runs onFire and the request is then served normally.
 	onFire func(*fakeAPI)
+}
+
+// matchesPath reports whether the fault applies to a request for path.
+func (f *fault) matchesPath(path string) bool {
+	if f.pathPrefix != "" {
+		return strings.HasPrefix(path, f.pathPrefix)
+	}
+
+	return f.path == path
 }
 
 // fakeAPI is an in-memory stand-in for the Kubernetes API server, served over TLS. It holds objects in a map
@@ -208,6 +219,14 @@ func (a *fakeAPI) inject(f fault) {
 	}
 
 	a.faults = append(a.faults, &f)
+}
+
+// clearFaults removes every fault, as when the failure the test simulated has passed.
+func (a *fakeAPI) clearFaults() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.faults = nil
 }
 
 // requestLog returns a copy of every request served so far.
@@ -376,7 +395,7 @@ func (a *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, f := range a.faults {
-		if (f.times == 0) || ((f.method != "") && (f.method != r.Method)) || (f.path != r.URL.Path) {
+		if (f.times == 0) || ((f.method != "") && (f.method != r.Method)) || (f.matchesPath(r.URL.Path) == false) {
 			continue
 		}
 

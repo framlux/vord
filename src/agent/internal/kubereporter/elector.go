@@ -97,8 +97,9 @@ type Gate struct {
 // goroutine.
 //
 // A candidate holds the Lease under an identity made from the instance id in its state file. A host cloned after
-// it enrolled keeps that id, so the clone shares the identity: each would see the other's claim as its own and
-// both could lead. That is not detected; a clone has to be enrolled afresh.
+// it enrolled keeps that id, so the clone would share the identity: each would see the other's claim as its own and
+// both could lead. The runtime refuses a state file whose recorded machine id differs from the host's, so only a
+// clone that also keeps /etc/machine-id goes undetected; it has to be enrolled afresh.
 type Elector struct {
 	clientFactory func() (*kube.Client, error)
 	identity      string

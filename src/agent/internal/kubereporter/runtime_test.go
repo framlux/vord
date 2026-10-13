@@ -20,6 +20,7 @@ const runtimeInstanceID = "0123456789abcdef"
 type runtimeRig struct {
 	*electorRig
 	dataDir string
+	root    string
 	runtime *Runtime
 	paused  bool
 	lost    int
@@ -32,11 +33,15 @@ func newRuntimeRig(t *testing.T, adjust ...func(opts *RuntimeOptions)) *runtimeR
 	rig := &runtimeRig{
 		electorRig: newElectorRig(t),
 		dataDir:    t.TempDir(),
+		root:       t.TempDir(),
 		ticks:      make(chan time.Time),
 	}
 
+	writeMachineID(t, rig.root, hostMachineIDValue+"\n")
+
 	opts := RuntimeOptions{
 		DataDir: rig.dataDir,
+		Root:    rig.root,
 		Clock:   rig.clock,
 		Gate: Gate{
 			Paused:    func() bool { return rig.paused },
@@ -66,7 +71,7 @@ func (r *runtimeRig) enrol() State {
 func (r *runtimeRig) enrolWithToken(token string) State {
 	r.t.Helper()
 
-	state := State{InstanceID: runtimeInstanceID, Server: r.api.url(), CACert: string(r.api.caPEM), Token: token}
+	state := State{InstanceID: runtimeInstanceID, Server: r.api.url(), CACert: string(r.api.caPEM), Token: token, HostMachineID: hostMachineIDValue}
 	if err := SaveState(r.dataDir, state); err != nil {
 		r.t.Fatalf("SaveState: %v", err)
 	}
@@ -748,5 +753,179 @@ func TestRuntime_Run_NoStartUpDropWithoutAStateFile(t *testing.T) {
 
 	if rig.lost != 0 {
 		t.Errorf("snapshots were dropped %d times on a host that is not enrolled, want 0", rig.lost)
+	}
+}
+
+// enrolCopied writes the state file an enrol on another host left, as a copied disk carries it: live-looking
+// credentials, and the other host's machine id.
+func (r *runtimeRig) enrolCopied() State {
+	r.t.Helper()
+
+	state := State{
+		InstanceID:    runtimeInstanceID,
+		Server:        r.api.url(),
+		CACert:        string(r.api.caPEM),
+		Token:         r.api.issueReporterToken(),
+		HostMachineID: otherHostMachineID,
+	}
+
+	if err := SaveState(r.dataDir, state); err != nil {
+		r.t.Fatalf("SaveState: %v", err)
+	}
+
+	return state
+}
+
+// Intent: A state file copied from another host holds that host's live token and identity. This host never
+// campaigns with it, never sends a request, and says why instead.
+func TestRuntime_CopiedState_NeverCampaignsAndReportsStateCopied(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrolCopied()
+
+	for round := 0; round < 3; round++ {
+		rig.step()
+		rig.advance(electionInterval)
+	}
+
+	if rig.running() {
+		t.Error("the runtime built an elector from a state file written on another host")
+	}
+
+	if got := len(rig.api.requestLog()); got != 0 {
+		t.Errorf("the runtime made %d requests with another host's credentials", got)
+	}
+
+	if got := rig.holder(); got != "" {
+		t.Errorf("the Lease holder is %q, want none", got)
+	}
+
+	if got := rig.runtime.ReporterError(); got != "state_copied" {
+		t.Errorf("ReporterError = %q, want state_copied", got)
+	}
+}
+
+// Intent: The error is known from the files alone, so it is reported on a runtime that has not taken a single step
+// and has no elector.
+func TestRuntime_CopiedState_ReportsStateCopiedWithoutAnElector(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrolCopied()
+
+	if rig.running() {
+		t.Fatal("the rig started an elector")
+	}
+
+	if got := rig.runtime.ReporterError(); got != "state_copied" {
+		t.Errorf("ReporterError = %q, want state_copied", got)
+	}
+}
+
+// Intent: A state file that is replaced by a copy while the reporter runs stops it and hands the Lease back with
+// the credentials the elector was built from, which are this host's own.
+func TestRuntime_StateReplacedByACopy_ReleasesTheLeaseAndStops(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrol()
+	rig.step()
+
+	if rig.leading() == false {
+		t.Fatal("the runtime does not lead before the state file is replaced")
+	}
+
+	rig.enrolCopied()
+	rig.advance(electionInterval)
+	rig.step()
+
+	if rig.running() {
+		t.Error("the runtime kept an elector after its state file was replaced by a copy")
+	}
+
+	if got := rig.holder(); got != "" {
+		t.Errorf("holder = %q, want the Lease handed back", got)
+	}
+
+	if got := rig.runtime.ReporterError(); got != "state_copied" {
+		t.Errorf("ReporterError = %q, want state_copied", got)
+	}
+}
+
+// Intent: Enrolling this host replaces the copy, and the reporter then runs on the new credentials with no error.
+func TestRuntime_CopiedStateReplacedByAnEnrol_StartsAndClearsTheError(t *testing.T) {
+	rig := newRuntimeRig(t)
+	rig.enrolCopied()
+	rig.step()
+
+	rig.enrol()
+	rig.advance(electionInterval)
+	rig.step()
+
+	if rig.leading() == false {
+		t.Error("the runtime does not lead on the credentials of this host's own enrol")
+	}
+
+	if got := rig.runtime.ReporterError(); got != "" {
+		t.Errorf("ReporterError = %q, want none", got)
+	}
+}
+
+// Intent: Where a machine id cannot be compared the reporter must keep working: a host without one (a container
+// without /etc/machine-id) runs on any state file, and a state file that recorded none runs on any host.
+func TestRuntime_MachineIDThatCannotBeComparedIsNotACopy(t *testing.T) {
+	t.Run("host has no machine id", func(t *testing.T) {
+		rig := newRuntimeRig(t)
+
+		if err := os.Remove(filepath.Join(rig.root, "etc", "machine-id")); err != nil {
+			t.Fatal(err)
+		}
+
+		rig.enrolCopied()
+		rig.step()
+
+		if rig.running() == false {
+			t.Error("a host without a machine id refused a state file")
+		}
+
+		if got := rig.runtime.ReporterError(); got != "" {
+			t.Errorf("ReporterError = %q, want none", got)
+		}
+	})
+
+	t.Run("host machine id uninitialized", func(t *testing.T) {
+		rig := newRuntimeRig(t)
+		writeMachineID(t, rig.root, "uninitialized\n")
+
+		rig.enrolCopied()
+		rig.step()
+
+		if rig.running() == false {
+			t.Error("a host whose machine id is uninitialized refused a state file")
+		}
+	})
+
+	t.Run("state recorded none", func(t *testing.T) {
+		rig := newRuntimeRig(t)
+
+		state := State{InstanceID: runtimeInstanceID, Server: rig.api.url(), CACert: string(rig.api.caPEM), Token: rig.api.issueReporterToken()}
+		if err := SaveState(rig.dataDir, state); err != nil {
+			t.Fatal(err)
+		}
+
+		rig.step()
+
+		if rig.running() == false {
+			t.Error("a state file that recorded no machine id was refused")
+		}
+	})
+}
+
+// Intent: A state file that cannot be loaded is not reported as a copy: nothing is known about it, and the reporter
+// leaves things as they are.
+func TestRuntime_ReporterError_UnusableStateFileIsNotACopy(t *testing.T) {
+	rig := newRuntimeRig(t)
+
+	if err := os.WriteFile(filepath.Join(rig.dataDir, StateFileName), []byte(`{"host_machine_id":"`+otherHostMachineID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rig.runtime.ReporterError(); got != "" {
+		t.Errorf("ReporterError = %q, want none for a file that cannot be loaded", got)
 	}
 }

@@ -59,7 +59,8 @@ public class KubernetesClusterSummaryDto
 
     /// <summary>
     /// The error that puts the cluster in the <c>error</c> state (<c>credentials_rejected</c>,
-    /// <c>tls_ca_changed</c>, <c>api_unreachable</c> or <c>namespace_terminating</c>), and null in every other state.
+    /// <c>tls_ca_changed</c>, <c>api_unreachable</c>, <c>namespace_terminating</c> or, from a candidate's own
+    /// report, <c>state_copied</c>), and null in every other state.
     /// </summary>
     public string? ReporterError { get; set; }
 

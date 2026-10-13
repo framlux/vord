@@ -302,6 +302,16 @@ describe('KubernetesSection', () => {
 			expect(text('kubernetes-reporter-error')).toBe('Credentials rejected');
 		});
 
+		it('tells a host whose reporter state was copied to unenrol or enrol it again', () => {
+			render(KubernetesSection, {
+				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'state_copied' }) }) }
+			});
+
+			expect(text('kubernetes-reporter-error')).toBe(
+				'Reporter state was copied from another host; unenrol or re-enrol this host'
+			);
+		});
+
 		it('makes a readable label of an error code it has no wording for', () => {
 			render(KubernetesSection, {
 				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'disk_full' }) }) }

@@ -102,6 +102,7 @@ public class KubernetesReporterCandidateRepositoryTests : KubernetesInventoryRep
     [Test]
     [Arguments("credentials_rejected")]
     [Arguments("tls_ca_changed")]
+    [Arguments("state_copied")]
     public async Task ApplyLocalReport_ReporterError_IsStoredOnTheCandidateAndClearedByTheNextReport(string reporterError)
     {
         // Intent: every candidate reports its own token and TLS failures through its local report, so

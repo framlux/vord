@@ -429,6 +429,7 @@ export const OFFLINE_HOST_ACCEPTED = `Accepted. The host is offline, and it will
 const reporterErrorWording: Record<string, string> = {
 	credentials_rejected: 'Credentials rejected',
 	tls_ca_changed: 'Cluster CA changed',
+	state_copied: 'Reporter state was copied from another host; unenrol or re-enrol this host',
 	api_unreachable: 'API server unreachable',
 	namespace_terminating: 'The vord-system namespace is terminating'
 };

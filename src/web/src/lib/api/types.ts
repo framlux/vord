@@ -842,7 +842,8 @@ export interface KubernetesClusterSummaryDto {
 	clusterVersion: string | null;
 	/**
 	 * The code that puts the cluster in the error state: credentials_rejected, tls_ca_changed,
-	 * api_unreachable or namespace_terminating. Null in every other state.
+	 * api_unreachable, namespace_terminating or, from a candidate's own report, state_copied. Null in
+	 * every other state.
 	 */
 	reporterError: string | null;
 	/** True when the latest snapshot listed only some of the cluster's nodes to fit its size cap. */
@@ -901,7 +902,10 @@ export interface KubernetesCandidateDto {
 	machineName: string;
 	/** True while the machine holds the cluster's reporter Lease. */
 	isHolder: boolean;
-	/** The error the machine's own reporter last reported, as a bare code, or null when it reported none. */
+	/**
+	 * The error the machine's own reporter last reported, as a bare code (credentials_rejected,
+	 * tls_ca_changed or state_copied), or null when it reported none.
+	 */
 	reporterError: string | null;
 	lastReportAt: string;
 	online: boolean;

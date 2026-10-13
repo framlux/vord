@@ -23,6 +23,9 @@ const stopTimeout = 5 * time.Second
 type RuntimeOptions struct {
 	// DataDir is the agent data directory, which holds k8s-reporter.json.
 	DataDir string
+	// Root is the filesystem root the host's /etc/machine-id is read under, which is how a state file copied from
+	// another host is told from this host's own. Empty means the real root.
+	Root string
 	// Clock is the time source of the election. Nil means the system clock.
 	Clock Clock
 	// Gate is the health gate the elector checks before it contends and while it holds the Lease. The runtime
@@ -58,9 +61,11 @@ type RuntimeOptions struct {
 // reading a large cluster takes longer than the Lease can go unrenewed.
 //
 // The candidate's identity on the Lease comes from the instance id in the state file, so a host cloned after it
-// enrolled shares the identity with its original; see Elector.
+// enrolled would share the identity with its original; see Elector. The state file records the machine id of the
+// host that enrolled, and a runtime whose host has a different one does not campaign with it.
 type Runtime struct {
 	dataDir       string
+	root          string
 	clock         Clock
 	gate          Gate
 	onLost        func()
@@ -79,6 +84,10 @@ type Runtime struct {
 	// stepMu serialises a loop step with a release, so the loop never contends for the Lease again between a
 	// release and the deletion of the state file.
 	stepMu sync.Mutex
+
+	// warnedCopied is whether the loop has already said that the state file was written on another host. Only the
+	// loop touches it, under stepMu, so the warning is logged once and not on every pass.
+	warnedCopied bool
 
 	// mu guards the fields below, which other goroutines read.
 	mu           sync.Mutex
@@ -101,6 +110,7 @@ var _ LeaseReleaser = (*Runtime)(nil)
 func NewRuntime(opts RuntimeOptions) *Runtime {
 	r := &Runtime{
 		dataDir:       opts.DataDir,
+		root:          opts.Root,
 		clock:         opts.Clock,
 		gate:          opts.Gate,
 		onLost:        opts.OnLost,
@@ -310,13 +320,22 @@ func (r *Runtime) ReleaseAndStop(ctx context.Context) {
 }
 
 // ReporterError returns why the reporter on this host cannot use its Lease credentials: credentials_rejected,
-// tls_ca_changed, or an empty string when there is no error or no elector.
+// tls_ca_changed, state_copied, or an empty string when there is no error or no elector.
 //
-// An error belongs to the credentials the elector was built from. An enrol writes the new state file before the
-// loop's next pass replaces the elector, and the hook that follows an enrol reads this at once, so while the file
-// holds other credentials than the elector's the elector's error describes a token that is already gone and is
-// not reported. A state file that cannot be read says nothing either way, and the elector's error stands.
+// state_copied needs no elector: it is known from the state file alone, which was written on another host, and the
+// runtime never builds an elector from such a file.
+//
+// An error from the cluster belongs to the credentials the elector was built from. An enrol writes the new
+// state file before the loop's next pass replaces the elector, and the hook that follows an enrol reads this at
+// once, so while the file holds other credentials than the elector's the elector's error describes a token that
+// is already gone and is not reported. A state file that cannot be read says nothing either way, and the
+// elector's error stands.
 func (r *Runtime) ReporterError() string {
+	state, found, err := LoadState(r.dataDir)
+	if (err == nil) && found && copiedFromAnotherHost(state.HostMachineID, hostMachineID(r.root)) {
+		return reasonStateCopied
+	}
+
 	r.mu.Lock()
 	cur := r.current
 	r.mu.Unlock()
@@ -325,7 +344,6 @@ func (r *Runtime) ReporterError() string {
 		return ""
 	}
 
-	state, found, err := LoadState(r.dataDir)
 	if (err == nil) && ((found == false) || (state != cur.state)) {
 		return ""
 	}
@@ -368,7 +386,9 @@ func (r *Runtime) step(ctx context.Context) {
 }
 
 // reconcile starts, restarts or stops the elector to match the state file. A state file that cannot be read
-// leaves everything as it is: a running reporter is not dropped over a file that may be mid-rewrite.
+// leaves everything as it is: a running reporter is not dropped over a file that may be mid-rewrite. A state file
+// written on another host is treated as no file: it holds that host's credentials, which this host must not use
+// to campaign for the Lease.
 func (r *Runtime) reconcile(ctx context.Context) {
 	state, found, err := LoadState(r.dataDir)
 	if err != nil {
@@ -380,6 +400,21 @@ func (r *Runtime) reconcile(ctx context.Context) {
 	r.mu.Lock()
 	cur := r.current
 	r.mu.Unlock()
+
+	if found && copiedFromAnotherHost(state.HostMachineID, hostMachineID(r.root)) {
+		if cur != nil {
+			slog.Warn("the cluster reporter state file was written on another host, stopping the reporter")
+			r.stop(ctx, cur)
+		} else if r.warnedCopied == false {
+			slog.Warn("the cluster reporter state file was written on another host, not starting the reporter; unenrol or enrol this host again", "instance", state.InstanceID)
+		}
+
+		r.warnedCopied = true
+
+		return
+	}
+
+	r.warnedCopied = false
 
 	if found == false {
 		if cur != nil {

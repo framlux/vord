@@ -84,6 +84,23 @@ public class KubernetesReportingTests
     }
 
     [Test]
+    public async Task Derive_CandidateWithCopiedState_IsError()
+    {
+        // Intent: a host that holds reporter state copied from another host cannot report, which is as
+        // much a failure of the cluster's reporting as a rejected token, so the cluster shows the error
+        // and the reason names the copied state rather than the cluster.
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now);
+        List<KubernetesReporterCandidate> candidates = [Candidate(1), Candidate(2, "state_copied")];
+
+        ReportingState state = KubernetesReporting.Derive(cluster, candidates, Now);
+        string? error = KubernetesReporting.ReporterErrorOf(
+            cluster, candidates, new Dictionary<long, string> { [1] = "alpha", [2] = "beta" });
+
+        await Assert.That(state).IsEqualTo(ReportingState.Error);
+        await Assert.That(error).IsEqualTo("state_copied");
+    }
+
+    [Test]
     public async Task Derive_BlankCandidateReporterError_IsNotAnError()
     {
         KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now);

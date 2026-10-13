@@ -46,6 +46,13 @@
 					text: "The cluster's certificate authority changed, so the reporter no longer trusts the API server. Enrol the reporters again to pick up the new CA.",
 					action: { label: 'Re-enrol', run: onReenrol }
 				};
+			case 'state_copied':
+				return {
+					id: 'state-copied',
+					tone: 'bad',
+					text: 'A host holds reporter state that was copied from another host, so it cannot report. Unenrol that host, or enrol it again to give it a reporter of its own.',
+					action: { label: 'Re-enrol', run: onReenrol }
+				};
 			case 'api_unreachable':
 				return {
 					id: 'api-unreachable',
