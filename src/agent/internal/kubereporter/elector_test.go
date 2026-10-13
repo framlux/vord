@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/kube"
 )
 
@@ -2124,5 +2125,131 @@ func TestElector_ASlowSendIntervalKeepsAHealthyHolderWhoseSnapshotIsWaiting(t *t
 
 	if a.lost != 1 {
 		t.Errorf("onLost ran %d times after the snapshot waited three sends, want 1", a.lost)
+	}
+}
+
+// queueBackedGate gives a candidate the gate input the agent builds from its real queue: the age of the oldest
+// cluster snapshot that is pending or being sent, read from a store whose clock is the rig's.
+func (r *electorRig) queueBackedGate(c *candidate) *db.Store {
+	r.t.Helper()
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		r.t.Fatalf("open database: %v", err)
+	}
+
+	r.t.Cleanup(func() { database.Close() })
+
+	store := db.NewStore(database, 0, db.WithClock(r.clock.Now))
+
+	c.oldest = func() (time.Time, bool) {
+		created, found, err := store.OldestQueuedTelemetry(db.TelemetryKubernetesCluster)
+		if err != nil {
+			r.t.Errorf("OldestQueuedTelemetry: %v", err)
+		}
+
+		return created, found
+	}
+
+	return store
+}
+
+// Intent: a holder that replaces its snapshot every minute but never gets one delivered is not delivering, and
+// the gate must say so once the first of them has waited the age limit. Judging only the newest snapshot would
+// show it a minute old forever and the host would keep the Lease while delivering nothing.
+func TestElector_Gate_SnapshotsReplacedButNeverDeliveredFailTheGate(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	store := rig.queueBackedGate(a)
+
+	queue := func(n int) {
+		t.Helper()
+
+		if err := store.ReplaceTelemetryOfType(fmt.Sprintf("snapshot-%d", n), db.TelemetryKubernetesCluster, `{}`); err != nil {
+			t.Fatalf("replace snapshot %d: %v", n, err)
+		}
+	}
+
+	queue(0)
+	a.tick()
+	a.requireLeader(1)
+
+	// One tick per election interval and a fresh snapshot every third tick, so the queue always holds a snapshot
+	// no older than a minute while the first one has waited since the start.
+	ticksToTheLimit := int(gateMaxSnapshotAge / electionInterval)
+
+	for tick := 1; tick < ticksToTheLimit; tick++ {
+		rig.advance(electionInterval)
+
+		if tick%3 == 0 {
+			queue(tick)
+		}
+
+		a.tick()
+
+		if _, ok := a.elector.IsLeader(); ok == false {
+			t.Fatalf("the holder gave up the Lease %v after the first snapshot, before the limit of %v", time.Duration(tick)*electionInterval, gateMaxSnapshotAge)
+		}
+	}
+
+	rig.advance(electionInterval)
+	queue(ticksToTheLimit)
+
+	if reason := a.elector.gateFailure(rig.clock.Now()); reason != "snapshot_not_delivered" {
+		t.Fatalf("gateFailure = %q after %v of replaced and undelivered snapshots, want snapshot_not_delivered", reason, gateMaxSnapshotAge)
+	}
+
+	a.tick()
+
+	a.requireNotLeader()
+
+	if a.lost != 1 {
+		t.Errorf("onLost ran %d times, want 1", a.lost)
+	}
+
+	if got := rig.holder(); got != "" {
+		t.Errorf("holder = %q after the gate failed, want the Lease released", got)
+	}
+}
+
+// Intent: the age only counts snapshots nobody delivered. A holder whose snapshots are delivered, even slowly,
+// keeps the Lease however many it replaces, because each delivery starts the clock again.
+func TestElector_Gate_DeliveredSnapshotsKeepTheLease(t *testing.T) {
+	rig := newElectorRig(t)
+	a := rig.newCandidate("aaaa")
+	store := rig.queueBackedGate(a)
+
+	a.tick()
+	a.requireLeader(1)
+
+	const deliveryEvery = 10 * time.Minute
+
+	for round := 0; round < 12; round++ {
+		id := fmt.Sprintf("snapshot-%d", round)
+
+		if err := store.ReplaceTelemetryOfType(id, db.TelemetryKubernetesCluster, `{}`); err != nil {
+			t.Fatalf("replace %s: %v", id, err)
+		}
+
+		for elapsed := time.Duration(0); elapsed < deliveryEvery; elapsed += electionInterval {
+			rig.advance(electionInterval)
+			a.tick()
+
+			if _, ok := a.elector.IsLeader(); ok == false {
+				t.Fatalf("round %d: the holder gave up the Lease with a snapshot %v old, delivered every %v", round, elapsed+electionInterval, deliveryEvery)
+			}
+		}
+
+		if taken, err := store.DequeueTelemetryByTypes([]db.TelemetryType{db.TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+			t.Fatalf("round %d: dequeue: %v (%d items)", round, err, len(taken))
+		}
+
+		if err := store.MarkTelemetryCompleted([]string{id}); err != nil {
+			t.Fatalf("round %d: complete: %v", round, err)
+		}
+	}
+
+	if a.lost != 0 {
+		t.Errorf("onLost ran %d times, want the Lease kept throughout", a.lost)
 	}
 }

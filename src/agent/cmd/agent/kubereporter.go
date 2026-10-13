@@ -64,8 +64,9 @@ func newReporterGate(paused func() bool, lastAck func() time.Time, oldestPending
 }
 
 // newOldestPendingSnapshot builds the gate's view of the queue: when the oldest cluster snapshot that is pending
-// or being sent was queued. A queue that cannot be read reports none, so a database fault cannot make the holder
-// give up the Lease; it is logged.
+// or being sent began waiting. A snapshot that replaces an undelivered one inherits its time, so snapshots that
+// keep being replaced without getting through still age. A queue that cannot be read reports none, so a database
+// fault cannot make the holder give up the Lease; it is logged.
 func newOldestPendingSnapshot(oldestQueued func(db.TelemetryType) (time.Time, bool, error)) func() (time.Time, bool) {
 	return func() (time.Time, bool) {
 		created, found, err := oldestQueued(db.TelemetryKubernetesCluster)

@@ -143,9 +143,9 @@ func TestNewReporterGate_UsesTheAgentsOwnInputs(t *testing.T) {
 	}
 }
 
-// Intent: the gate's question about a snapshot that is stuck is answered from the real queue: the creation time
-// of the oldest cluster snapshot that is pending or being sent, and nothing when the queue holds none, whatever
-// else it holds.
+// Intent: the gate's question about a snapshot that is stuck is answered from the real queue: when the oldest
+// cluster snapshot that is pending or being sent began waiting, which a replacement does not reset, and nothing
+// when the queue holds none, whatever else it holds.
 func TestOldestPendingSnapshot_ReadsTheRealQueue(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
@@ -154,7 +154,8 @@ func TestOldestPendingSnapshot_ReadsTheRealQueue(t *testing.T) {
 
 	t.Cleanup(func() { database.Close() })
 
-	store := db.NewStore(database, 0)
+	now := time.Date(2026, 10, 11, 11, 0, 0, 0, time.UTC)
+	store := db.NewStore(database, 0, db.WithClock(func() time.Time { return now }))
 	oldest := newOldestPendingSnapshot(store.OldestQueuedTelemetry)
 
 	if _, pending := oldest(); pending {
@@ -173,13 +174,21 @@ func TestOldestPendingSnapshot_ReadsTheRealQueue(t *testing.T) {
 		t.Fatalf("replace: %v", err)
 	}
 
-	if _, err := store.DB().Exec("UPDATE telemetry_queue SET created_at = '2026-10-11T11:00:00Z' WHERE id = 'snapshot'"); err != nil {
-		t.Fatalf("set created_at: %v", err)
+	created, pending := oldest()
+	if (pending == false) || created.Equal(now) == false {
+		t.Fatalf("oldest = %v, %v; want %v, true", created, pending, now)
 	}
 
-	created, pending := oldest()
-	if want := time.Date(2026, 10, 11, 11, 0, 0, 0, time.UTC); (pending == false) || created.Equal(want) == false {
-		t.Fatalf("oldest = %v, %v; want %v, true", created, pending, want)
+	// A snapshot that replaces it before it is delivered does not make the gate's view any younger.
+	queuedAt := now
+	now = now.Add(10 * time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("replacement", db.TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace again: %v", err)
+	}
+
+	if created, pending := oldest(); (pending == false) || created.Equal(queuedAt) == false {
+		t.Fatalf("oldest after a replacement = %v, %v; want %v, true", created, pending, queuedAt)
 	}
 
 	if _, err := store.DequeueTelemetryByTypes([]db.TelemetryType{db.TelemetryKubernetesCluster}, 1); err != nil {
@@ -190,7 +199,7 @@ func TestOldestPendingSnapshot_ReadsTheRealQueue(t *testing.T) {
 		t.Error("a snapshot the sender holds no longer counts as undelivered")
 	}
 
-	if err := store.MarkTelemetryCompleted([]string{"snapshot"}); err != nil {
+	if err := store.MarkTelemetryCompleted([]string{"replacement"}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 

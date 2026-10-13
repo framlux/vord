@@ -21,6 +21,9 @@ type Store struct {
 	pendingCount atomic.Int64
 	maxQueueSize int
 
+	// now is the clock every timestamp the store writes or compares against comes from.
+	now func() time.Time
+
 	// countMu protects countLoaded and countInitErr so that the pending count
 	// can be safely invalidated and reloaded (unlike sync.Once, which cannot be
 	// reset without a data race).
@@ -32,18 +35,34 @@ type Store struct {
 // defaultMaxQueueSize is used when no explicit max is provided.
 const defaultMaxQueueSize = 10000
 
+// StoreOption changes how a Store is built.
+type StoreOption func(*Store)
+
+// WithClock makes the store read the time from now instead of the system clock, so a test decides when an item
+// was queued.
+func WithClock(now func() time.Time) StoreOption {
+	return func(s *Store) {
+		s.now = now
+	}
+}
+
 // NewStore creates a new Store backed by the given database connection.
 // The maxQueueSize parameter controls the maximum number of pending telemetry
 // items in the queue. When the queue is at capacity, the oldest pending items
 // are evicted (FIFO) to make room for new telemetry. Pass 0 to use the default
 // of 10000.
-func NewStore(db *sql.DB, maxQueueSize int) *Store {
+func NewStore(db *sql.DB, maxQueueSize int, opts ...StoreOption) *Store {
 	size := maxQueueSize
 	if size <= 0 {
 		size = defaultMaxQueueSize
 	}
 
-	return &Store{db: db, maxQueueSize: size}
+	store := &Store{db: db, maxQueueSize: size, now: time.Now}
+	for _, opt := range opts {
+		opt(store)
+	}
+
+	return store
 }
 
 // loadPendingCount initializes the cached pending count from the database if not already loaded.
@@ -84,7 +103,7 @@ func (s *Store) GetConfig(key string) (string, error) {
 
 // SetConfig upserts a config key-value pair.
 func (s *Store) SetConfig(key, value string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		`INSERT INTO agent_config (key, value, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -135,7 +154,7 @@ func (s *Store) EnqueueTelemetry(id string, itemType TelemetryType, payload stri
 		)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err = s.db.Exec(
 		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -159,7 +178,7 @@ func (s *Store) EnqueueTelemetry(id string, itemType TelemetryType, payload stri
 // evictOldestPending deletes the N oldest pending items from the telemetry queue.
 // Returns the number of rows actually deleted.
 func (s *Store) evictOldestPending(n int64) (int64, error) {
-	result, err := s.db.Exec(
+	result, err := s.execPruningSince(
 		`DELETE FROM telemetry_queue WHERE id IN (
 			SELECT id FROM telemetry_queue
 			WHERE status = ?
@@ -193,8 +212,8 @@ func (s *Store) DequeueTelemetry(limit int) ([]TelemetryQueueItem, error) {
 
 // UpdateTelemetryStatus updates the status of a telemetry queue item.
 func (s *Store) UpdateTelemetryStatus(id string, status QueueStatus) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	now := s.now().UTC().Format(time.RFC3339)
+	_, err := s.execPruningSince(
 		"UPDATE telemetry_queue SET status = ?, updated_at = ? WHERE id = ?",
 		int(status), now, id,
 	)
@@ -203,7 +222,7 @@ func (s *Store) UpdateTelemetryStatus(id string, status QueueStatus) error {
 
 // PurgeTelemetry removes completed items older than the given duration.
 func (s *Store) PurgeTelemetry(olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	cutoff := s.now().UTC().Add(-olderThan).Format(time.RFC3339)
 	result, err := s.db.Exec(
 		"DELETE FROM telemetry_queue WHERE status = ? AND updated_at < ?",
 		int(QueueStatusCompleted), cutoff,
@@ -214,11 +233,55 @@ func (s *Store) PurgeTelemetry(olderThan time.Duration) (int64, error) {
 	return result.RowsAffected()
 }
 
+// execPruningSince runs one statement that removes telemetry from the pending and processing states, or may, and
+// drops the undelivered-since records it leaves without a waiting item, all in one transaction.
+func (s *Store) execPruningSince(query string, args ...any) (sql.Result, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := pruneUndeliveredSince(tx); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing transaction: %w", err)
+	}
+
+	return result, nil
+}
+
+// pruneUndeliveredSince deletes the undelivered-since record of every type that has no pending or processing item
+// left. The record is the age of the oldest item of its type that nobody has delivered, so it means nothing once
+// nothing of the type is waiting, and a later item queued without a replacement must not inherit it. Every path
+// that deletes or finishes queue items calls it in the same transaction.
+func pruneUndeliveredSince(tx *sql.Tx) error {
+	if _, err := tx.Exec(
+		`DELETE FROM telemetry_undelivered_since WHERE NOT EXISTS (
+			SELECT 1 FROM telemetry_queue
+			WHERE telemetry_queue.item_type = telemetry_undelivered_since.item_type
+			AND telemetry_queue.status IN (?, ?)
+		)`,
+		int(QueueStatusPending), int(QueueStatusProcessing),
+	); err != nil {
+		return fmt.Errorf("clearing undelivered-since records: %w", err)
+	}
+
+	return nil
+}
+
 // --- server_config ---
 
 // SaveServerConfig stores a new server configuration and prunes old entries.
 func (s *Store) SaveServerConfig(configJSON string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		"INSERT INTO server_config (config_json, created_at) VALUES (?, ?)",
 		configJSON, now,
@@ -250,7 +313,7 @@ func (s *Store) GetLatestServerConfig() (*ServerConfig, error) {
 
 // MarkServerConfigApplied sets the applied_at timestamp on a server config row.
 func (s *Store) MarkServerConfigApplied(id int64) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec("UPDATE server_config SET applied_at = ? WHERE id = ?", now, id)
 	return err
 }
@@ -337,7 +400,7 @@ func (s *Store) InsertSSHSessionAndEnqueue(session *SSHSession, telemetryID stri
 	}
 
 	// Enqueue the telemetry item.
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	if _, err := tx.Exec(
 		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -363,7 +426,7 @@ func (s *Store) InsertSSHSessionAndEnqueue(session *SSHSession, telemetryID stri
 
 // PurgeSSHSessions removes SSH sessions older than the given duration.
 func (s *Store) PurgeSSHSessions(olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	cutoff := s.now().UTC().Add(-olderThan).Format(time.RFC3339)
 	result, err := s.db.Exec(
 		"DELETE FROM ssh_sessions WHERE timestamp < ?",
 		cutoff,
@@ -394,7 +457,7 @@ func (s *Store) GetCollectorState(name string) (*CollectorState, error) {
 
 // SaveCollectorState upserts the state for a named collector.
 func (s *Store) SaveCollectorState(name string, stateJSON *string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		`INSERT INTO collector_state (collector_name, last_run_at, state_json) VALUES (?, ?, ?)
 		 ON CONFLICT(collector_name) DO UPDATE SET last_run_at = excluded.last_run_at, state_json = excluded.state_json`,
@@ -479,7 +542,7 @@ func (s *Store) DequeueTelemetryByTypes(types []TelemetryType, limit int) ([]Tel
 	}
 
 	if len(ids) > 0 {
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := s.now().UTC().Format(time.RFC3339)
 		idPlaceholders := make([]string, len(ids))
 		updateArgs := make([]any, 0, len(ids)+2)
 		updateArgs = append(updateArgs, int(QueueStatusProcessing), now)
@@ -507,7 +570,7 @@ func (s *Store) DequeueTelemetryByTypes(types []TelemetryType, limit int) ([]Tel
 
 // ResetProcessingTelemetry marks all processing items back to pending (used on startup for crash recovery).
 func (s *Store) ResetProcessingTelemetry() error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		"UPDATE telemetry_queue SET status = ?, updated_at = ? WHERE status = ?",
 		int(QueueStatusPending), now, int(QueueStatusProcessing),
@@ -540,6 +603,9 @@ func (s *Store) ClearTelemetryQueue() error {
 	}
 	if _, err := tx.Exec("DELETE FROM ssh_sessions WHERE queued = 0"); err != nil {
 		return fmt.Errorf("clearing unqueued ssh sessions: %w", err)
+	}
+	if err := pruneUndeliveredSince(tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing clear queue transaction: %w", err)
@@ -594,6 +660,10 @@ func (s *Store) DeleteTelemetryByType(t TelemetryType) (int64, error) {
 		return 0, fmt.Errorf("counting deleted telemetry of type %d: %w", int(t), err)
 	}
 
+	if err := pruneUndeliveredSince(tx); err != nil {
+		return 0, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing delete telemetry transaction: %w", err)
 	}
@@ -609,6 +679,13 @@ func (s *Store) DeleteTelemetryByType(t TelemetryType) (int64, error) {
 // place. Items already delivered are history and stay. The cached pending count changes by one for the new item,
 // less the pending items it replaced and the items evicted for room; processing items were taken out of the count
 // when they were dequeued. An item the queue could never hold is refused before anything changes.
+//
+// The new item's created_at is its own queueing time, because it feeds the collection time the server stores and
+// the order in which a full queue evicts. How long something of the type has gone undelivered is kept apart, in
+// telemetry_undelivered_since: when the replaced items were still waiting, the type keeps the age it already had
+// (or takes the oldest creation time among the deleted items when none was recorded), and when nothing was
+// waiting, the age starts now. Replacing faster than the sender delivers therefore cannot hide a snapshot that
+// never gets through; see OldestQueuedTelemetry.
 //
 // Deleting a processing item while the sender holds it is safe: the sender's later completed or pending marks
 // match no row.
@@ -636,6 +713,16 @@ func (s *Store) ReplaceTelemetryOfType(id string, t TelemetryType, payload strin
 		int(t), int(QueueStatusPending),
 	).Scan(&replacedPending); err != nil {
 		return fmt.Errorf("counting pending telemetry of type %d: %w", int(t), err)
+	}
+
+	// The oldest item of the type that is still waiting is read before the delete. It is where the type's age
+	// starts when no age was recorded for it, for items that were queued without a replacement.
+	var oldestWaiting sql.NullString
+	if err := tx.QueryRow(
+		"SELECT MIN(created_at) FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)",
+		int(t), int(QueueStatusPending), int(QueueStatusProcessing),
+	).Scan(&oldestWaiting); err != nil {
+		return fmt.Errorf("finding the oldest waiting telemetry of type %d: %w", int(t), err)
 	}
 
 	if _, err := tx.Exec(
@@ -667,7 +754,7 @@ func (s *Store) ReplaceTelemetryOfType(id string, t TelemetryType, payload strin
 		}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	if _, err := tx.Exec(
 		`INSERT INTO telemetry_queue (id, item_type, payload, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -680,6 +767,29 @@ func (s *Store) ReplaceTelemetryOfType(id string, t TelemetryType, payload strin
 		}
 
 		return fmt.Errorf("inserting telemetry of type %d: %w", int(t), err)
+	}
+
+	if oldestWaiting.Valid {
+		_, err = tx.Exec(
+			`INSERT INTO telemetry_undelivered_since (item_type, since) VALUES (?, ?)
+			 ON CONFLICT(item_type) DO NOTHING`,
+			int(t), oldestWaiting.String,
+		)
+	} else {
+		_, err = tx.Exec(
+			`INSERT INTO telemetry_undelivered_since (item_type, since) VALUES (?, ?)
+			 ON CONFLICT(item_type) DO UPDATE SET since = excluded.since`,
+			int(t), now,
+		)
+	}
+
+	if err != nil {
+		return fmt.Errorf("recording when telemetry of type %d went undelivered: %w", int(t), err)
+	}
+
+	// The eviction above may have taken the last waiting item of another type.
+	if err := pruneUndeliveredSince(tx); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -698,15 +808,22 @@ func (s *Store) ReplaceTelemetryOfType(id string, t TelemetryType, payload strin
 	return nil
 }
 
-// OldestQueuedTelemetry returns when the oldest pending or processing item of one type was queued, and false
-// when there is none. Delivered items are history and do not count. The cluster reporter's health gate uses it to
-// tell a snapshot that is not getting through from one that is merely waiting.
+// OldestQueuedTelemetry returns how long something of one type has gone undelivered, as the time it began
+// waiting, and false when no item of the type is pending or processing. Delivered items are history and do not
+// count. The cluster reporter's health gate uses it to tell a snapshot that is not getting through from one that
+// is merely waiting.
+//
+// For a type that is queued by replacement, that time is the age recorded by ReplaceTelemetryOfType, which
+// survives the replacements and is not the creation time of the newest row; for anything else, or when no age was
+// recorded, it is the creation time of the oldest waiting item.
 func (s *Store) OldestQueuedTelemetry(t TelemetryType) (time.Time, bool, error) {
-	var oldest sql.NullString
+	var oldest, since sql.NullString
 	if err := s.db.QueryRow(
-		"SELECT MIN(created_at) FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)",
-		int(t), int(QueueStatusPending), int(QueueStatusProcessing),
-	).Scan(&oldest); err != nil {
+		`SELECT MIN(created_at),
+			(SELECT since FROM telemetry_undelivered_since WHERE item_type = ?)
+		 FROM telemetry_queue WHERE item_type = ? AND status IN (?, ?)`,
+		int(t), int(t), int(QueueStatusPending), int(QueueStatusProcessing),
+	).Scan(&oldest, &since); err != nil {
 		return time.Time{}, false, fmt.Errorf("finding the oldest queued telemetry of type %d: %w", int(t), err)
 	}
 
@@ -714,12 +831,17 @@ func (s *Store) OldestQueuedTelemetry(t TelemetryType) (time.Time, bool, error) 
 		return time.Time{}, false, nil
 	}
 
-	created, err := time.Parse(time.RFC3339, oldest.String)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("reading the creation time of queued telemetry of type %d: %w", int(t), err)
+	began := oldest.String
+	if since.Valid {
+		began = since.String
 	}
 
-	return created, true, nil
+	queued, err := time.Parse(time.RFC3339, began)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("reading the queueing time of telemetry of type %d: %w", int(t), err)
+	}
+
+	return queued, true, nil
 }
 
 // MarkTelemetryCompleted marks multiple items as completed.
@@ -727,7 +849,7 @@ func (s *Store) MarkTelemetryCompleted(ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	placeholders := make([]string, len(ids))
 	args := make([]any, 0, len(ids)+2)
 	args = append(args, int(QueueStatusCompleted), now)
@@ -739,7 +861,7 @@ func (s *Store) MarkTelemetryCompleted(ids []string) error {
 		"UPDATE telemetry_queue SET status = ?, updated_at = ? WHERE id IN (%s)",
 		strings.Join(placeholders, ","),
 	)
-	_, err := s.db.Exec(query, args...)
+	_, err := s.execPruningSince(query, args...)
 
 	return err
 }
@@ -749,7 +871,7 @@ func (s *Store) MarkTelemetryPending(ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	placeholders := make([]string, len(ids))
 	args := make([]any, 0, len(ids)+2)
 	args = append(args, int(QueueStatusPending), now)
@@ -796,7 +918,7 @@ func (s *Store) DiscardTelemetry(ids []string) (int64, error) {
 		"DELETE FROM telemetry_queue WHERE status = ? AND id IN (%s)",
 		strings.Join(placeholders, ","),
 	)
-	result, err := s.db.Exec(query, args...)
+	result, err := s.execPruningSince(query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -830,7 +952,7 @@ func (s *Store) UpsertSigningKeys(keys []TrustedKey) error {
 		return fmt.Errorf("clearing signing keys: %w", err)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	for _, k := range keys {
 		if _, err := tx.Exec(
 			"INSERT INTO trusted_signing_keys (key_id, user_id, public_key, synced_at) VALUES (?, ?, ?, ?)",
@@ -896,7 +1018,7 @@ func (s *Store) RecordNonce(nonce string) error {
 		return fmt.Errorf("nonce table at capacity (%d), rejecting to prevent disk exhaustion", maxNonceTableSize)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := s.now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		"INSERT OR IGNORE INTO command_nonces (nonce, executed_at) VALUES (?, ?)",
 		nonce, now,
@@ -907,7 +1029,7 @@ func (s *Store) RecordNonce(nonce string) error {
 
 // PurgeNonces removes nonces older than the given duration.
 func (s *Store) PurgeNonces(olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	cutoff := s.now().UTC().Add(-olderThan).Format(time.RFC3339)
 	result, err := s.db.Exec("DELETE FROM command_nonces WHERE executed_at < ?", cutoff)
 	if err != nil {
 		return 0, err
