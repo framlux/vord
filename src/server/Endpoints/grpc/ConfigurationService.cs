@@ -429,7 +429,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// </summary>
     private async Task ApplyReportedMachineTypeAsync(long machineId, Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported, CancellationToken cancellationToken)
     {
-        MachineTypes? resolved = ResolveReportedMachineType(reported);
+        MachineTypes? resolved = MachineTypeMapping.ToCorrection(reported);
         if (resolved is null)
         {
             return;
@@ -443,29 +443,6 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         {
             _logger.LogWarning(ex, "Failed to apply reported machine type for machine {MachineId}", machineId);
         }
-    }
-
-    /// <summary>
-    /// Maps a reported machine type onto the stored enum, or null when it should be ignored.
-    /// <para>
-    /// UnknownType means the agent could not classify the host, which is not the same as asserting
-    /// the host is unknown — treating it as an assertion would let a detection failure erase a good
-    /// stored value. An out-of-range value is rejected for the same reason a registration would
-    /// reject it: an agent must not be able to write an enum the rest of the system cannot read.
-    /// </para>
-    /// </summary>
-    /// <param name="reported">The machine type as sent by the agent.</param>
-    /// <returns>The database enum value to store, or null to leave the stored type alone.</returns>
-    internal static MachineTypes? ResolveReportedMachineType(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported)
-    {
-        return reported switch
-        {
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType => MachineTypes.Desktop,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType => MachineTypes.Laptop,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType => MachineTypes.BareMetalServer,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType => MachineTypes.VirtualMachine,
-            _ => null,
-        };
     }
 
     /// <summary>

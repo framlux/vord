@@ -300,4 +300,86 @@ public sealed class RegistrationServiceTests
         await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
         await Assert.That(ex.Status.Detail).IsEqualTo("Machine limit reached");
     }
+
+    // --- Machine type validation ---
+
+    [Test]
+    public async Task RegisterSystem_SingleBoardComputerType_IsAcceptedAndReachesTheMachineService()
+    {
+        _machineService.RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>())
+            .Returns(((long?)7, "sbc-api-key", string.Empty));
+
+        RegistrationService service = CreateService();
+
+        RegisterSystemRequest request = new()
+        {
+            Hostname = "raspberrypi",
+            SerialNumber = "SN-SBC",
+            SystemId = "SYS-SBC",
+            MachineType = MachineType.SingleBoardComputerType,
+            Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.DebianOs
+        };
+
+        RegisterSystemResponse response = await service.RegisterSystem(request, CreateCallContext());
+
+        await Assert.That(response.MachineId).IsEqualTo(7);
+        await _machineService.Received(1).RegisterSystemAsync(
+            Arg.Is<RegisterSystemRequest>(r => r.MachineType == MachineType.SingleBoardComputerType),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_EveryDefinedMachineType_IsAccepted()
+    {
+        // The check is "is this a value the contract defines", so a value added to the proto cannot
+        // be refused by a range left behind.
+        _machineService.RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>())
+            .Returns(((long?)1, "api-key", string.Empty));
+
+        RegistrationService service = CreateService();
+
+        foreach (MachineType machineType in Enum.GetValues<MachineType>())
+        {
+            RegisterSystemRequest request = new()
+            {
+                Hostname = "host-1",
+                SerialNumber = "SN-001",
+                SystemId = "SYS-001",
+                MachineType = machineType,
+                Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs
+            };
+
+            RegisterSystemResponse response = await service.RegisterSystem(request, CreateCallContext());
+
+            await Assert.That(response.MachineId).IsEqualTo(1).Because($"{machineType} is defined by the contract");
+        }
+    }
+
+    [Test]
+    [Arguments(6)]
+    [Arguments(-1)]
+    [Arguments(999)]
+    public async Task RegisterSystem_UndefinedMachineType_IsRefusedBeforeTheMachineService(int rawMachineType)
+    {
+        RegistrationService service = CreateService();
+
+        RegisterSystemRequest request = new()
+        {
+            Hostname = "host-1",
+            SerialNumber = "SN-001",
+            SystemId = "SYS-001",
+            MachineType = (MachineType)rawMachineType,
+            Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs
+        };
+
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, CreateCallContext()));
+
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+
+        // An agent that predates the type recognises exactly this wording when a newer server's
+        // successor type reaches an older server, so it is part of the contract.
+        await Assert.That(ex.Status.Detail).IsEqualTo("Invalid machine type");
+        await _machineService.DidNotReceive().RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>());
+    }
 }

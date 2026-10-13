@@ -1280,6 +1280,48 @@ public class MachineServiceTests
     }
 
     [Test]
+    public async Task RegisterSystem_SingleBoardComputerType_ConvertsCorrectly()
+    {
+        // A Raspberry Pi registers as a single-board computer. An unmapped value would fall through
+        // to Unknown and store 0 without any error, so the stored enum is asserted, not the call.
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 304;
+        createdMachine.MachineType = MachineTypes.SingleBoardComputer;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "sbc-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildService(scopeFactory);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-SBC",
+            SystemId = "SID-SBC",
+            Hostname = "raspberrypi",
+            MachineType = Grpc.AgentRegistration.MachineType.SingleBoardComputerType,
+            Os = OperatingSystemType.DebianOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.SingleBoardComputer && m.OperatingSystem == OperatingSystems.Debian),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RegisterSystem_WindowsOs_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();

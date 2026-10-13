@@ -704,6 +704,62 @@ public sealed class TelemetryPipelineTests
     }
 
     [Test]
+    public async Task Pipeline_SingleBoardComputerSystemInfo_RoundTripsTheBoardModelToTheSummary()
+    {
+        // Intent: a Raspberry Pi has no SMBIOS product name, so the model its agent reports is the
+        // board's own, revision included. It must reach the summary the fleet list, the fleet search
+        // and the dashboard read, unchanged.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-single-board-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.SystemInfoType,
+                    SystemInfo = new SystemInfoRecord
+                    {
+                        Hostname = "raspberrypi",
+                        HardwareModel = "Raspberry Pi 4 Model B Rev 1.4",
+                        CpuPhysicalCores = 4,
+                        PhysicalMemory = 4_149_813_248,
+                        IpAddresses = { "192.168.1.50" }
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.HardwareModel).IsEqualTo("Raspberry Pi 4 Model B Rev 1.4");
+        await Assert.That(summary.Hostname).IsEqualTo("raspberrypi");
+    }
+
+    [Test]
     public async Task Pipeline_OsVersion_RoundTripsNameVersionAndKernelToStateTables()
     {
         // Intent: OsName and OsVersion feed the fleet list, and the kernel string the agent reports in

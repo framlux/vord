@@ -702,6 +702,25 @@ public class MachineHandlerTests
     }
 
     [Test]
+    [Arguments("SingleBoardComputer")]
+    [Arguments("singleboardcomputer")]
+    public async Task ListAsync_TypeFilter_SingleBoardComputer_ReturnsOnlyBoards(string typeFilter)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, hostname: "raspberrypi", machineType: MachineTypes.SingleBoardComputer);
+        await SeedMachine(dbFactory, hostname: "baremetal-host", machineType: MachineTypes.BareMetalServer);
+        await SeedMachine(dbFactory, hostname: "mystery-host", machineType: MachineTypes.Unknown);
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, typeFilter, null, "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("raspberrypi");
+        await Assert.That(result.Data!.Items[0].MachineType).IsEqualTo(MachineTypes.SingleBoardComputer);
+    }
+
+    [Test]
     public async Task ListAsync_OsFilter_FiltersCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();

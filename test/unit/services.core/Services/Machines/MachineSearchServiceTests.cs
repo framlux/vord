@@ -581,6 +581,54 @@ public class MachineSearchServiceTests
         await Assert.That(result.Items[0].Name).IsEqualTo("laptop");
     }
 
+    [Test]
+    [Arguments("SingleBoardComputer")]
+    [Arguments("singleboardcomputer")]
+    public async Task SearchAsync_TypeFilter_SingleBoardComputer_ReturnsOnlyBoards(string typeFilter)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachineOfType(dbFactory, "raspberrypi", MachineTypes.SingleBoardComputer);
+        await SeedMachineOfType(dbFactory, "server", MachineTypes.BareMetalServer);
+        await SeedMachineOfType(dbFactory, "mystery", MachineTypes.Unknown);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Type = typeFilter;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("raspberrypi");
+    }
+
+    [Test]
+    public async Task SearchIdsAsync_TypeFilter_SingleBoardComputer_SelectsOnlyBoards()
+    {
+        // The bulk selection behind the assignment picker takes the same type filter as the search.
+        using TestDatabaseFactory dbFactory = new();
+        long board = await SeedMachineOfType(dbFactory, "raspberrypi", MachineTypes.SingleBoardComputer);
+        await SeedMachineOfType(dbFactory, "server", MachineTypes.BareMetalServer);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineSearchService>.Instance);
+
+        MachineIdSelectionDto selection = await service.SearchIdsAsync(new MachineSearchCriteria { Type = "SingleBoardComputer" }, 1, CancellationToken.None);
+
+        await Assert.That(selection.Ids).IsEquivalentTo(new List<long> { board });
+        await Assert.That(selection.TotalCount).IsEqualTo(1);
+    }
+
+    private static async Task<long> SeedMachineOfType(TestDatabaseFactory dbFactory, string hostname, MachineTypes machineType)
+    {
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: hostname);
+        machine.MachineType = machineType;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        return machine.Id;
+    }
+
     // ========== Fast path (SQL pagination) ==========
 
     [Test]

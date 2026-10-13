@@ -97,8 +97,10 @@ public sealed class RegistrationService : Registration.RegistrationBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, "System ID is required"));
         }
-        else if ((request.MachineType < MachineType.UnknownType) || (request.MachineType > MachineType.VirtualMachineType))
+        else if (Enum.IsDefined(request.MachineType) == false)
         {
+            // An agent whose type this server does not know recognises this exact message and
+            // registers again as unknown, so the wording is part of the contract.
             throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid machine type"));
         }
         else if ((request.Os < FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs) || (request.Os > FleetManagement.Grpc.AgentRegistration.OperatingSystemType.DebianOs))
