@@ -26,16 +26,42 @@ using System.Text.Json;
 namespace Framlux.FleetManagement.Test.Integration.Services.Machines;
 
 /// <summary>
-/// Live test, against real Postgres, that a telemetry value longer than its bounded column cannot
-/// stall the machine-state projection. Postgres rejects an over-long <c>varchar(n)</c> value, SQLite
-/// ignores lengths, and the projection retries a failing batch forever, so one machine reporting a
-/// long hardware model would freeze the state of every machine in its shard. The values are cut when
-/// the payload is parsed, and these tests run the real projection service to prove the cut is enough.
+/// Live test, against real Postgres, that a telemetry value Postgres would refuse cannot stall the
+/// machine-state projection. Postgres rejects an over-long <c>varchar(n)</c> value and a NUL in any
+/// text value, SQLite accepts both, and the projection retries a failing batch forever, so one
+/// machine reporting a long hardware model would freeze the state of every machine in its shard. The
+/// values are cleaned when the payload is parsed, and these tests run the real projection service to
+/// prove the cleaning is enough.
 /// </summary>
 [NotInParallel]
 public sealed class BoundedSummaryStringsLiveTests
 {
     private static readonly DateTimeOffset Now = new(2026, 10, 13, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The bounded columns the projection writes from agent-reported text, with the limit it cuts each to.</summary>
+    private static readonly (string Table, string Column, int Limit)[] ClampedColumns =
+    [
+        ("MachineStateSummary", "Hostname", MachineStateColumnLimits.Hostname),
+        ("MachineStateSummary", "HardwareModel", MachineStateColumnLimits.HardwareModel),
+        ("MachineStateSummary", "OsName", MachineStateColumnLimits.OsName),
+        ("MachineStateSummary", "OsVersion", MachineStateColumnLimits.OsVersion),
+        ("MachineStateDetail", "HardwareVendor", MachineStateColumnLimits.HardwareVendor),
+        ("MachineStateDetail", "HardwareSerial", MachineStateColumnLimits.HardwareSerial),
+        ("MachineStateDetail", "CpuBrand", MachineStateColumnLimits.CpuBrand),
+        ("MachineStateDetail", "BiosVersion", MachineStateColumnLimits.BiosVersion),
+        ("MachineStateDetail", "Kernel", MachineStateColumnLimits.Kernel),
+        ("MachineStateDetail", "CpuType", MachineStateColumnLimits.CpuType),
+        ("MachineStateDetail", "AgentVersion", MachineStateColumnLimits.AgentVersion),
+    ];
+
+    /// <summary>
+    /// Bounded columns the projection does not write. MachineStateSummary.Name is written at
+    /// registration and by a rename, not by telemetry, and a rename is refused above 250 characters.
+    /// </summary>
+    private static readonly (string Table, string Column)[] ExemptColumns =
+    [
+        ("MachineStateSummary", "Name"),
+    ];
 
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
@@ -260,6 +286,66 @@ public sealed class BoundedSummaryStringsLiveTests
     }
 
     [Test]
+    public async Task NulCharacters_NeverReachPostgres_AndTheProjectionAdvances()
+    {
+        // Postgres refuses a NUL in any text value (22021), and the projection retries a failing
+        // batch for ever, so one report carrying a NUL would freeze the shard as surely as an
+        // over-long one. Every bounded string carries one here, because a single survivor fails the
+        // whole batch. The hostname is long enough that cutting before stripping would leave half of it.
+        await using DatabaseContext db = CreateContext();
+        long machineId = await SeedMachineAsync(db);
+
+        long systemInfoId = await InsertTelemetryAsync(db, machineId, TelemetryTypeIds.SystemInfo, new
+        {
+            hostname = string.Concat(Enumerable.Repeat("h\0", 300)),
+            hardware_model = "Raspberry\0 Pi 4 Model B\0 Rev 1.4\0",
+            hardware_vendor = "Raspberry\0 Pi",
+            hardware_serial = "10000000\0a1b2c3d4",
+            cpu_brand = "Cortex\0-A72",
+            bios_version = "2024.\u00001",
+        });
+        long osVersionId = await InsertTelemetryAsync(db, machineId, TelemetryTypeIds.OsVersion, new
+        {
+            name = "Debian\0 GNU/Linux",
+            version = "12\0",
+            build = "6.1.0\0-rpi",
+        });
+        long cpuInfoId = await InsertTelemetryAsync(db, machineId, TelemetryTypeIds.CpuInfo, new
+        {
+            processor_type = "ARMv8\0",
+            number_of_cores = "4",
+            logical_processors = 4,
+        });
+        long agentVersionId = await InsertTelemetryAsync(db, machineId, TelemetryTypeIds.AgentVersion, new
+        {
+            version = "3.4.0\0",
+        });
+
+        Exception? failure = await ProjectPendingBatchAsync();
+
+        await Assert.That(failure).IsNull().Because($"the projection failed: {failure}");
+
+        MachineStateSummary summary = await db.GetTable<MachineStateSummary>().FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.Hostname).IsEqualTo(new string('h', 255));
+        await Assert.That(summary.HardwareModel).IsEqualTo("Raspberry Pi 4 Model B Rev 1.4");
+        await Assert.That(summary.OsName).IsEqualTo("Debian GNU/Linux");
+        await Assert.That(summary.OsVersion).IsEqualTo("12");
+
+        MachineStateDetail detail = await db.GetTable<MachineStateDetail>().FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.HardwareVendor).IsEqualTo("Raspberry Pi");
+        await Assert.That(detail.HardwareSerial).IsEqualTo("10000000a1b2c3d4");
+        await Assert.That(detail.CpuBrand).IsEqualTo("Cortex-A72");
+        await Assert.That(detail.BiosVersion).IsEqualTo("2024.1");
+        await Assert.That(detail.Kernel).IsEqualTo("6.1.0-rpi");
+        await Assert.That(detail.CpuType).IsEqualTo("ARMv8");
+        await Assert.That(detail.AgentVersion).IsEqualTo("3.4.0");
+
+        IMachineStateRepository repository = new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
+        long? cursor = await repository.GetProjectionCursorAsync(0);
+        await Assert.That(cursor).IsEqualTo(new[] { systemInfoId, osVersionId, cpuInfoId, agentVersionId }.Max());
+    }
+
+    [Test]
     public async Task SurrogatePairAtTheCut_IsDroppedWhole_AndTheProjectionAdvances()
     {
         // Postgres counts characters, so a pair that straddles the cut must go whole: half of it
@@ -286,22 +372,7 @@ public sealed class BoundedSummaryStringsLiveTests
         // SQLite ignores lengths, so only the live schema can say whether a limit has drifted: a
         // limit above its column lets a long value fail the write again, and one below it cuts text
         // the column would have held.
-        (string Table, string Column, int Limit)[] bounded =
-        [
-            ("MachineStateSummary", "Hostname", MachineStateColumnLimits.Hostname),
-            ("MachineStateSummary", "HardwareModel", MachineStateColumnLimits.HardwareModel),
-            ("MachineStateSummary", "OsName", MachineStateColumnLimits.OsName),
-            ("MachineStateSummary", "OsVersion", MachineStateColumnLimits.OsVersion),
-            ("MachineStateDetail", "HardwareVendor", MachineStateColumnLimits.HardwareVendor),
-            ("MachineStateDetail", "HardwareSerial", MachineStateColumnLimits.HardwareSerial),
-            ("MachineStateDetail", "CpuBrand", MachineStateColumnLimits.CpuBrand),
-            ("MachineStateDetail", "BiosVersion", MachineStateColumnLimits.BiosVersion),
-            ("MachineStateDetail", "Kernel", MachineStateColumnLimits.Kernel),
-            ("MachineStateDetail", "CpuType", MachineStateColumnLimits.CpuType),
-            ("MachineStateDetail", "AgentVersion", MachineStateColumnLimits.AgentVersion),
-        ];
-
-        foreach ((string table, string column, int limit) in bounded)
+        foreach ((string table, string column, int limit) in ClampedColumns)
         {
             await using NpgsqlCommand command = _fixture.DataSource.CreateCommand(
                 "SELECT character_maximum_length FROM information_schema.columns WHERE table_name = @table AND column_name = @column");
@@ -312,5 +383,38 @@ public sealed class BoundedSummaryStringsLiveTests
 
             await Assert.That(length).IsEqualTo(limit).Because($"{table}.{column} is varchar({length}) but the projection cuts to {limit}");
         }
+    }
+
+    [Test]
+    public async Task EveryBoundedColumn_IsEitherCutByTheProjectionOrExplicitlyExempt()
+    {
+        // The test above checks the columns the projection knows about. This one asks the schema for
+        // every length-bounded column of the two tables it writes, so a column added later fails
+        // here until it is given a limit or is exempted on purpose.
+        List<string> bounded = [];
+
+        await using NpgsqlCommand command = _fixture.DataSource.CreateCommand(
+            """
+            SELECT table_name || '.' || column_name
+            FROM information_schema.columns
+            WHERE table_name IN ('MachineStateSummary', 'MachineStateDetail')
+              AND character_maximum_length IS NOT NULL
+            """);
+
+        await using (NpgsqlDataReader reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                bounded.Add(reader.GetString(0));
+            }
+        }
+
+        string[] covered = ClampedColumns
+            .Select(c => $"{c.Table}.{c.Column}")
+            .Concat(ExemptColumns.Select(c => $"{c.Table}.{c.Column}"))
+            .ToArray();
+
+        await Assert.That(bounded.Order().ToArray()).IsEquivalentTo(covered.Order().ToArray())
+            .Because("a bounded column the projection does not cut, and nothing exempts, can stall it again");
     }
 }

@@ -466,15 +466,19 @@ internal static class TelemetryPayloadParser
         new AgentVersionFragment(AgentVersion: ReadString(root, "version", MachineStateColumnLimits.AgentVersion));
 
     /// <summary>
-    /// Reads a string that is stored in a bounded column, cut to the column's length so a value that
-    /// is too long can never fail the write and stall the projection.
+    /// Reads a string that is stored in a bounded column, so that nothing an agent reports can fail
+    /// the write and stall the projection: NUL characters, which Postgres refuses in any text value,
+    /// are removed, and then the value is cut to the column's length. The NULs go first so they do
+    /// not use up room that the remaining text could have had.
     /// </summary>
     /// <param name="root">The payload root element.</param>
     /// <param name="name">The JSON property name to read.</param>
     /// <param name="maxLength">The length of the column the value is stored in.</param>
-    /// <returns>The reported text cut to <paramref name="maxLength"/>, or null when it is absent.</returns>
+    /// <returns>The reported text without NULs, cut to <paramref name="maxLength"/>, or null when it is absent.</returns>
     private static string? ReadString(JsonElement root, string name, int maxLength) =>
-        root.TryGetProperty(name, out JsonElement e) ? MachineStateColumnLimits.Clamp(e.GetString(), maxLength) : null;
+        root.TryGetProperty(name, out JsonElement e)
+            ? MachineStateColumnLimits.Clamp(e.GetString()?.Replace("\0", string.Empty), maxLength)
+            : null;
 
     private static int? ReadInt(JsonElement root, string name) =>
         root.TryGetProperty(name, out JsonElement e) ? e.GetInt32() : null;
