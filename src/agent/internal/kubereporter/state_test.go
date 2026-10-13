@@ -362,8 +362,8 @@ func TestLocalRecordPresent_ExportedCheckFollowsTheFilesOfAHostWithoutAMachineID
 		t.Fatal(err)
 	}
 
-	if LocalRecordPresent(dir) == false {
-		t.Error("the exported check ignored the pending file")
+	if LocalRecordPresent(dir) {
+		t.Error("the exported check counted a pending file, which is not a record of having enrolled")
 	}
 }
 
@@ -489,8 +489,11 @@ func TestPending_WithoutMachineID_StillNamesTheInstance(t *testing.T) {
 	}
 }
 
-// Intent: A pending file is a record just as a state file is, and only a regular file is.
-func TestLocalRecordPresent_CountsThePendingFile(t *testing.T) {
+// Intent: Only the state file is a record of having enrolled. A pending file is left by an enrol that created its
+// token Secret and never finished, so the host reports itself not enrolled and the server never sends it a cleanup
+// command; counting it would only keep a host with remote commands off polling for commands that cannot come. It
+// still names the Secret that unenrol and uninstall look for, which does not go through this check.
+func TestLocalRecordPresent_IgnoresThePendingFile(t *testing.T) {
 	dir := t.TempDir()
 
 	if localRecordPresent(dir, hostMachineIDValue) {
@@ -501,26 +504,52 @@ func TestLocalRecordPresent_CountsThePendingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if localRecordPresent(dir, hostMachineIDValue) == false {
-		t.Error("a pending file did not count as a local record")
+	if localRecordPresent(dir, hostMachineIDValue) {
+		t.Error("a pending file counted as a local record")
 	}
 
-	if err := deletePending(dir); err != nil {
+	if copiedRecordPresent(dir, hostMachineIDValue) {
+		t.Error("a pending file of this host counted as a copied record")
+	}
+
+	if err := savePending(dir, "0123456789abcdef", otherHostMachineID); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := os.Mkdir(filepath.Join(dir, PendingFileName), 0o700); err != nil {
+	if localRecordPresent(dir, hostMachineIDValue) || copiedRecordPresent(dir, hostMachineIDValue) {
+		t.Error("a pending file written on another host counted as a record")
+	}
+}
+
+// Intent: The state file counts whether or not a pending file sits beside it, and a pending file left behind when
+// the state file goes does not take its place.
+func TestLocalRecordPresent_PendingFileBesideTheStateFileChangesNothing(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := SaveState(dir, sampleState()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := savePending(dir, "0123456789abcdef", hostMachineIDValue); err != nil {
+		t.Fatal(err)
+	}
+
+	if localRecordPresent(dir, hostMachineIDValue) == false {
+		t.Error("the state file stopped counting because a pending file sat beside it")
+	}
+
+	if err := DeleteState(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	if localRecordPresent(dir, hostMachineIDValue) {
-		t.Error("a directory named like the pending file counted as a local record")
+		t.Error("the pending file took the place of the deleted state file")
 	}
 }
 
-// Intent: A record written on another host is that host's, not this one's, whichever file holds it and however
-// damaged it is. It is what makes a flag-off clone stop polling for cleanup commands it could never act on. A
-// record that cannot tell whose it is, or a host that cannot, still counts.
+// Intent: A state file written on another host is that host's, not this one's, however damaged it is. It is what
+// makes a flag-off clone stop polling for cleanup commands it could never act on. A record that cannot tell whose
+// it is, or a host that cannot, still counts.
 func TestLocalRecordPresent_SkipsRecordsCopiedFromAnotherHost(t *testing.T) {
 	write := func(t *testing.T, name string, content string) string {
 		t.Helper()
@@ -544,7 +573,7 @@ func TestLocalRecordPresent_SkipsRecordsCopiedFromAnotherHost(t *testing.T) {
 		{"state of this host", StateFileName, `{"host_machine_id":"` + hostMachineIDValue + `"}`, hostMachineIDValue, true},
 		{"state of another host", StateFileName, `{"host_machine_id":"` + otherHostMachineID + `"}`, hostMachineIDValue, false},
 		{"pending of another host", PendingFileName, `{"instance_id":"0123456789abcdef","host_machine_id":"` + otherHostMachineID + `"}`, hostMachineIDValue, false},
-		{"pending of this host", PendingFileName, `{"instance_id":"0123456789abcdef","host_machine_id":"` + hostMachineIDValue + `"}`, hostMachineIDValue, true},
+		{"pending of this host", PendingFileName, `{"instance_id":"0123456789abcdef","host_machine_id":"` + hostMachineIDValue + `"}`, hostMachineIDValue, false},
 		{"state with no machine id recorded", StateFileName, `{"host_machine_id":""}`, hostMachineIDValue, true},
 		{"state of another host, this host has no id", StateFileName, `{"host_machine_id":"` + otherHostMachineID + `"}`, "", true},
 		{"state that is not json", StateFileName, "not json", hostMachineIDValue, true},
@@ -559,15 +588,15 @@ func TestLocalRecordPresent_SkipsRecordsCopiedFromAnotherHost(t *testing.T) {
 		})
 	}
 
-	t.Run("a copied state file does not hide this host's own pending file", func(t *testing.T) {
+	t.Run("a copied state file is not made the host's own by a pending file of its own", func(t *testing.T) {
 		dir := write(t, StateFileName, `{"host_machine_id":"`+otherHostMachineID+`"}`)
 
 		if err := savePending(dir, "0123456789abcdef", hostMachineIDValue); err != nil {
 			t.Fatal(err)
 		}
 
-		if localRecordPresent(dir, hostMachineIDValue) == false {
-			t.Error("the host's own pending file was not counted because the state file was copied")
+		if localRecordPresent(dir, hostMachineIDValue) {
+			t.Error("the host's own pending file made a copied state file count as the host's own record")
 		}
 	})
 }
@@ -634,9 +663,9 @@ func TestPending_Save_SweepsStaleTemporaryFiles(t *testing.T) {
 	}
 }
 
-// Intent: A record written on another host is told apart from the host's own, whichever file holds it, so the
-// agent can unenrol a clone without taking it for an enrolled host. A host that holds both kinds has its own, and
-// a record that cannot be compared is the host's own.
+// Intent: A state file written on another host is told apart from the host's own, so the agent can unenrol a clone
+// without taking it for an enrolled host. The pending file is never a record whichever host wrote it, and a state
+// file that cannot be compared is the host's own.
 func TestRecordsPresent_SeparatesOwnFromCopiedRecords(t *testing.T) {
 	state := func(host string) string { return `{"host_machine_id":"` + host + `"}` }
 	pending := func(host string) string {
@@ -652,8 +681,11 @@ func TestRecordsPresent_SeparatesOwnFromCopiedRecords(t *testing.T) {
 		{"nothing", "", "", hostMachineIDValue, false, false},
 		{"own state", state(hostMachineIDValue), "", hostMachineIDValue, true, false},
 		{"copied state", state(otherHostMachineID), "", hostMachineIDValue, false, true},
-		{"copied pending", "", pending(otherHostMachineID), hostMachineIDValue, false, true},
-		{"copied state, own pending", state(otherHostMachineID), pending(hostMachineIDValue), hostMachineIDValue, true, true},
+		{"own pending only", "", pending(hostMachineIDValue), hostMachineIDValue, false, false},
+		{"copied pending only", "", pending(otherHostMachineID), hostMachineIDValue, false, false},
+		{"own state, own pending", state(hostMachineIDValue), pending(hostMachineIDValue), hostMachineIDValue, true, false},
+		{"copied state, own pending", state(otherHostMachineID), pending(hostMachineIDValue), hostMachineIDValue, false, true},
+		{"own state, copied pending", state(hostMachineIDValue), pending(otherHostMachineID), hostMachineIDValue, true, false},
 		{"damaged copied state", `{"instance_id":"0123456789abcdef","host_machine_id":"` + otherHostMachineID + `"}`, "", hostMachineIDValue, false, true},
 		{"state that says nothing about its host", `not json`, "", hostMachineIDValue, true, false},
 		{"another host's id, this host has none", state(otherHostMachineID), "", "", true, false},

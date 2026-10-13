@@ -95,19 +95,23 @@ func copiedFromAnotherHost(recorded string, host string) bool {
 	return (recorded != "") && (host != "") && (recorded != host)
 }
 
-// LocalRecordPresent reports whether this host holds a local record of having enrolled as a reporter candidate.
-// It is how the agent tells a host that still has cluster objects of its own to clean up from one that does not:
-// with remote commands off, only a host that holds a record polls for and accepts the cleanup commands, because
-// every such host had remote commands on when it enrolled. The state file counts, and so does the pending file an
-// enrol leaves when it created a token Secret and never wrote the state file. A record that cannot be loaded still
-// counts, since the host enrolled once and the cluster may hold what it created, but one written on another host
-// does not: that host enrolled, not this one. See CopiedRecordPresent for those.
+// LocalRecordPresent reports whether this host holds a local record of having enrolled as a reporter candidate:
+// the reporter state file, written on this host. It is how the agent tells a host that still has cluster objects of
+// its own to clean up from one that does not: with remote commands off, only a host that holds a record polls for
+// and accepts the cleanup commands, because every such host had remote commands on when it enrolled. A state file
+// that cannot be loaded still counts, since the host enrolled once and the cluster may hold what it created, but
+// one written on another host does not: that host enrolled, not this one. See CopiedRecordPresent for those.
+//
+// The pending file an enrol leaves when it created a token Secret and never wrote the state file is deliberately
+// not a record. Such a host reports itself not enrolled, so the server never sends it a cleanup command and
+// polling for one would only repeat a call that cannot return it. Enrolling again, which needs remote commands on,
+// or removing the file by hand ends that state.
 func LocalRecordPresent(dataDir string) bool {
 	return localRecordPresent(dataDir, hostMachineID("/"))
 }
 
-// CopiedRecordPresent reports whether this host holds a record that was written on another host, which is what a
-// disk image copied from an enrolled host carries. Such a record gives the host nothing in the cluster to clean
+// CopiedRecordPresent reports whether this host holds a state file that was written on another host, which is what
+// a disk image copied from an enrolled host carries. Such a record gives the host nothing in the cluster to clean
 // up, since the Secret it names is that host's, but unenrolling removes the file and ends the error the host
 // reports, and that touches nothing but local files. So with remote commands off a host that holds one polls for
 // and accepts the unenrol command, and still refuses uninstall, which needs a record of the host's own.
@@ -129,26 +133,20 @@ func copiedRecordPresent(dataDir string, host string) bool {
 	return copied
 }
 
-// recordsPresent is the one place that decides what a record is. It reports whether the state file or the pending
-// file is there and was written by a host with this machine id (or by one whose id cannot be compared), and whether
-// either is there and was written on another host. A record that cannot be loaded is judged by whatever its
-// host_machine_id says, and counts as the host's own when it says nothing.
+// recordsPresent is the one place that decides what a record is. It reports whether the state file is there and was
+// written by a host with this machine id (or by one whose id cannot be compared), and whether it is there and was
+// written on another host. A state file that cannot be loaded is judged by whatever its host_machine_id says, and
+// counts as the host's own when it says nothing.
 func recordsPresent(dataDir string, host string) (bool, bool) {
-	own, copied := false, false
-
-	for _, path := range []string{statePath(dataDir), pendingPath(dataDir)} {
-		if regularFileExists(path) == false {
-			continue
-		}
-
-		if copiedFromAnotherHost(recordedHostMachineID(path), host) {
-			copied = true
-		} else {
-			own = true
-		}
+	if stateFileExists(dataDir) == false {
+		return false, false
 	}
 
-	return own, copied
+	if copiedFromAnotherHost(recordedHostMachineID(statePath(dataDir)), host) {
+		return false, true
+	}
+
+	return true, false
 }
 
 // stateFileExists reports whether the state file is there, usable or not. Only a regular file counts, and any

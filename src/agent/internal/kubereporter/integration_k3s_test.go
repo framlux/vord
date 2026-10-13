@@ -598,8 +598,8 @@ func (s *scenario) interruptedEnrol(t *testing.T) {
 		t.Errorf("the interrupted enrol left a state file (found=%v, err=%v)", found, err)
 	}
 
-	if kubereporter.LocalRecordPresent(c.dataDir) == false {
-		t.Error("a host whose enrol was interrupted holds no local record")
+	if kubereporter.LocalRecordPresent(c.dataDir) {
+		t.Error("a host whose enrol was interrupted holds only a pending file, which is not a local record")
 	}
 
 	secret := secretsPath + "/" + tokenSecretPrefix + pending.InstanceID

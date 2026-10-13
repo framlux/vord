@@ -350,39 +350,53 @@ func (h *admissionHost) writePending() string {
 	return path
 }
 
-// Intent: A host whose enrol was cut off after it created its token Secret holds no state file but does hold a
-// record of the Secret. With remote commands off it still polls and admits the two cleanup commands and nothing
-// else, and it stops when the pending file goes, as it does at the end of a cleanup.
-func TestCommandAdmission_RemoteCommandsOff_WithOnlyAPendingFile_AdmitsCleanupOnly(t *testing.T) {
+// Intent: A host whose enrol was cut off after it created its token Secret holds a pending file and no state
+// file. It reports itself not enrolled, so the server sends it neither cleanup command, and with remote commands
+// off it must not poll for commands it will never be sent, nor admit one that reaches it. Enrolling again (which
+// needs remote commands on) or removing the file by hand is the way out, so a pending file alone opens nothing.
+func TestCommandAdmission_RemoteCommandsOff_WithOnlyAPendingFile_PollsAndAdmitsNothing(t *testing.T) {
 	h := newAdmissionHost(t, false)
-	pending := h.writePending()
+	h.writePending()
 
-	if h.shouldPoll() == false {
-		t.Fatal("a host with remote commands off and a pending file did not poll")
+	if h.shouldPoll() {
+		t.Error("a host with remote commands off and only a pending file polled")
 	}
 
-	want := map[commands.CommandType]string{
-		commands.CommandK8sReporterUnenrol:   messageAdmitted,
-		commands.CommandK8sReporterUninstall: messageAdmitted,
-		commands.CommandK8sReporterEnrol:     messageRefused,
-		commands.CommandReboot:               messageRefused,
-	}
-	for commandType, message := range want {
-		if got := h.answerTo(commandType); got != message {
-			t.Errorf("%s answered %q, want %q", commandType, got, message)
+	for _, commandType := range []commands.CommandType{commands.CommandK8sReporterUnenrol, commands.CommandK8sReporterUninstall, commands.CommandK8sReporterEnrol, commands.CommandReboot} {
+		if got := h.answerTo(commandType); got != messageRefused {
+			t.Errorf("%s answered %q, want it refused (%q)", commandType, got, messageRefused)
 		}
 	}
+}
 
-	if err := os.Remove(pending); err != nil {
+// Intent: The state file alone decides, so a pending file beside it changes nothing: the host admits the cleanup
+// commands while the state file is there, and once the state file is gone the leftover pending file does not keep
+// the poll or the admission open.
+func TestCommandAdmission_RemoteCommandsOff_APendingFileBesideAStateFileIsNotWhatKeepsItOpen(t *testing.T) {
+	h := newAdmissionHost(t, false)
+	h.enrolLocally()
+	h.writePending()
+
+	if h.shouldPoll() == false {
+		t.Fatal("a host with remote commands off and a state file did not poll")
+	}
+
+	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageAdmitted {
+		t.Errorf("uninstall answered %q with a state file, want it admitted (%q)", got, messageAdmitted)
+	}
+
+	if err := kubereporter.DeleteState(h.dataDir); err != nil {
 		t.Fatal(err)
 	}
 
 	if h.shouldPoll() {
-		t.Error("the host kept polling after its pending file was removed")
+		t.Error("the host kept polling on a pending file after its state file was removed")
 	}
 
-	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageRefused {
-		t.Errorf("uninstall answered %q after the pending file was removed, want it refused", got)
+	for _, commandType := range []commands.CommandType{commands.CommandK8sReporterUnenrol, commands.CommandK8sReporterUninstall} {
+		if got := h.answerTo(commandType); got != messageRefused {
+			t.Errorf("%s answered %q after the state file was removed, want it refused (%q)", commandType, got, messageRefused)
+		}
 	}
 }
 
