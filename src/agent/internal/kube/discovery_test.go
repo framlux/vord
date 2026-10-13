@@ -133,7 +133,7 @@ func TestDiscoverNamespaced_ReturnsOnlyNamespacedListableDeletableResources(t *t
 	api.documents["/apis/example.com/v1"] = discoveryDocument("example.com/v1",
 		namespacedResource("widgets", "Widget"),
 		listedResource{name: "readonlies", kind: "Readonly", namespaced: true, verbs: []string{"get", "list", "watch"}},
-		listedResource{name: "undeletables", kind: "Undeletable", namespaced: true, verbs: []string{"get", "delete"}},
+		listedResource{name: "undeletables", kind: "Undeletable", namespaced: true, verbs: []string{"get", "list"}},
 	)
 
 	discovery, err := client.DiscoverNamespaced(context.Background())
@@ -167,6 +167,40 @@ func TestDiscoverNamespaced_ReturnsOnlyNamespacedListableDeletableResources(t *t
 		if want, listed := paths[resource.Name]; listed && (resource.Collection("vord-system") != want) {
 			t.Errorf("%s collection = %q, want %q", resource.Name, resource.Collection("vord-system"), want)
 		}
+	}
+}
+
+// Intent: a namespaced kind that can be deleted but not listed is one that deleting its namespace destroys and
+// that nobody can look at, so it is reported as unverified and never dropped. A cluster-scoped kind and a
+// subresource with the same verbs are not part of a namespace and stay out.
+func TestDiscoverNamespaced_KindThatCanBeDeletedButNotListedIsUnverified(t *testing.T) {
+	api, client := newDiscoveryServer(t)
+
+	api.documents["/api/v1"] = discoveryDocument("v1")
+	api.documents["/apis"] = map[string]any{"kind": "APIGroupList", "groups": []any{groupEntry("example.com", "v1")}}
+	api.documents["/apis/example.com/v1"] = discoveryDocument("example.com/v1",
+		namespacedResource("widgets", "Widget"),
+		listedResource{name: "opaques", kind: "Opaque", namespaced: true, verbs: []string{"get", "delete"}},
+		listedResource{name: "opaques/status", kind: "Opaque", namespaced: true, verbs: []string{"delete"}},
+		listedResource{name: "clusterthings", kind: "ClusterThing", namespaced: false, verbs: []string{"delete"}},
+	)
+
+	discovery, err := client.DiscoverNamespaced(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverNamespaced: %v", err)
+	}
+
+	if got, want := resourceNames(discovery.Resources), []string{"example.com|v1|widgets|Widget"}; reflect.DeepEqual(got, want) == false {
+		t.Errorf("resources = %v, want %v", got, want)
+	}
+
+	if len(discovery.Unverified) != 1 {
+		t.Fatalf("unverified = %v, want the one kind", discovery.Unverified)
+	}
+
+	unverified := discovery.Unverified[0]
+	if (unverified.GroupVersion != "example.com/v1") || (strings.Contains(unverified.Err.Error(), "opaques") == false) {
+		t.Errorf("unverified = %q: %v, want example.com/v1 naming opaques", unverified.GroupVersion, unverified.Err)
 	}
 }
 

@@ -234,10 +234,15 @@ func TestUninstall_UnlabelledCustomResource_KeepsNamespace(t *testing.T) {
 
 	widget := h.seedWidget("theirs", false)
 	before := len(h.api.requestLog())
+	logs := captureLogs(t)
 
 	result := h.reporter.Uninstall(context.Background())
 
 	requireOnlyTheNamespaceKept(t, h, result)
+
+	if (strings.Contains(logs.String(), "holds objects that are not the agent's") == false) || strings.Contains(logs.String(), "Widget.example.com theirs") == false {
+		t.Errorf("the log does not name the foreign object:\n%s", logs.String())
+	}
 
 	if h.api.has(widget) == false {
 		t.Error("an unlabelled custom object was destroyed")
@@ -271,9 +276,9 @@ func TestUninstall_LabelledCustomResource_AllowsNamespaceDeletion(t *testing.T) 
 	}
 }
 
-// Intent: Kinds the fixed list of sixteen never named hold other people's objects too. Each of them keeps the
-// namespace, which is what finding them through discovery is for.
-func TestUninstall_KindsOutsideTheOldFixedList_KeepNamespace(t *testing.T) {
+// Intent: The namespace is kept for an object of any kind the cluster serves, not only the common workload
+// kinds. Each of these keeps it, which is what finding the kinds through discovery is for.
+func TestUninstall_ObjectOfAnyServedKind_KeepsNamespace(t *testing.T) {
 	for _, tc := range []struct{ name, path string }{
 		{"resource quota", "/api/v1/namespaces/vord-system/resourcequotas/theirs"},
 		{"limit range", "/api/v1/namespaces/vord-system/limitranges/theirs"},
@@ -297,6 +302,71 @@ func TestUninstall_KindsOutsideTheOldFixedList_KeepNamespace(t *testing.T) {
 				t.Error("the object was destroyed")
 			}
 		})
+	}
+}
+
+// Intent: Only the cluster's own event records are skipped. A custom kind whose plural is also "events" lives in
+// another group, holds content like any other kind, and keeps the namespace.
+func TestUninstall_EventsKindOfAnotherGroup_IsChecked(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.addResource(namespacedKind("example.com", "v1", "events", "Event"))
+
+	path := "/apis/example.com/v1/namespaces/vord-system/events/theirs"
+	h.api.seed(path, map[string]any{"metadata": map[string]any{"name": "theirs"}})
+
+	requireOnlyTheNamespaceKept(t, h, h.reporter.Uninstall(context.Background()))
+
+	if h.api.has(path) == false {
+		t.Error("the object was destroyed")
+	}
+}
+
+// Intent: A kind that can be deleted but not listed would be destroyed with the namespace and cannot be looked
+// at, so it keeps the namespace as an unverified kind, and the reason names it.
+func TestUninstall_KindThatCanBeDeletedButNotListed_KeepsNamespace(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.addResource(apiResource{group: "example.com", version: "v1", name: "opaques", kind: "Opaque", namespaced: true, verbs: []string{"get", "delete"}})
+
+	logs := captureLogs(t)
+
+	requireOnlyTheNamespaceKept(t, h, h.reporter.Uninstall(context.Background()))
+
+	if (strings.Contains(logs.String(), "opaques") == false) || (strings.Contains(logs.String(), "could not be verified") == false) {
+		t.Errorf("the log does not say the kind could not be verified:\n%s", logs.String())
+	}
+}
+
+// Intent: A namespace that is kept anyway, because an object the agent left in place lives in it, is not looked
+// through, so an API that cannot describe itself does not turn that into a failed command.
+func TestUninstall_NamespaceAlreadyKept_NeedsNoDiscovery(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	h.api.seed(leasePath, map[string]any{"metadata": map[string]any{"name": "theirs"}})
+	h.api.inject(fault{method: http.MethodGet, path: "/apis", status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	result := h.reporter.Uninstall(context.Background())
+
+	requireSuccess(t, result)
+
+	if result.Message != messageUninstalledKeptUnmanaged {
+		t.Errorf("message = %q, want %q", result.Message, messageUninstalledKeptUnmanaged)
+	}
+
+	if (h.api.has(namespacePath) == false) || (h.api.has(leasePath) == false) {
+		t.Error("the namespace or the unlabelled Lease was destroyed")
+	}
+
+	if h.hasState() {
+		t.Error("the state file was not deleted")
+	}
+
+	if h.api.requestCount(http.MethodGet, "/apis") != 0 {
+		t.Error("uninstall asked what the API serves although the namespace was kept regardless")
 	}
 }
 
@@ -392,7 +462,7 @@ func TestUninstall_UnavailableGroup_KeepsNamespaceAndSucceeds(t *testing.T) {
 
 	requireOnlyTheNamespaceKept(t, h, h.reporter.Uninstall(context.Background()))
 
-	if reason := logs.String(); (strings.Contains(reason, "example.com/v1") == false) || (strings.Contains(reason, "503") == false) {
+	if reason := logs.String(); (strings.Contains(reason, "could not be verified") == false) || (strings.Contains(reason, "example.com/v1") == false) || (strings.Contains(reason, "503") == false) {
 		t.Errorf("the log does not name the unverified group and its error:\n%s", reason)
 	}
 }

@@ -19,9 +19,14 @@ import (
 // which would otherwise make every cluster look unverifiable at that moment.
 var skippedDiscoveryGroups = []string{"metrics.k8s.io", "custom.metrics.k8s.io", "external.metrics.k8s.io"}
 
-// discoveryNamePattern is what the group, version and resource names that discovery returns look like. They are
-// put into request paths, so one that is not shaped like a name is not trusted.
-var discoveryNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+// namePattern is what a group, version, resource or object name looks like.
+var namePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+
+// IsValidName reports whether name is shaped like a Kubernetes name. A name the cluster returns is put into a
+// request path, so one that is not shaped like a name is not trusted.
+func IsValidName(name string) bool {
+	return namePattern.MatchString(name)
+}
 
 // Resource is one namespaced kind the API serves and that can be listed and deleted.
 type Resource struct {
@@ -94,15 +99,16 @@ type resourceList struct {
 	} `json:"resources"`
 }
 
+// groupVersionEntry is how a group document names one version.
+type groupVersionEntry struct {
+	Version string `json:"version"`
+}
+
 type groupList struct {
 	Groups []struct {
-		Name     string `json:"name"`
-		Versions []struct {
-			Version string `json:"version"`
-		} `json:"versions"`
-		PreferredVersion struct {
-			Version string `json:"version"`
-		} `json:"preferredVersion"`
+		Name             string              `json:"name"`
+		Versions         []groupVersionEntry `json:"versions"`
+		PreferredVersion groupVersionEntry   `json:"preferredVersion"`
 	} `json:"groups"`
 }
 
@@ -134,7 +140,7 @@ func (c *Client) DiscoverNamespaced(ctx context.Context) (Discovery, error) {
 			continue
 		}
 
-		if discoveryNamePattern.MatchString(group.Name) == false {
+		if IsValidName(group.Name) == false {
 			result.Unverified = append(result.Unverified, UnverifiedGroup{GroupVersion: sanitizeText(group.Name), Err: errors.New("its name is not a valid group name")})
 
 			continue
@@ -145,7 +151,7 @@ func (c *Client) DiscoverNamespaced(ctx context.Context) (Discovery, error) {
 		for _, version := range orderedVersions(group.PreferredVersion.Version, group.Versions) {
 			groupVersion := group.Name + "/" + version
 
-			if discoveryNamePattern.MatchString(version) == false {
+			if IsValidName(version) == false {
 				result.Unverified = append(result.Unverified, UnverifiedGroup{GroupVersion: sanitizeText(groupVersion), Err: errors.New("its version is not a valid version name")})
 
 				continue
@@ -179,9 +185,7 @@ func (c *Client) DiscoverNamespaced(ctx context.Context) (Discovery, error) {
 }
 
 // orderedVersions returns the preferred version followed by the others, each once.
-func orderedVersions(preferred string, versions []struct {
-	Version string `json:"version"`
-}) []string {
+func orderedVersions(preferred string, versions []groupVersionEntry) []string {
 	var ordered []string
 
 	if preferred != "" {
@@ -198,29 +202,32 @@ func orderedVersions(preferred string, versions []struct {
 }
 
 // usableResources returns the resources of one group version that can be listed and deleted in a namespace. A
-// resource that qualifies but has a name that cannot go into a path is returned as unverified instead.
+// namespaced resource that can be deleted but not listed, and one whose name cannot go into a path, are returned
+// as unverified instead: deleting the namespace would destroy their objects, and they cannot be looked at.
 func usableResources(group string, version string, list resourceList) ([]Resource, []UnverifiedGroup) {
 	var resources []Resource
 
 	var unverified []UnverifiedGroup
 
+	groupVersion := version
+	if group != "" {
+		groupVersion = group + "/" + version
+	}
+
 	for _, entry := range list.Resources {
-		if (entry.Namespaced == false) || (slices.Contains(entry.Verbs, "list") == false) || (slices.Contains(entry.Verbs, "delete") == false) {
-			continue
-		}
-
 		// A subresource is named after its parent, with a slash.
-		if strings.Contains(entry.Name, "/") {
+		if (entry.Namespaced == false) || strings.Contains(entry.Name, "/") || (slices.Contains(entry.Verbs, "delete") == false) {
 			continue
 		}
 
-		if discoveryNamePattern.MatchString(entry.Name) == false {
-			groupVersion := version
-			if group != "" {
-				groupVersion = group + "/" + version
-			}
-
+		if IsValidName(entry.Name) == false {
 			unverified = append(unverified, UnverifiedGroup{GroupVersion: groupVersion, Err: errors.New("it serves a resource whose name is not a valid resource name")})
+
+			continue
+		}
+
+		if slices.Contains(entry.Verbs, "list") == false {
+			unverified = append(unverified, UnverifiedGroup{GroupVersion: groupVersion, Err: fmt.Errorf("it serves %s, which can be deleted but not listed", entry.Name)})
 
 			continue
 		}

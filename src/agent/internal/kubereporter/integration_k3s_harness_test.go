@@ -234,6 +234,29 @@ func (k *k3sCluster) deleteObject(t *testing.T, path string) {
 	}
 }
 
+// deleteIfPresent deletes the object at path with the uid precondition when it exists. It is for cleanups, which
+// run whether or not the test got far enough to create the object or already removed it, so nothing it meets ends
+// the test.
+func (k *k3sCluster) deleteIfPresent(t *testing.T, path string) {
+	t.Helper()
+
+	obj, err := k.admin.GetRaw(context.Background(), path)
+	if kube.IsNotFound(err) {
+		return
+	}
+
+	if err != nil {
+		t.Logf("cleanup: GET %s: %v", path, err)
+
+		return
+	}
+
+	err = k.admin.Do(context.Background(), http.MethodDelete, path, nil, deleteOptions(stringAt(obj, "metadata", "uid")), nil)
+	if (err != nil) && (kube.IsNotFound(err) == false) {
+		t.Logf("cleanup: DELETE %s: %v", path, err)
+	}
+}
+
 // leaseView is the part of the reporter Lease the test looks at.
 type leaseView struct {
 	holder      string

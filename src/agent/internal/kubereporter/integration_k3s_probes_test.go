@@ -312,6 +312,10 @@ func (s *scenario) customResourceKeepsNamespace(t *testing.T) {
 		},
 	}
 
+	// Registered before the CRD exists, so a failure at any point afterwards still removes it. The instance goes
+	// first, as cleanups run in reverse.
+	t.Cleanup(func() { s.cluster.deleteIfPresent(t, probeCRDPath) })
+
 	if err := admin.Do(ctx, http.MethodPost, probeCRDsPath, nil, crd, nil); err != nil {
 		t.Fatalf("create the test CRD: %v", err)
 	}
@@ -339,6 +343,8 @@ func (s *scenario) customResourceKeepsNamespace(t *testing.T) {
 	t.Cleanup(func() { host.stop(t) })
 
 	enrolAll(t, host)
+
+	t.Cleanup(func() { s.cluster.deleteIfPresent(t, probeInstancePath) })
 
 	if err := admin.Do(ctx, http.MethodPost, probeInstancesPath, nil, map[string]any{
 		"apiVersion": probeGroup + "/v1", "kind": "VordProbe", "metadata": map[string]any{"name": "theirs"}, "spec": map[string]any{},

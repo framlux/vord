@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -19,9 +18,11 @@ import (
 // listPageSize is how many objects one list request asks for.
 const listPageSize = 200
 
-// objectNamePattern is what a Kubernetes object name looks like. A name the cluster lists is put into a request
-// path, so one that is not shaped like a name is skipped rather than trusted.
-var objectNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$`)
+// What uninstall reports having left of the namespace.
+const (
+	keptNamespace           = "Namespace"
+	keptNamespaceUnverified = "Namespace (its contents could not be verified)"
+)
 
 // Uninstall removes everything the agent installed in the cluster, using the host's admin kubeconfig: every
 // candidate's token Secret (which revokes the tokens of hosts that are paused, deleted or unreachable), then the
@@ -100,8 +101,8 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 		return session.classify(err).result()
 	}
 
-	if namespaceKept {
-		kept = append(kept, "Namespace")
+	if namespaceKept != "" {
+		kept = append(kept, namespaceKept)
 	}
 
 	if err := removeRecords(r.dataDir); err != nil {
@@ -111,7 +112,7 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 	r.stateChanged(ctx)
 
 	if len(kept) > 0 {
-		slog.Info("uninstall left objects that do not carry the Vord label", "objects", strings.Join(kept, ", "))
+		slog.Info("uninstall left objects in place", "objects", strings.Join(kept, ", "))
 
 		return commands.Result{Success: true, Message: messageUninstalledKeptUnmanaged}
 	}
@@ -133,7 +134,7 @@ func listTokenSecrets(ctx context.Context, client *kube.Client) ([]string, error
 		for _, item := range page.Items {
 			name := item.Metadata.Name
 
-			if strings.HasPrefix(name, tokenSecretPrefix) && (item.Metadata.Labels[managedByLabel] == managedByValue) && objectNamePattern.MatchString(name) {
+			if strings.HasPrefix(name, tokenSecretPrefix) && (item.Metadata.Labels[managedByLabel] == managedByValue) && kube.IsValidName(name) {
 				names = append(names, name)
 			}
 		}
@@ -265,40 +266,56 @@ func listForeign(ctx context.Context, client *kube.Client, resource kube.Resourc
 }
 
 // removeNamespace deletes the namespace when it carries the Vord label and holds nothing that is not the
-// agent's, and reports whether it was kept. A namespace the agent did not create is kept, as is one that holds
-// an object without the label, which deleting it would destroy, and one that cannot be shown to hold none because
-// a kind or group could not be read. The objects are logged by kind and name and the unverified kinds with their
-// reason.
-func removeNamespace(ctx context.Context, client *kube.Client, keptInNamespace bool) (bool, error) {
+// agent's, and returns what it left in place, or "" when the namespace is gone. A namespace the agent did not
+// create is kept, as is one that holds an object without the label, which deleting it would destroy, and one that
+// cannot be shown to hold none because a kind or group could not be read. A namespace that is kept anyway because
+// an object the agent left in place lives in it is not inspected. The objects are logged by kind and name and the
+// unverified kinds with their reason.
+func removeNamespace(ctx context.Context, client *kube.Client, keptInNamespace bool) (string, error) {
 	namespace, err := client.GetRaw(ctx, namespacePath)
 	if err != nil {
 		if kube.IsNotFound(err) {
-			return false, nil
+			return "", nil
 		}
 
-		return false, err
+		return "", err
 	}
 
 	if isManaged(namespace) == false {
-		return true, nil
+		return keptNamespace, nil
+	}
+
+	if keptInNamespace {
+		slog.Info("the namespace is kept because an object in it is not the agent's")
+
+		return keptNamespace, nil
 	}
 
 	inventory, err := inspectNamespace(ctx, client)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 
-	if (len(inventory.foreign) > 0) || (len(inventory.unverified) > 0) || keptInNamespace {
-		slog.Info("the namespace is kept because it holds objects that are not the agent's, or could not be checked",
+	switch {
+	case len(inventory.foreign) > 0:
+		slog.Info("the namespace is kept because it holds objects that are not the agent's",
 			"objects", strings.Join(inventory.foreign, ", "), "unverified", strings.Join(inventory.unverified, "; "))
 
-		return true, nil
+		return keptNamespace, nil
+	case len(inventory.unverified) > 0:
+		slog.Info("the namespace is kept because its contents could not be verified", "unverified", strings.Join(inventory.unverified, "; "))
+
+		return keptNamespaceUnverified, nil
 	}
 
 	outcome, err := deleteManaged(ctx, client, namespacePath)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 
-	return outcome == outcomeUnmanaged, nil
+	if outcome == outcomeUnmanaged {
+		return keptNamespace, nil
+	}
+
+	return "", nil
 }
