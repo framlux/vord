@@ -414,7 +414,9 @@ func (s *scenario) customResourceKeepsNamespace(t *testing.T) {
 		return kube.IsNotFound(err)
 	})
 
-	if err := admin.Do(ctx, http.MethodGet, probeDefaultInstance, nil, nil, nil); kube.IsNotFound(err) == false {
-		t.Errorf("the removed CRD still serves its kind: %v", err)
-	}
+	// The API server drops the handler of a removed kind a moment after the CRD object is gone, and until then a
+	// list of the kind still answers with an empty list.
+	eventually(t, stepTimeout, "the removed CRD to stop serving its kind", func() bool {
+		return kube.IsNotFound(admin.Do(ctx, http.MethodGet, probeDefaultInstance, nil, nil, nil))
+	})
 }
