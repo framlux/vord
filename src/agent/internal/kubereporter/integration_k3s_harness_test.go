@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -499,4 +500,37 @@ func (k *k3sCluster) exercisePrecondition(t *testing.T, kind string, collection 
 	}
 
 	gone()
+}
+
+// remainingObjects lists every object in the reporter namespace, across every namespaced kind the API serves
+// that can be listed and deleted, as "resource/name". Events are left out, as uninstall leaves them out: they
+// record what happened and are not content.
+func (k *k3sCluster) remainingObjects(t *testing.T) []string {
+	t.Helper()
+
+	discovery, err := k.admin.DiscoverNamespaced(context.Background())
+	if err != nil {
+		t.Fatalf("discover the namespaced kinds: %v", err)
+	}
+
+	var remaining []string
+
+	for _, resource := range discovery.Resources {
+		if resource.Name == "events" {
+			continue
+		}
+
+		names, err := k.names(resource.Collection(reporterNamespace), false)
+		if err != nil {
+			t.Fatalf("list %s in %s: %v", resource, reporterNamespace, err)
+		}
+
+		for _, name := range names {
+			remaining = append(remaining, resource.String()+"/"+name)
+		}
+	}
+
+	slices.Sort(remaining)
+
+	return remaining
 }

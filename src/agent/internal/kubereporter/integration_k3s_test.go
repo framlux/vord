@@ -112,6 +112,7 @@ func TestK3sIntegration(t *testing.T) {
 	s.phase(t, "delete_preconditions_hold", s.deletePreconditions)
 	s.phase(t, "missing_lease_is_not_found_for_the_reporter", s.missingLease)
 	s.phase(t, "terminating_namespace", s.terminatingNamespace)
+	s.phase(t, "custom_resource_keeps_the_namespace", s.customResourceKeepsNamespace)
 }
 
 // scenario is what the phases share: the cluster, the fake clock and the two candidates.

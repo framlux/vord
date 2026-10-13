@@ -9,14 +9,15 @@ import (
 	"encoding/json"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/framlux/vord/internal/commands"
 	"github.com/framlux/vord/internal/kube"
 )
 
-// secretListPageSize is how many Secrets one list request asks for.
-const secretListPageSize = 200
+// listPageSize is how many objects one list request asks for.
+const listPageSize = 200
 
 // objectNamePattern is what a Kubernetes object name looks like. A name the cluster lists is put into a request
 // path, so one that is not shaped like a name is skipped rather than trusted.
@@ -31,8 +32,11 @@ var objectNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])
 // Each object is deleted by its fixed name after its label has been checked, and the delete names the uid that
 // was checked. An object without the Vord label is left alone. That includes the namespace, when the agent did
 // not create it, and when it still holds an object that is not the agent's: deleting a namespace deletes
-// everything in it, so such a namespace is kept and the command says so. If the API cannot be reached the
-// command fails and keeps the state file and the pending file so that it can be run again.
+// everything in it, so such a namespace is kept and the command says so. The check covers every namespaced kind
+// the API serves, custom resources included, and a kind it cannot read keeps the namespace too, without failing
+// the command: the cost of being wrong is an empty namespace left behind, never someone else's objects destroyed.
+// If the API cannot be reached the command fails and keeps the state file and the pending file so that it can be
+// run again.
 func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -120,7 +124,7 @@ func (r *Reporter) Uninstall(ctx context.Context) commands.Result {
 func listTokenSecrets(ctx context.Context, client *kube.Client) ([]string, error) {
 	var names []string
 
-	err := client.List(ctx, secretsCollection, managedBySelector(), secretListPageSize, func(body []byte) error {
+	err := client.List(ctx, secretsCollection, managedBySelector(), listPageSize, func(body []byte) error {
 		var page objectList
 		if err := json.Unmarshal(body, &page); err != nil {
 			return err
@@ -147,26 +151,6 @@ func listTokenSecrets(ctx context.Context, client *kube.Client) ([]string, error
 	return names, nil
 }
 
-// namespaceContents lists the namespaced collections that deleting the namespace would destroy.
-var namespaceContents = []struct{ kind, path string }{
-	{"ConfigMap", "/api/v1/namespaces/" + reporterNamespace + "/configmaps"},
-	{"Secret", secretsCollection},
-	{"ServiceAccount", serviceAccountsCollection},
-	{"Service", "/api/v1/namespaces/" + reporterNamespace + "/services"},
-	{"PersistentVolumeClaim", "/api/v1/namespaces/" + reporterNamespace + "/persistentvolumeclaims"},
-	{"Pod", "/api/v1/namespaces/" + reporterNamespace + "/pods"},
-	{"Deployment", "/apis/apps/v1/namespaces/" + reporterNamespace + "/deployments"},
-	{"DaemonSet", "/apis/apps/v1/namespaces/" + reporterNamespace + "/daemonsets"},
-	{"StatefulSet", "/apis/apps/v1/namespaces/" + reporterNamespace + "/statefulsets"},
-	{"Job", "/apis/batch/v1/namespaces/" + reporterNamespace + "/jobs"},
-	{"CronJob", "/apis/batch/v1/namespaces/" + reporterNamespace + "/cronjobs"},
-	{"Ingress", "/apis/networking.k8s.io/v1/namespaces/" + reporterNamespace + "/ingresses"},
-	{"NetworkPolicy", "/apis/networking.k8s.io/v1/namespaces/" + reporterNamespace + "/networkpolicies"},
-	{"Lease", leasesCollection},
-	{"Role", rolesCollection},
-	{"RoleBinding", roleBindingsCollection},
-}
-
 // objectList is the part of a list that uninstall reads: names and labels only, so the content of a Secret or
 // ConfigMap is dropped as each page is decoded.
 type objectList struct {
@@ -178,52 +162,113 @@ type objectList struct {
 	} `json:"items"`
 }
 
-// isPlatformObject reports whether the cluster itself puts this object in every namespace, which makes it
-// nobody's to protect.
-func isPlatformObject(kind string, name string) bool {
-	return ((kind == "ConfigMap") && (name == "kube-root-ca.crt")) || ((kind == "ServiceAccount") && (name == "default"))
+// platformObject names an object the cluster itself puts in every namespace, by the API group and kind it is
+// served as.
+type platformObject struct{ group, kind, name string }
+
+// platformObjects are the objects every namespace gets from Kubernetes itself, which makes them nobody's to
+// protect. A freshly created namespace on k3s holds exactly these two and nothing else; a mesh or another platform
+// adds objects of its own, and those are found as foreign, which keeps the namespace.
+var platformObjects = []platformObject{
+	{group: "", kind: "ConfigMap", name: "kube-root-ca.crt"},
+	{group: "", kind: "ServiceAccount", name: "default"},
 }
 
-// foreignObjects lists the objects in the namespace that do not carry the Vord label, apart from the ones the
-// cluster creates itself. A collection the cluster does not serve has none; any other failure to list one is an
-// error, because the namespace cannot then be shown to hold nothing of anyone else's.
-func foreignObjects(ctx context.Context, client *kube.Client) ([]string, error) {
-	var foreign []string
+// isPlatformObject reports whether the cluster itself puts this object in every namespace.
+func isPlatformObject(resource kube.Resource, name string) bool {
+	return slices.Contains(platformObjects, platformObject{group: resource.Group, kind: resource.Kind, name: name})
+}
 
-	for _, collection := range namespaceContents {
-		var found []string
+// isTransientRecord reports whether the resource holds events, which record what happened in the namespace and
+// are not content to protect. The core API and events.k8s.io both serve them.
+func isTransientRecord(resource kube.Resource) bool {
+	return (resource.Name == "events") && ((resource.Group == "") || (resource.Group == "events.k8s.io"))
+}
 
-		err := client.List(ctx, collection.path, nil, secretListPageSize, func(body []byte) error {
-			var page objectList
-			if err := json.Unmarshal(body, &page); err != nil {
-				return err
-			}
+// namespaceInventory is what a look through the namespace found.
+type namespaceInventory struct {
+	// foreign are the objects without the Vord label, apart from the ones the cluster creates itself, each as
+	// its kind and name.
+	foreign []string
 
-			for _, item := range page.Items {
-				if (item.Metadata.Labels[managedByLabel] != managedByValue) && (isPlatformObject(collection.kind, item.Metadata.Name) == false) {
-					found = append(found, collection.kind+" "+item.Metadata.Name)
-				}
-			}
+	// unverified are the kinds and groups that could not be read, each with the reason. The namespace cannot be
+	// shown to be free of anyone else's objects while there is one.
+	unverified []string
+}
 
-			return nil
-		}, func() { found = nil })
+// inspectNamespace lists every namespaced kind the API serves in the reporter namespace and collects what is not
+// the agent's. A kind the cluster does not serve (404) has no objects. Any other failure to list a kind, or to
+// describe a group, is recorded as unverified rather than failing the command, because the namespace is then kept.
+// Discovery failing altogether, and the context ending, are errors, as for any other call to the API.
+func inspectNamespace(ctx context.Context, client *kube.Client) (namespaceInventory, error) {
+	discovery, err := client.DiscoverNamespaced(ctx)
+	if err != nil {
+		return namespaceInventory{}, err
+	}
+
+	var inventory namespaceInventory
+
+	for _, group := range discovery.Unverified {
+		inventory.unverified = append(inventory.unverified, group.GroupVersion+": "+group.Err.Error())
+	}
+
+	for _, resource := range discovery.Resources {
+		if isTransientRecord(resource) {
+			continue
+		}
+
+		found, err := listForeign(ctx, client, resource)
 		if err != nil {
 			if kube.IsNotFound(err) {
 				continue
 			}
 
-			return nil, err
+			if ctx.Err() != nil {
+				return namespaceInventory{}, err
+			}
+
+			inventory.unverified = append(inventory.unverified, resource.String()+": "+err.Error())
+
+			continue
 		}
 
-		foreign = append(foreign, found...)
+		inventory.foreign = append(inventory.foreign, found...)
 	}
 
-	return foreign, nil
+	return inventory, nil
+}
+
+// listForeign lists one kind in the reporter namespace and returns the objects that do not carry the Vord label,
+// apart from the ones the cluster creates itself.
+func listForeign(ctx context.Context, client *kube.Client, resource kube.Resource) ([]string, error) {
+	var found []string
+
+	err := client.List(ctx, resource.Collection(reporterNamespace), nil, listPageSize, func(body []byte) error {
+		var page objectList
+		if err := json.Unmarshal(body, &page); err != nil {
+			return err
+		}
+
+		for _, item := range page.Items {
+			if (item.Metadata.Labels[managedByLabel] != managedByValue) && (isPlatformObject(resource, item.Metadata.Name) == false) {
+				found = append(found, resource.KindName()+" "+item.Metadata.Name)
+			}
+		}
+
+		return nil
+	}, func() { found = nil })
+	if err != nil {
+		return nil, err
+	}
+
+	return found, nil
 }
 
 // removeNamespace deletes the namespace when it carries the Vord label and holds nothing that is not the
 // agent's, and reports whether it was kept. A namespace the agent did not create is kept, as is one that holds
-// an object without the label, which deleting it would destroy; the objects are logged by kind and name.
+// an object without the label, which deleting it would destroy, and one that cannot be shown to hold none because
+// a kind or group could not be read. The objects are logged by kind and name and the unverified kinds with their
+// reason.
 func removeNamespace(ctx context.Context, client *kube.Client, keptInNamespace bool) (bool, error) {
 	namespace, err := client.GetRaw(ctx, namespacePath)
 	if err != nil {
@@ -238,13 +283,14 @@ func removeNamespace(ctx context.Context, client *kube.Client, keptInNamespace b
 		return true, nil
 	}
 
-	foreign, err := foreignObjects(ctx, client)
+	inventory, err := inspectNamespace(ctx, client)
 	if err != nil {
 		return false, err
 	}
 
-	if (len(foreign) > 0) || keptInNamespace {
-		slog.Info("the namespace is kept because it holds objects that are not the agent's", "objects", strings.Join(foreign, ", "))
+	if (len(inventory.foreign) > 0) || (len(inventory.unverified) > 0) || keptInNamespace {
+		slog.Info("the namespace is kept because it holds objects that are not the agent's, or could not be checked",
+			"objects", strings.Join(inventory.foreign, ", "), "unverified", strings.Join(inventory.unverified, "; "))
 
 		return true, nil
 	}

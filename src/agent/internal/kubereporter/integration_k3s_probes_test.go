@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -275,4 +276,139 @@ func (s *scenario) terminatingNamespace(t *testing.T) {
 
 		return kube.IsNotFound(err)
 	})
+}
+
+const (
+	probeGroup           = "probe.vord.framlux.io"
+	probeCRDName         = "vordprobes." + probeGroup
+	probeCRDPath         = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/" + probeCRDName
+	probeCRDsPath        = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions"
+	probeInstancesPath   = "/apis/" + probeGroup + "/v1/namespaces/" + reporterNamespace + "/vordprobes"
+	probeInstancePath    = probeInstancesPath + "/theirs"
+	probeDefaultInstance = "/apis/" + probeGroup + "/v1/namespaces/default/vordprobes"
+)
+
+// customResourceKeepsNamespace installs a throwaway CRD, enrols a host, puts one object that is not the agent's
+// into vord-system through the CRD and runs uninstall. The namespace has to be kept, found through discovery, with
+// everything else the agent installed gone and nothing left in it but the objects Kubernetes creates in every
+// namespace and the custom object. Once the object is removed a second uninstall deletes the namespace, and the
+// CRD goes last. The CRD is the test's own: no controller of k3s acts on it.
+func (s *scenario) customResourceKeepsNamespace(t *testing.T) {
+	ctx := context.Background()
+	admin := s.cluster.admin
+
+	crd := map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1",
+		"kind":       "CustomResourceDefinition",
+		"metadata":   map[string]any{"name": probeCRDName},
+		"spec": map[string]any{
+			"group": probeGroup,
+			"scope": "Namespaced",
+			"names": map[string]any{"plural": "vordprobes", "singular": "vordprobe", "kind": "VordProbe", "listKind": "VordProbeList"},
+			"versions": []any{map[string]any{
+				"name": "v1", "served": true, "storage": true,
+				"schema": map[string]any{"openAPIV3Schema": map[string]any{"type": "object", "x-kubernetes-preserve-unknown-fields": true}},
+			}},
+		},
+	}
+
+	if err := admin.Do(ctx, http.MethodPost, probeCRDsPath, nil, crd, nil); err != nil {
+		t.Fatalf("create the test CRD: %v", err)
+	}
+
+	eventually(t, stepTimeout, "discovery to advertise the test CRD", func() bool {
+		discovery, err := admin.DiscoverNamespaced(ctx)
+
+		return (err == nil) && slices.ContainsFunc(discovery.Resources, func(resource kube.Resource) bool {
+			return (resource.Group == probeGroup) && (resource.Name == "vordprobes")
+		})
+	})
+
+	discovery, err := admin.DiscoverNamespaced(ctx)
+	if err != nil {
+		t.Fatalf("discover the namespaced kinds: %v", err)
+	}
+
+	if len(discovery.Unverified) != 0 {
+		t.Errorf("discovery could not read %d group versions on a healthy cluster: %v", len(discovery.Unverified), discovery.Unverified)
+	}
+
+	t.Logf("api fact: discovery on k3s finds %d namespaced kinds that can be listed and deleted, none unverified", len(discovery.Resources))
+
+	host := newCandidate(t, "d", s.cluster, s.clock)
+	t.Cleanup(func() { host.stop(t) })
+
+	enrolAll(t, host)
+
+	if err := admin.Do(ctx, http.MethodPost, probeInstancesPath, nil, map[string]any{
+		"apiVersion": probeGroup + "/v1", "kind": "VordProbe", "metadata": map[string]any{"name": "theirs"}, "spec": map[string]any{},
+	}, nil); err != nil {
+		t.Fatalf("create the custom object in %s: %v", reporterNamespace, err)
+	}
+
+	result := host.uninstall(t)
+	if (result.Success == false) || (result.Message != "uninstalled_unmanaged_objects_kept") {
+		t.Fatalf("uninstall with a custom object in the namespace = %+v, want success with the unmanaged objects kept", result)
+	}
+
+	namespace := s.cluster.mustGet(t, namespacePath)
+	if stringAt(namespace, "metadata", "deletionTimestamp") != "" {
+		t.Fatal("the namespace is terminating although it held a custom object that is not the agent's")
+	}
+
+	if stringAt(namespace, "metadata", "labels", managedByLabel) != managedByValue {
+		t.Error("the kept namespace lost its Vord label")
+	}
+
+	s.cluster.mustGet(t, probeInstancePath)
+
+	for _, path := range []string{serviceAccountPath, clusterRolePath, clusterRoleBindingPath, rolePath, roleBindingPath, leasePath} {
+		if _, err := admin.GetRaw(ctx, path); kube.IsNotFound(err) == false {
+			t.Errorf("GET %s after the uninstall that kept the namespace = %v, want not found", path, err)
+		}
+	}
+
+	if _, found, err := kubereporter.LoadState(host.dataDir); (err != nil) || found {
+		t.Errorf("the state file survived uninstall (found=%v, err=%v)", found, err)
+	}
+
+	remaining := s.cluster.remainingObjects(t)
+	want := []string{"configmaps/kube-root-ca.crt", "serviceaccounts/default", "vordprobes." + probeGroup + "/theirs"}
+
+	if slices.Equal(remaining, want) == false {
+		t.Errorf("the kept namespace holds %v, want only the objects Kubernetes creates in every namespace and the custom object: %v", remaining, want)
+	}
+
+	t.Logf("api fact: a new namespace on k3s holds only %v besides what was put there", want[:2])
+
+	s.cluster.deleteObject(t, probeInstancePath)
+
+	eventually(t, stepTimeout, "the custom object to be gone", func() bool {
+		_, err := admin.GetRaw(ctx, probeInstancePath)
+
+		return kube.IsNotFound(err)
+	})
+
+	result = host.uninstall(t)
+	if (result.Success == false) || (result.Message != "uninstalled") {
+		t.Fatalf("uninstall after the custom object was removed = %+v, want the namespace deleted", result)
+	}
+
+	eventually(t, namespaceGoneTimeout, "the emptied namespace to be deleted", func() bool {
+		_, err := admin.GetRaw(ctx, namespacePath)
+
+		return kube.IsNotFound(err)
+	})
+
+	s.cluster.deleteObject(t, probeCRDPath)
+
+	eventually(t, namespaceGoneTimeout, "the test CRD to be gone", func() bool {
+		_, err := admin.GetRaw(ctx, probeCRDPath)
+
+		return kube.IsNotFound(err)
+	})
+
+	if err := admin.Do(ctx, http.MethodGet, probeDefaultInstance, nil, nil, nil); kube.IsNotFound(err) == false {
+		t.Errorf("the removed CRD still serves its kind: %v", err)
+	}
 }

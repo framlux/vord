@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -101,6 +102,112 @@ type fakeAPI struct {
 	// nodes and pods are what the cluster-wide node and pod lists serve, a page at a time.
 	nodes []map[string]any
 	pods  []map[string]any
+
+	// resources are the kinds discovery advertises, in the order the API server would name their groups and
+	// versions: the first version a group appears with is its preferred one.
+	resources []apiResource
+}
+
+// apiResource is one entry of the fake's discovery documents.
+type apiResource struct {
+	group      string // empty for the core group
+	version    string
+	name       string
+	kind       string
+	namespaced bool
+	verbs      []string
+}
+
+var (
+	writableVerbs = []string{"create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"}
+	readOnlyVerbs = []string{"get", "list"}
+)
+
+// namespacedKind is a namespaced kind that can be created, listed and deleted.
+func namespacedKind(group string, version string, name string, kind string) apiResource {
+	return apiResource{group: group, version: version, name: name, kind: kind, namespaced: true, verbs: writableVerbs}
+}
+
+// clusterKind is a cluster-scoped kind that can be created, listed and deleted.
+func clusterKind(group string, version string, name string, kind string) apiResource {
+	return apiResource{group: group, version: version, name: name, kind: kind, verbs: writableVerbs}
+}
+
+// subresourceOf is a subresource of a namespaced kind, such as pods/log.
+func subresourceOf(group string, version string, name string, kind string, verbs ...string) apiResource {
+	return apiResource{group: group, version: version, name: name, kind: kind, namespaced: true, verbs: verbs}
+}
+
+// collectionPrefix is the start of every path of the resource's group version.
+func (r apiResource) collectionPrefix() string {
+	if r.group == "" {
+		return "/api/" + r.version
+	}
+
+	return "/apis/" + r.group + "/" + r.version
+}
+
+// defaultAPIResources is what a real cluster advertises for the groups the reporter's tests use, including the
+// entries a namespace-wide sweep has to leave alone: cluster-scoped kinds, subresources, kinds that cannot be
+// listed or deleted, and the read-only metrics views.
+func defaultAPIResources() []apiResource {
+	return []apiResource{
+		subresourceOf("", "v1", "bindings", "Binding", "create"),
+		namespacedKind("", "v1", "configmaps", "ConfigMap"),
+		namespacedKind("", "v1", "endpoints", "Endpoints"),
+		namespacedKind("", "v1", "events", "Event"),
+		namespacedKind("", "v1", "limitranges", "LimitRange"),
+		clusterKind("", "v1", "namespaces", "Namespace"),
+		clusterKind("", "v1", "nodes", "Node"),
+		namespacedKind("", "v1", "persistentvolumeclaims", "PersistentVolumeClaim"),
+		subresourceOf("", "v1", "persistentvolumeclaims/status", "PersistentVolumeClaim", "get", "patch", "update"),
+		clusterKind("", "v1", "persistentvolumes", "PersistentVolume"),
+		namespacedKind("", "v1", "pods", "Pod"),
+		subresourceOf("", "v1", "pods/log", "Pod", "get"),
+		subresourceOf("", "v1", "pods/status", "Pod", "get", "patch", "update"),
+		namespacedKind("", "v1", "podtemplates", "PodTemplate"),
+		namespacedKind("", "v1", "replicationcontrollers", "ReplicationController"),
+		namespacedKind("", "v1", "resourcequotas", "ResourceQuota"),
+		namespacedKind("", "v1", "secrets", "Secret"),
+		namespacedKind("", "v1", "serviceaccounts", "ServiceAccount"),
+		subresourceOf("", "v1", "serviceaccounts/token", "TokenRequest", "create"),
+		namespacedKind("", "v1", "services", "Service"),
+
+		namespacedKind("apps", "v1", "controllerrevisions", "ControllerRevision"),
+		namespacedKind("apps", "v1", "daemonsets", "DaemonSet"),
+		namespacedKind("apps", "v1", "deployments", "Deployment"),
+		subresourceOf("apps", "v1", "deployments/scale", "Scale", "get", "patch", "update"),
+		namespacedKind("apps", "v1", "replicasets", "ReplicaSet"),
+		namespacedKind("apps", "v1", "statefulsets", "StatefulSet"),
+
+		namespacedKind("autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscaler"),
+		namespacedKind("autoscaling", "v1", "horizontalpodautoscalers", "HorizontalPodAutoscaler"),
+
+		namespacedKind("batch", "v1", "cronjobs", "CronJob"),
+		namespacedKind("batch", "v1", "jobs", "Job"),
+
+		namespacedKind("coordination.k8s.io", "v1", "leases", "Lease"),
+		namespacedKind("discovery.k8s.io", "v1", "endpointslices", "EndpointSlice"),
+		namespacedKind("events.k8s.io", "v1", "events", "Event"),
+
+		subresourceOf("authorization.k8s.io", "v1", "localsubjectaccessreviews", "LocalSubjectAccessReview", "create"),
+
+		clusterKind("networking.k8s.io", "v1", "ingressclasses", "IngressClass"),
+		namespacedKind("networking.k8s.io", "v1", "ingresses", "Ingress"),
+		namespacedKind("networking.k8s.io", "v1", "networkpolicies", "NetworkPolicy"),
+
+		namespacedKind("policy", "v1", "poddisruptionbudgets", "PodDisruptionBudget"),
+
+		clusterKind("rbac.authorization.k8s.io", "v1", "clusterrolebindings", "ClusterRoleBinding"),
+		clusterKind("rbac.authorization.k8s.io", "v1", "clusterroles", "ClusterRole"),
+		namespacedKind("rbac.authorization.k8s.io", "v1", "rolebindings", "RoleBinding"),
+		namespacedKind("rbac.authorization.k8s.io", "v1", "roles", "Role"),
+
+		namespacedKind("storage.k8s.io", "v1", "csistoragecapacities", "CSIStorageCapacity"),
+
+		{group: "metrics.k8s.io", version: "v1beta1", name: "nodes", kind: "NodeMetrics", verbs: readOnlyVerbs},
+		{group: "metrics.k8s.io", version: "v1beta1", name: "pods", kind: "PodMetrics", namespaced: true, verbs: readOnlyVerbs},
+	}
 }
 
 // newFakeAPI starts the fake on a TLS test server that closes with the test.
@@ -113,6 +220,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		issued:        map[string]string{},
 		secretGets:    map[string]int{},
 		populateAfter: 1,
+		resources:     defaultAPIResources(),
 	}
 
 	server := httptest.NewUnstartedServer(http.HandlerFunc(api.serve))
@@ -153,6 +261,15 @@ func (a *fakeAPI) setPods(pods []map[string]any) {
 	defer a.mu.Unlock()
 
 	a.pods = pods
+}
+
+// addResource makes discovery advertise one more kind. A group version that appears for the first time comes
+// after the ones already there, so it is the group's preferred version only when the group is new.
+func (a *fakeAPI) addResource(resource apiResource) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.resources = append(a.resources, resource)
 }
 
 // url is the address of the fake.
@@ -539,6 +656,16 @@ func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 		a.listPaged(r, "PodList", a.pods, reply, fail)
 
 		return
+	case "/apis":
+		reply(http.StatusOK, a.groupListLocked())
+
+		return
+	}
+
+	if document := a.resourceListLocked(path); document != nil {
+		reply(http.StatusOK, document)
+
+		return
 	}
 
 	if path == namespacePath {
@@ -565,7 +692,7 @@ func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 		return
 	}
 
-	if isCollectionPath(path) {
+	if a.servesCollectionLocked(path) {
 		a.listCollection(r, path, reply)
 
 		return
@@ -574,16 +701,85 @@ func (a *fakeAPI) handleGet(r *http.Request, reply replyFunc, fail failFunc) {
 	fail(http.StatusNotFound, "NotFound", "the server could not find the requested resource")
 }
 
-// collectionNames are the last path segments the fake treats as listable collections.
-var collectionNames = map[string]bool{
-	"secrets": true, "configmaps": true, "serviceaccounts": true, "services": true, "persistentvolumeclaims": true,
-	"pods": true, "deployments": true, "daemonsets": true, "statefulsets": true, "jobs": true, "cronjobs": true,
-	"leases": true, "roles": true, "rolebindings": true, "ingresses": true, "networkpolicies": true,
+// groupListLocked is the /apis document: every group with the versions it serves, its preferred version being the
+// first one a resource appeared with. The core group is not part of it, as on the real API.
+func (a *fakeAPI) groupListLocked() map[string]any {
+	var order []string
+
+	versions := map[string][]string{}
+
+	for _, resource := range a.resources {
+		if resource.group == "" {
+			continue
+		}
+
+		if _, known := versions[resource.group]; known == false {
+			order = append(order, resource.group)
+		}
+
+		if slices.Contains(versions[resource.group], resource.version) == false {
+			versions[resource.group] = append(versions[resource.group], resource.version)
+		}
+	}
+
+	groups := make([]any, 0, len(order))
+
+	for _, name := range order {
+		entries := make([]any, 0, len(versions[name]))
+
+		for _, version := range versions[name] {
+			entries = append(entries, map[string]any{"groupVersion": name + "/" + version, "version": version})
+		}
+
+		groups = append(groups, map[string]any{"name": name, "versions": entries, "preferredVersion": entries[0]})
+	}
+
+	return map[string]any{"kind": "APIGroupList", "apiVersion": "v1", "groups": groups}
 }
 
-// isCollectionPath reports whether path names a collection the fake lists.
-func isCollectionPath(path string) bool {
-	return collectionNames[path[strings.LastIndex(path, "/")+1:]]
+// resourceListLocked is the discovery document of the group version that path names ("/api/v1" or
+// "/apis/<group>/<version>"), or nil when the fake serves no such group version.
+func (a *fakeAPI) resourceListLocked(path string) map[string]any {
+	items := []any{}
+	groupVersion := ""
+
+	for _, resource := range a.resources {
+		if resource.collectionPrefix() != path {
+			continue
+		}
+
+		groupVersion = strings.TrimPrefix(strings.TrimPrefix(path, "/apis/"), "/api/")
+		items = append(items, map[string]any{
+			"name": resource.name, "singularName": "", "namespaced": resource.namespaced, "kind": resource.kind, "verbs": resource.verbs,
+		})
+	}
+
+	if groupVersion == "" {
+		return nil
+	}
+
+	return map[string]any{"kind": "APIResourceList", "apiVersion": "v1", "groupVersion": groupVersion, "resources": items}
+}
+
+// servesCollectionLocked reports whether path lists a namespaced kind the fake advertises.
+func (a *fakeAPI) servesCollectionLocked(path string) bool {
+	for _, resource := range a.resources {
+		if (resource.namespaced == false) || strings.Contains(resource.name, "/") {
+			continue
+		}
+
+		rest, inNamespace := strings.CutPrefix(path, resource.collectionPrefix()+"/namespaces/")
+		if inNamespace == false {
+			continue
+		}
+
+		namespace, name, found := strings.Cut(rest, "/")
+		if found && (namespace != "") && (name == resource.name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // listCollection answers a list of the objects directly under a collection path, filtered by labelSelector. A
