@@ -8,9 +8,9 @@ declare global {
 	namespace App {
 		interface Locals {
 			user: UserDto | null;
-			// Raw vord_csrf antiforgery cookie value paired with user.csrfToken. SSR mutations
-			// forward this cookie and echo user.csrfToken in the X-CSRF-TOKEN header so the
-			// backend's double-submit gate accepts them.
+			// Raw vord_csrf antiforgery cookie value paired with user.csrfToken: the cookie the browser
+			// holds, or the one just issued to it. SSR mutations forward this cookie and echo
+			// user.csrfToken in the X-CSRF-TOKEN header so the backend's double-submit gate accepts them.
 			csrfCookie: string | undefined;
 		}
 		interface PageData {

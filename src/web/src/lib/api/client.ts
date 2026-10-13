@@ -226,8 +226,11 @@ export class ApiClient {
 	// Auth bootstrap variant of getMe used by the SSR layer. Alongside the user it surfaces the
 	// raw vord_csrf antiforgery cookie value that GET /auth/me issues via Set-Cookie. A server-side
 	// fetch to the backend does not propagate that Set-Cookie to the browser, so hooks.server.ts
-	// captures it here and re-sets it on the browser. The cookie and user.csrfToken are minted by
-	// the same call, so they form a valid double-submit pair for later state-changing requests.
+	// captures it here and re-sets it on the browser. The backend only issues a cookie when the
+	// request carried none it could read: when the caller forwards the browser's valid cookie there is
+	// no Set-Cookie, csrfCookie is undefined, and user.csrfToken pairs with the cookie that was sent.
+	// Either way the cookie and user.csrfToken form a valid double-submit pair for later
+	// state-changing requests.
 	async getMeBootstrap(): Promise<{ user: UserDto; csrfCookie: string | undefined }> {
 		const url = `${this.baseUrl}/api/v1/auth/me`;
 		const response = await this.fetchFn(url, {

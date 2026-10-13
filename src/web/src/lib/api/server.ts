@@ -14,9 +14,10 @@ export const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
 /**
  * Builds the double-submit antiforgery payload for {@link createServerApiClient} from the request's
  * cookies and the auth-bootstrap user. The vord_csrf cookie value and the user's csrfToken are
- * minted together by GET /auth/me (mirrored onto the browser by hooks.server.ts), so forwarding the
- * cookie and echoing the token in the X-CSRF-TOKEN header satisfies the backend's JSON CSRF gate on
- * state-changing SSR requests. Safe (GET) calls ignore it.
+ * paired by GET /auth/me (hooks.server.ts forwards the browser's cookie to it and writes a new one to
+ * the browser only when the backend issued one), so forwarding the cookie and echoing the token in the
+ * X-CSRF-TOKEN header satisfies the backend's JSON CSRF gate on state-changing SSR requests. Safe
+ * (GET) calls ignore it.
  */
 export function csrfFor(
 	cookies: { get(name: string): string | undefined },
