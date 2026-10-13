@@ -133,6 +133,33 @@ public class MachineDetailHandlerTests
         await Assert.That(result.Data!.LastPing.HasValue).IsTrue();
     }
 
+    [Test]
+    public async Task GetDetailAsync_OnlineCriticalMachine_ReportsCriticalHealthWhileOnline()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        await SeedSummary(dbFactory, machineId, healthStatus: 2);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+    }
+
+    [Test]
+    public async Task GetDetailAsync_MachineWithNoSummaryRow_ReportsOfflineHealth()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+        await Assert.That(result.Data!.IsOnline).IsFalse();
+    }
+
     // ========== GetFullDetailAsync tests ==========
 
     [Test]

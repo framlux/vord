@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
-import { MachineType, OperatingSystem } from '$lib/api/types';
+import { MachineHealthStatus, MachineType, OperatingSystem } from '$lib/api/types';
 import type {
 	CommandDto,
 	MachineAuthorizedKeyDto,
@@ -71,6 +71,7 @@ const machine: MachineDto = {
 	serialNumber: 'SN-7',
 	assetTag: null,
 	isOnline: true,
+	healthStatus: MachineHealthStatus.Healthy,
 	lastPing: '2026-10-12T09:00:00Z',
 	registeredOn: '2026-01-01T00:00:00Z',
 	isDeleted: false,

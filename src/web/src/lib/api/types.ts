@@ -107,6 +107,8 @@ export interface MachineDto {
 	serialNumber: string;
 	assetTag: string | null;
 	isOnline: boolean;
+	/** The swept health the detail page and dashboard show. An online machine can be Critical; check isPaused first. */
+	healthStatus: MachineHealthStatus;
 	lastPing: string | null;
 	registeredOn: string;
 	isDeleted: boolean;

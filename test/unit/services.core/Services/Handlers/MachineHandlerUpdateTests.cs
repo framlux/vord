@@ -101,6 +101,37 @@ public class MachineHandlerUpdateTests
     }
 
     [Test]
+    public async Task UpdateAsync_ResponseCarriesTheSweptHealthOfTheUpdatedMachine()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachineWithSummary(dbFactory, hostname: "critical-box");
+        await dbFactory.Context.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.HealthStatus, (short)MachineHealthStatus.Critical)
+            .UpdateAsync();
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
+            machineId, 1, 1, "critical-box-renamed", null, null, CancellationToken.None);
+
+        await Assert.That(result.Data!.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+        await Assert.That(result.Data!.Data!.IsOnline).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateAsync_MachineWithNoSummaryRow_ResponseReportsOfflineHealth()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory, hostname: "never-seen");
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
+            machineId, 1, 1, "never-seen-renamed", null, null, CancellationToken.None);
+
+        await Assert.That(result.Data!.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    [Test]
     public async Task UpdateAsync_SyncsMachineStateSummaryName()
     {
         using TestDatabaseFactory dbFactory = new();

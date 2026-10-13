@@ -228,7 +228,11 @@ public sealed class MachineHandler
     /// <param name="search">Optional search term for hostname/name.</param>
     /// <param name="osFilter">Optional OS filter.</param>
     /// <param name="typeFilter">Optional machine type filter.</param>
-    /// <param name="statusFilter">Optional online/offline/paused status filter. A paused machine matches only paused.</param>
+    /// <param name="statusFilter">
+    /// Optional status filter: healthy, warning, critical or offline (the swept health the status badge shows),
+    /// online (any health but offline), or paused. A paused machine matches only paused. An unrecognised value
+    /// applies no filter.
+    /// </param>
     /// <param name="sortBy">The field to sort by.</param>
     /// <param name="sortDir">The sort direction (asc/desc).</param>
     /// <param name="ct">A cancellation token.</param>
@@ -281,16 +285,14 @@ public sealed class MachineHandler
         // Asked once per request so every row, and every filter below, sees the same cutoff.
         QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
 
-        // When filtering by online/offline/paused status, we must resolve status for all matching machines
-        // before pagination so that totalCount and page results are correct.
-        bool hasStatusFilter = string.IsNullOrWhiteSpace(statusFilter) == false &&
-            (statusFilter.Equals("online", StringComparison.OrdinalIgnoreCase) ||
-             statusFilter.Equals("offline", StringComparison.OrdinalIgnoreCase) ||
-             statusFilter.Equals("paused", StringComparison.OrdinalIgnoreCase));
+        // A status is known only from each machine's summary row, so when filtering by one we must
+        // resolve it for all matching machines before pagination for totalCount and page results to
+        // be correct. A value that is not a recognised status applies no filter at all.
+        MachineStatusFilter? parsedStatus = MachineStatusFilter.Parse(statusFilter);
 
-        if (hasStatusFilter)
+        if (parsedStatus is not null)
         {
-            // Load all matching machines and resolve online status from their summary rows.
+            // Load all matching machines and resolve their status from their summary rows.
             List<Machine> allMachines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId.Value, ct);
 
             // Apply search/OS/type filters in memory since we loaded all machines
@@ -315,21 +317,11 @@ public sealed class MachineHandler
             List<long> allIds = allMachines.Select(m => m.Id).ToList();
             Dictionary<long, MachineStateSummary> summaryMap = await LoadSummaryMapAsync(allIds, ct);
 
-            // A paused host keeps its heartbeat and its frozen health, so liveness alone would put it
-            // under Online or Offline. It matches only the Paused filter and neither of the others.
-            List<Machine> filtered;
-            if (statusFilter!.Equals("paused", StringComparison.OrdinalIgnoreCase))
-            {
-                filtered = allMachines.Where(m => cutoff.IsPaused(m.Id)).ToList();
-            }
-            else
-            {
-                bool wantOnline = statusFilter.Equals("online", StringComparison.OrdinalIgnoreCase);
-                filtered = allMachines
-                    .Where(m => (cutoff.IsPaused(m.Id) == false) &&
-                                (MachineLiveness.IsOnline(summaryMap.GetValueOrDefault(m.Id)) == wantOnline))
-                    .ToList();
-            }
+            // A paused host keeps its heartbeat and its frozen health, so the swept health alone would
+            // put it under a health it no longer has. The filter matches it only under Paused.
+            List<Machine> filtered = allMachines
+                .Where(m => parsedStatus.Matches(summaryMap.GetValueOrDefault(m.Id), cutoff.IsPaused(m.Id)))
+                .ToList();
 
             int totalCount = filtered.Count;
 
@@ -397,30 +389,21 @@ public sealed class MachineHandler
 
     private static MachineDto BuildMachineDto(Machine machine, MachineStateSummary? summary, bool isPaused)
     {
-        return BuildMachineDto(
-            machine,
-            MachineLiveness.IsOnline(summary),
-            isPaused,
-            MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
-            summary?.Hostname);
-    }
-
-    private static MachineDto BuildMachineDto(Machine machine, bool isOnline, bool isPaused, DateTimeOffset? lastPing, string? telemetryHostname = null)
-    {
         return new MachineDto
         {
             Id = machine.Id,
             Name = machine.Name,
             Description = machine.Description,
             Location = machine.Location,
-            Hostname = telemetryHostname ?? machine.Name,
+            Hostname = summary?.Hostname ?? machine.Name,
             OperatingSystem = machine.OperatingSystem,
             MachineType = machine.MachineType,
             SerialNumber = machine.SerialNumber,
             AssetTag = machine.AssetTagNumber,
-            IsOnline = isOnline,
+            IsOnline = MachineLiveness.IsOnline(summary),
+            HealthStatus = MachineLiveness.Health(summary),
             IsPaused = isPaused,
-            LastPing = lastPing,
+            LastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,
         };

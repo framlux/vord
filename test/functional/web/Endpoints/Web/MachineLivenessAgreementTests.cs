@@ -7,19 +7,21 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
 /// <summary>
-/// Pins every surface that reports machine liveness to one answer. The dashboard fleet overview,
-/// the machine search list, the machine list and the status endpoint used to answer from two
-/// different clocks, so a machine could read Offline on one screen and Online on the next.
+/// Pins every surface that reports machine liveness and health to one answer. The dashboard fleet
+/// overview, the machine search list, the machine list and the status endpoint used to answer from
+/// two different clocks, so a machine could read Offline on one screen and Online on the next, and
+/// the machine list reported only online or offline, so a Critical machine read as Online there.
 /// </summary>
 public sealed class MachineLivenessAgreementTests
 {
-    private static async Task<(int TenantId, int UserId)> SeedTenant(DatabaseContext db)
+    private static async Task<(int TenantId, int UserId)> SeedTenant(DatabaseContext db, SubscriptionTier tier = SubscriptionTier.Pro)
     {
         Tenant tenant = new()
         {
@@ -35,7 +37,7 @@ public sealed class MachineLivenessAgreementTests
         TenantSubscription subscription = new()
         {
             TenantId = tenant.Id,
-            Tier = SubscriptionTier.Pro,
+            Tier = tier,
             Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -125,6 +127,50 @@ public sealed class MachineLivenessAgreementTests
         using JsonDocument doc = JsonDocument.Parse(body);
 
         return doc.RootElement.GetProperty("data").Clone();
+    }
+
+    private static JsonElement FindInList(JsonElement items, long machineId)
+    {
+        foreach (JsonElement item in items.EnumerateArray())
+        {
+            if (item.GetProperty("id").GetInt64() == machineId)
+            {
+                return item;
+            }
+        }
+
+        throw new InvalidOperationException($"Machine {machineId} was missing from the list response");
+    }
+
+    private static async Task<(JsonElement Overview, JsonElement Search, JsonElement List, JsonElement Status)> ReadEveryRowAsync(
+        HttpClient client,
+        long machineId)
+    {
+        JsonElement overview = await ReadDataAsync(client, "/api/v1/dashboard/fleet");
+        JsonElement search = await ReadDataAsync(client, "/api/v1/machines/search");
+        JsonElement list = await ReadDataAsync(client, "/api/v1/machines");
+        JsonElement status = await ReadDataAsync(client, $"/api/v1/machines/{machineId}/status");
+
+        return (
+            FindInList(overview.GetProperty("machines"), machineId),
+            FindInList(search.GetProperty("items"), machineId),
+            FindInList(list.GetProperty("items"), machineId),
+            status);
+    }
+
+    private static async Task AssertEverySurfaceReports(HttpClient client, long machineId, MachineHealthStatus expectedHealth, bool expectedPaused)
+    {
+        (JsonElement overview, JsonElement search, JsonElement list, JsonElement status) = await ReadEveryRowAsync(client, machineId);
+
+        await Assert.That(list.GetProperty("healthStatus").GetInt32()).IsEqualTo((int)expectedHealth);
+        await Assert.That(overview.GetProperty("healthStatus").GetInt32()).IsEqualTo((int)expectedHealth);
+        await Assert.That(search.GetProperty("healthStatus").GetInt32()).IsEqualTo((int)expectedHealth);
+        await Assert.That(status.GetProperty("healthStatus").GetInt32()).IsEqualTo((int)expectedHealth);
+
+        await Assert.That(list.GetProperty("isPaused").GetBoolean()).IsEqualTo(expectedPaused);
+        await Assert.That(overview.GetProperty("isPaused").GetBoolean()).IsEqualTo(expectedPaused);
+        await Assert.That(search.GetProperty("isPaused").GetBoolean()).IsEqualTo(expectedPaused);
+        await Assert.That(status.GetProperty("isPaused").GetBoolean()).IsEqualTo(expectedPaused);
     }
 
     private static bool FindOnlineInList(JsonElement items, long machineId)
@@ -233,6 +279,86 @@ public sealed class MachineLivenessAgreementTests
         await Assert.That(search).IsEqualTo(overview);
         await Assert.That(list).IsEqualTo(overview);
         await Assert.That(status).IsEqualTo(overview);
+    }
+
+    [Test]
+    public async Task EverySurface_ReportsAnOnlineCriticalMachineAsCritical()
+    {
+        // The list used to answer only online or offline, so a machine the detail page called
+        // Critical read as Online beside it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db);
+        long machineId = await SeedMachine(db, tenantId, "critical-health-machine");
+        await SeedSummary(db, tenantId, machineId, healthStatus: 2);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await AssertEverySurfaceReports(client, machineId, MachineHealthStatus.Critical, expectedPaused: false);
+    }
+
+    [Test]
+    public async Task EverySurface_ReportsAWarningMachineAsWarning()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db);
+        long machineId = await SeedMachine(db, tenantId, "warning-health-machine");
+        await SeedSummary(db, tenantId, machineId, healthStatus: 1);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await AssertEverySurfaceReports(client, machineId, MachineHealthStatus.Warning, expectedPaused: false);
+    }
+
+    [Test]
+    public async Task EverySurface_ReportsAHealthyMachineAsHealthy()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db);
+        long machineId = await SeedMachine(db, tenantId, "healthy-health-machine");
+        await SeedSummary(db, tenantId, machineId, healthStatus: 0);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await AssertEverySurfaceReports(client, machineId, MachineHealthStatus.Healthy, expectedPaused: false);
+    }
+
+    [Test]
+    public async Task EverySurface_ReportsAMachineWithNoSummaryRowAsOffline()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db);
+        long machineId = await SeedMachine(db, tenantId, "never-seen-health-machine");
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await AssertEverySurfaceReports(client, machineId, MachineHealthStatus.Offline, expectedPaused: false);
+    }
+
+    [Test]
+    public async Task EverySurface_ReportsAPausedMachineAsPausedWithItsFrozenHealth()
+    {
+        // The Free tier allows three machines, so the fourth is paused. Its stored health is frozen
+        // at whatever it last reported; every surface carries the same value alongside isPaused, and
+        // the badge shows Paused in its place.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Free);
+        for (int i = 0; i < 3; i++)
+        {
+            long active = await SeedMachine(db, tenantId, $"active-health-machine-{i}");
+            await SeedSummary(db, tenantId, active, healthStatus: 0);
+        }
+
+        long pausedId = await SeedMachine(db, tenantId, "paused-health-machine");
+        await SeedSummary(db, tenantId, pausedId, healthStatus: 2);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await AssertEverySurfaceReports(client, pausedId, MachineHealthStatus.Critical, expectedPaused: true);
     }
 
     [Test]

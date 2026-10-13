@@ -109,19 +109,15 @@ public sealed class MachineStateService : IMachineStateService
         };
 
         // Step 2: SQL-level filtering, sorting, and pagination via the fleet search pipeline.
-        // The dashboard's named status filter maps onto the search path's HealthStatusValues, except
-        // "paused", which is not a health and filters on the cutoff instead; an unrecognized value
-        // applies no filter, matching the previous behavior.
+        // The named status filter, shared with the machine list, maps onto the search path's
+        // HealthStatusValues, except "paused", which is not a health and filters on the cutoff
+        // instead; an unrecognized value applies no filter.
         bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
-        List<short>? statusValues = statusFilter?.ToLowerInvariant() switch
-        {
-            "healthy" => [0],
-            "warning" => [1],
-            "critical" => [2],
-            "offline" => [3],
-            _ => null,
-        };
-        bool pausedOnly = string.Equals(statusFilter, "paused", StringComparison.OrdinalIgnoreCase);
+        MachineStatusFilter? parsedStatus = MachineStatusFilter.Parse(statusFilter);
+        List<short>? statusValues = parsedStatus is { PausedOnly: false }
+            ? parsedStatus.HealthStatuses.Select(status => (short)status).ToList()
+            : null;
+        bool pausedOnly = parsedStatus is { PausedOnly: true };
         FleetSearchParameters parameters = new()
         {
             Search = search,
@@ -238,9 +234,7 @@ public sealed class MachineStateService : IMachineStateService
         // Health comes from the swept column, the same value the machine list, its health filter
         // and the alert evaluator read. A machine that has never reported telemetry has no summary
         // row, and the fleet query treats that absence as offline, so this does too.
-        MachineHealthStatus health = state is not null
-            ? (MachineHealthStatus)state.HealthStatus
-            : MachineHealthStatus.Offline;
+        MachineHealthStatus health = MachineLiveness.Health(state);
 
         return new MachineDetailDto
         {

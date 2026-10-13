@@ -295,6 +295,26 @@ public sealed class MachinePausedSurfacesTests
     }
 
     [Test]
+    public async Task MachineList_HealthFilters_MatchTheSweptHealthAndNeverReturnAPausedHost()
+    {
+        // The fleet reads healthy, healthy, critical, then a paused warning and a paused offline.
+        // The paused two must not appear under the health they froze at.
+        using FunctionalTestFactory factory = new();
+        Fixture fixture = await SeedFreeTenantWithFiveMachines(factory);
+
+        JsonElement critical = await ReadDataAsync(fixture.Client, "/api/v1/machines?status=critical");
+        JsonElement warning = await ReadDataAsync(fixture.Client, "/api/v1/machines?status=Warning");
+        JsonElement healthy = await ReadDataAsync(fixture.Client, "/api/v1/machines?status=healthy");
+
+        await Assert.That(IdsOf(critical.GetProperty("items"))).IsEquivalentTo(new List<long> { fixture.Ids[2] });
+        await Assert.That(critical.GetProperty("totalCount").GetInt32()).IsEqualTo(1);
+        await Assert.That(warning.GetProperty("items").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(warning.GetProperty("totalCount").GetInt32()).IsEqualTo(0);
+        await Assert.That(IdsOf(healthy.GetProperty("items"))).IsEquivalentTo(new List<long> { fixture.Ids[0], fixture.Ids[1] });
+        await Assert.That(healthy.GetProperty("totalCount").GetInt32()).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task MachineList_OnlineFilter_ExcludesPausedHosts()
     {
         using FunctionalTestFactory factory = new();

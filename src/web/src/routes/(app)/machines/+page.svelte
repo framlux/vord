@@ -7,6 +7,9 @@
     import type { PaginatedResponse, MachineDto } from '$lib/api/types';
     import { formatRelativeTime } from '$lib/utils/format';
     import { getOsName, getTypeName, getOsFilterOptions, getTypeFilterOptions } from '$lib/utils/enums';
+    import { healthBorderClass } from '$lib/utils/health-colors';
+    import { getStatusFilterOptions } from '$lib/utils/machine-status';
+    import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
     import Pagination from '$lib/components/Pagination.svelte';
     import EmptyState from '$lib/components/EmptyState.svelte';
     import { goto, invalidateAll } from '$app/navigation';
@@ -43,12 +46,7 @@
     const osOptions = getOsFilterOptions();
     const typeOptions = getTypeFilterOptions();
 
-    const statusOptions = [
-        { value: '', label: 'All Status' },
-        { value: 'Online', label: 'Online' },
-        { value: 'Offline', label: 'Offline' },
-        { value: 'Paused', label: 'Paused' }
-    ];
+    const statusOptions = getStatusFilterOptions();
 
     function updateFilters(updates: Record<string, string>) {
         const url = new URL(window.location.href);
@@ -234,7 +232,7 @@
                     <tbody class="divide-y divide-surface-100 dark:divide-surface-700">
                         {#each machines.items as machine, i (machine.id)}
                             <tr
-                                class="group transition hover:bg-surface-50 dark:hover:bg-surface-700/50 {machine.isPaused ? 'border-l-2 border-l-indigo-500' : machine.isOnline ? 'border-l-2 border-l-green-500' : 'border-l-2 border-l-gray-300 dark:border-l-gray-600'} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''}"
+                                class="group transition hover:bg-surface-50 dark:hover:bg-surface-700/50 {healthBorderClass(machine.healthStatus, machine.isPaused)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''}"
                             >
                                 <td class="px-6 py-4">
                                     <a
@@ -260,32 +258,7 @@
                                     {getTypeName(machine.machineType)}
                                 </td>
                                 <td class="px-6 py-4">
-                                    <!-- A paused host's heartbeat keeps isOnline true, so Paused is checked first. -->
-                                    {#if machine.isPaused}
-                                        <span
-                                            class="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
-                                            aria-label="Status: Paused"
-                                        >
-                                            <span class="h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true"></span>
-                                            Paused
-                                        </span>
-                                    {:else if machine.isOnline}
-                                        <span
-                                            class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                                            aria-label="Status: Online"
-                                        >
-                                            <span class="h-2 w-2 rounded-full bg-green-500" aria-hidden="true"></span>
-                                            Online
-                                        </span>
-                                    {:else}
-                                        <span
-                                            class="inline-flex items-center gap-1.5 rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-600 dark:bg-surface-700 dark:text-surface-400"
-                                            aria-label="Status: Offline"
-                                        >
-                                            <span class="h-2 w-2 rounded-full bg-surface-400 dark:bg-surface-500" aria-hidden="true"></span>
-                                            Offline
-                                        </span>
-                                    {/if}
+                                    <MachineStateBadge status={machine.healthStatus} isPaused={machine.isPaused} />
                                 </td>
                                 <td
                                     class="px-6 py-4 text-surface-500 dark:text-surface-400"

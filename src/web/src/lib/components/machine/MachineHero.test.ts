@@ -21,6 +21,7 @@ function buildMachine(overrides?: Partial<MachineDto>): MachineDto {
 		serialNumber: 'SN001',
 		assetTag: null,
 		isOnline: false,
+		healthStatus: MachineHealthStatus.Offline,
 		lastPing: null,
 		registeredOn: '2026-01-01T00:00:00Z',
 		isDeleted: false,

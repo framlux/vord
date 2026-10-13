@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Models.Machines;
 
 namespace Framlux.FleetManagement.Test.Services.Machines;
 
@@ -36,6 +37,39 @@ public class MachineLivenessTests
 
         await Assert.That(MachineLiveness.IsOnline(online)).IsTrue();
         await Assert.That(MachineLiveness.IsOnline(offline)).IsFalse();
+    }
+
+    [Test]
+    public async Task Health_AbsentSummary_IsOffline()
+    {
+        // A machine that has never reported has not been heard from. Every screen that shows
+        // health reads the missing row the way the fleet query does.
+        await Assert.That(MachineLiveness.Health(null)).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    [Test]
+    [Arguments((short)0, MachineHealthStatus.Healthy)]
+    [Arguments((short)1, MachineHealthStatus.Warning)]
+    [Arguments((short)2, MachineHealthStatus.Critical)]
+    [Arguments((short)3, MachineHealthStatus.Offline)]
+    public async Task Health_PresentSummary_IsItsSweptValue(short sweptValue, MachineHealthStatus expected)
+    {
+        MachineStateSummary summary = new() { MachineId = 1, TenantId = 1, HealthStatus = sweptValue };
+
+        await Assert.That(MachineLiveness.Health(summary)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments((short)0)]
+    [Arguments((short)1)]
+    [Arguments((short)2)]
+    [Arguments((short)3)]
+    public async Task IsOnline_IsOfflineExactlyWhenHealthIsOffline(short sweptValue)
+    {
+        // Online is derived from health, so the two can never disagree about the same row.
+        MachineStateSummary summary = new() { MachineId = 1, TenantId = 1, HealthStatus = sweptValue };
+
+        await Assert.That(MachineLiveness.IsOnline(summary)).IsEqualTo(MachineLiveness.Health(summary) != MachineHealthStatus.Offline);
     }
 
     [Test]
