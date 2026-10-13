@@ -1482,8 +1482,9 @@
 				<p class="mt-3 text-sm text-green-600 dark:text-green-400" role="status">{commandSuccess}</p>
 			{/if}
 		</div>
+		{/if}
 
-		<!-- Command History -->
+		<!-- Command History is shown on every plan: cluster reporting commands are open to all of them, and this is the only place their outcome is recorded -->
 		<div class="mt-4 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
 			<div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
 				<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Command History</h3>
@@ -1531,7 +1532,6 @@
 				</div>
 			{/if}
 		</div>
-		{/if}
 	{/if}
 	</div>
 

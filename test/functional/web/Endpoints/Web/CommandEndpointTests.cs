@@ -1064,6 +1064,34 @@ public sealed class CommandEndpointTests
     [Test]
     [Arguments(SubscriptionTier.Free)]
     [Arguments(SubscriptionTier.Pro)]
+    public async Task GetCommandHistoryAndDetail_TenantBelowTeam_ShowsTheReporterCommandItSent(SubscriptionTier tier)
+    {
+        // Intent: a tenant below Team can send the reporter commands, and what the agent then did is only
+        // visible in the machine's command history. The list and the detail must therefore answer for every
+        // tier, or those tenants would have no way to see a refusal or a failure.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db, tier);
+        await EnableCommandsCapability(factory, machineId);
+        await SeedLocalReportAsync(db, tenantId, machineId, LocalReportJson(controlPlane: true, adminCredentialPresent: true, reporterEnrolled: true));
+        HttpClient client = BuildMachineAdminClient(factory, tenantId, userId);
+        HttpResponseMessage submitResponse = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandType: "k8s_reporter_unenrol"));
+        await Assert.That(submitResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        RemoteCommand stored = await db.RemoteCommands.SingleAsync(c => c.MachineId == machineId);
+
+        HttpResponseMessage historyResponse = await client.GetAsync($"/api/v1/machines/{machineId}/commands");
+        HttpResponseMessage detailResponse = await client.GetAsync($"/api/v1/commands/{stored.Id}");
+
+        await Assert.That(historyResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await historyResponse.Content.ReadAsStringAsync()).Contains("k8s_reporter_unenrol");
+        await Assert.That(detailResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await detailResponse.Content.ReadAsStringAsync()).Contains("k8s_reporter_unenrol");
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
     public async Task SubmitCommand_ReporterCommandFromATenantBelowTeam_StillFacesEligibility(SubscriptionTier tier)
     {
         // Intent: opening the commands to every tier moves only the Team check. The service still refuses a

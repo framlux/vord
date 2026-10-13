@@ -588,12 +588,52 @@ describe('machine page tabs by tier', () => {
 		expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
 	});
 
-	it.each(['Team', 'Enterprise'])('gives the %s tier the Commands tab form without the notice', async (tier) => {
+	it.each(['Free', 'Pro'])(
+		'shows the command history on the %s tier beside the upgrade notice, because that is where a reporter command\'s outcome is recorded',
+		async (tier) => {
+			api.getCommandHistory.mockResolvedValue([
+				{
+					...accepted,
+					id: 2,
+					commandType: 'k8s_reporter_uninstall',
+					status: 'Rejected',
+					resultMessage: 'remote commands are disabled on this host'
+				}
+			]);
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByRole('heading', { name: 'Command History' })).toBeInTheDocument();
+			expect(await panel.findByRole('cell', { name: 'k8s_reporter_uninstall' })).toBeInTheDocument();
+			expect(panel.getByText('Rejected')).toBeInTheDocument();
+			expect(panel.getByRole('cell', { name: 'remote commands are disabled on this host' })).toBeInTheDocument();
+			expect(panel.getByRole('alert')).toHaveTextContent(teamNotice);
+			expect(panel.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+			expect(api.getCommandHistory).toHaveBeenCalledWith(7);
+		}
+	);
+
+	it.each(['Free', 'Pro'])('says no commands were sent yet on the %s tier when the history is empty', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		const panel = within(screen.getByRole('tabpanel'));
+
+		expect(await panel.findByText('No commands sent to this machine yet.')).toBeInTheDocument();
+		expect(panel.getByRole('alert')).toHaveTextContent(teamNotice);
+	});
+
+	it.each(['Team', 'Enterprise'])('gives the %s tier the Commands tab form and history without the notice', async (tier) => {
 		renderPage(tier);
 
 		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
 
 		expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+		expect(screen.getByRole('heading', { name: 'Command History' })).toBeInTheDocument();
 		expect(screen.queryByText(teamNotice, { exact: false })).not.toBeInTheDocument();
 	});
 });
