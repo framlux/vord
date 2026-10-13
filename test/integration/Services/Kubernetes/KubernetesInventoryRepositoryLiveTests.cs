@@ -50,6 +50,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     private const int LargestStatementParameters = 520;
     private const int LargestStatementLength = 8_000;
 
+    /// <summary>The most values the repository puts in one <c>IN</c> list, which is its chunk size.</summary>
+    private const int LargestInList = 500;
+
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
 
@@ -280,7 +283,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await collect;
 
-        await Assert.That(deleted).IsEqualTo(2);
+        // Collection visits every tenant of the shared database, so the total may include rows other
+        // tests left; the tenant's own rows below pin what this test is about.
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(2);
         await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
         await Assert.That(await seedDb.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
     }
@@ -944,7 +949,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await repo.CollectGarbageAsync(new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), CancellationToken.None);
 
-        await Assert.That(deleted).IsEqualTo(3);
+        // Collection visits every tenant of the shared database, so the total may include rows other
+        // tests left; the tenant's own rows below pin what this test is about.
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(3);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
     }
@@ -1101,7 +1108,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         long agentlessGone = await SeedNodeAsync(reverted, "agentless", null, null, now.AddHours(-3));
         long unlinkedGone = await SeedNodeAsync(reverted, "moved-away", null, now.AddMinutes(-5), now.AddHours(-3));
 
-        long kept =await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
+        long kept = await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
         await db.InsertAsync(new KubernetesReporterCandidate
         {
             TenantId = tenantId,
@@ -1161,48 +1168,54 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
         int tenantId = await SeedTenantAsync(db);
-        long machineId = await SeedMachineAsync(db, tenantId);
-        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
-        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
-        {
-            TenantId = tenantId,
-            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            Distro = "k3s",
-            FirstSeenAt = seenAt,
-            LastSeenAt = seenAt,
-            ActiveReporterMachineId = machineId,
-            LastSnapshotReceivedAt = seenAt,
-        });
-        long nodeId = await db.InsertWithInt64IdentityAsync(new KubernetesNode
-        {
-            TenantId = tenantId,
-            ClusterId = clusterId,
-            NodeName = "node-1",
-            MachineId = machineId,
-            LastLocalReportAt = seenAt,
-        });
-        await db.InsertAsync(new KubernetesReporterCandidate
-        {
-            TenantId = tenantId,
-            ClusterId = clusterId,
-            MachineId = machineId,
-            LastReportAt = seenAt,
-        });
 
-        using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+        try
         {
-            string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
-            await transaction.CommitAsync(CancellationToken.None);
-            await Assert.That(deletedKeyHash).IsNotNull();
+            long machineId = await SeedMachineAsync(db, tenantId);
+            DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+            long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+            {
+                TenantId = tenantId,
+                CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+                Distro = "k3s",
+                FirstSeenAt = seenAt,
+                LastSeenAt = seenAt,
+                ActiveReporterMachineId = machineId,
+                LastSnapshotReceivedAt = seenAt,
+            });
+            long nodeId = await db.InsertWithInt64IdentityAsync(new KubernetesNode
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                NodeName = "node-1",
+                MachineId = machineId,
+                LastLocalReportAt = seenAt,
+            });
+            await db.InsertAsync(new KubernetesReporterCandidate
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                MachineId = machineId,
+                LastReportAt = seenAt,
+            });
+
+            using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+            {
+                string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
+                await transaction.CommitAsync(CancellationToken.None);
+                await Assert.That(deletedKeyHash).IsNotNull();
+            }
+
+            await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+            await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
+            KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
+            await Assert.That(cluster.ActiveReporterMachineId).IsNull();
+            await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
         }
-
-        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
-        await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
-        KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
-        await Assert.That(cluster.ActiveReporterMachineId).IsNull();
-        await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
-
-        await CleanUpKubernetesRowsAsync(db, tenantId);
+        finally
+        {
+            await CleanUpKubernetesRowsAsync(db, tenantId);
+        }
     }
 
     [Test]
@@ -1476,6 +1489,8 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             await Assert.That(remaining).IsEquivalentTo(kept.Select(LargeSnapshotNodeName));
             await Assert.That(recorder.MaxParameters).IsLessThanOrEqualTo(LargestStatementParameters);
             await Assert.That(recorder.MaxTextLength).IsLessThanOrEqualTo(LargestStatementLength);
+            await Assert.That(recorder.MaxInListItems).IsLessThanOrEqualTo(LargestInList);
+            await Assert.That(recorder.DeleteStatements).IsEqualTo(2);
         }
         finally
         {

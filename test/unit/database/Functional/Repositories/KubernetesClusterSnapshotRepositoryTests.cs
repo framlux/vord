@@ -177,10 +177,14 @@ public class KubernetesClusterSnapshotRepositoryTests
     /// </summary>
     private const int LargestStatementLength = 8_000;
 
+    /// <summary>The most values the repository puts in one <c>IN</c> list, which is its chunk size.</summary>
+    private const int LargestInList = 500;
+
     private static async Task AssertStatementsBoundedAsync(StatementSizeRecorder recorder)
     {
         await Assert.That(recorder.MaxParameters).IsLessThanOrEqualTo(LargestStatementParameters);
         await Assert.That(recorder.MaxTextLength).IsLessThanOrEqualTo(LargestStatementLength);
+        await Assert.That(recorder.MaxInListItems).IsLessThanOrEqualTo(LargestInList);
     }
 
     private static string NodeNameOf(int index)
@@ -1875,6 +1879,7 @@ public class KubernetesClusterSnapshotRepositoryTests
         await Assert.That(after.Values.All(n => n.LastReporterSeenAt == T0.AddMinutes(1))).IsTrue();
         await Assert.That(after.All(pair => pair.Value.Id == before[pair.Key].Id)).IsTrue();
         await AssertStatementsBoundedAsync(recorder);
+        await Assert.That(recorder.DeleteStatements).IsEqualTo(2);
     }
 
     [Test]
