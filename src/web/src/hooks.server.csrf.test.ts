@@ -28,7 +28,9 @@ class FakeBackend {
 	}
 
 	readonly fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-		const cookieHeader = ((init?.headers ?? {}) as Record<string, string>).Cookie ?? '';
+		// Building real Headers makes this stub refuse what a real fetch refuses, such as a line break
+		// inside a header value.
+		const cookieHeader = new Headers(init?.headers).get('cookie') ?? '';
 		this.requests.push({ cookieHeader });
 
 		const sent = cookieHeader
@@ -380,6 +382,126 @@ describe('hooks.server handle — antiforgery cookie stability', () => {
 		expect(visit.csrfSetCookies).toHaveLength(1);
 		expect(browser.jar.get(CSRF)).toBe('issued-1');
 		expect(browser.jar.get('framlux_theme')).toBe('dark');
+	});
+});
+
+describe('hooks.server handle — malformed antiforgery cookie from the browser', () => {
+	let backend: FakeBackend;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(T0);
+		backend = new FakeBackend();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('treats a cookie that decodes to a line break as absent and writes a fresh one', async () => {
+		const { handle } = await startReplica();
+		// The browser sent vord_csrf=a%0Ab; SvelteKit hands the hook the decoded value.
+		const browser = new Browser({ vord_auth: 'auth-1', vord_tenant: '7', vord_csrf: 'a\nb' });
+
+		const visit = await browser.visit(handle, backend);
+
+		expect(visit.event.locals.user).not.toBeNull();
+		expect(visit.event.locals.user?.csrfToken).toBe('token-for-issued-1');
+		expect(backend.requests).toHaveLength(1);
+		expect(backend.requests[0].cookieHeader).toBe('vord_auth=auth-1; vord_tenant=7');
+		expect(visit.csrfSets.map((s) => s.value)).toEqual(['issued-1']);
+		expect(browser.jar.get(CSRF)).toBe('issued-1');
+	});
+
+	it.each([
+		['an empty value', ''],
+		['a space', 'abc def'],
+		['a semicolon', 'abc;def'],
+		['a comma', 'abc,def'],
+		['padding', 'abcd=='],
+		['a carriage return', 'abc\rdef'],
+		['a trailing line feed', 'abcdef\n'],
+		['a NUL', 'abc\u0000def'],
+		['non-ASCII text', 'abc\u00e9def'],
+		['the base64 alphabet', 'abc+def/ghi']
+	])('does not forward a cookie containing %s and replaces it', async (_label, value) => {
+		const { handle } = await startReplica();
+		const browser = new Browser({ vord_auth: 'auth-1', vord_tenant: '7', vord_csrf: value });
+
+		const visit = await browser.visit(handle, backend);
+
+		expect(visit.event.locals.user).not.toBeNull();
+		expect(backend.requests[0].cookieHeader).toBe('vord_auth=auth-1; vord_tenant=7');
+		expect(visit.csrfSets.map((s) => s.value)).toEqual(['issued-1']);
+		expect(browser.jar.get(CSRF)).toBe('issued-1');
+	});
+
+	it('forwards every character of the base64url alphabet', async () => {
+		const { handle } = await startReplica();
+		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+		backend.valid.add(alphabet);
+		const browser = new Browser({ vord_auth: 'auth-1', vord_tenant: '7', vord_csrf: alphabet });
+
+		const visit = await browser.visit(handle, backend);
+
+		expect(backend.requests[0].cookieHeader).toBe(`vord_auth=auth-1; vord_tenant=7; vord_csrf=${alphabet}`);
+		expect(visit.csrfSets).toEqual([]);
+		expect(visit.event.locals.csrfCookie).toBe(alphabet);
+	});
+});
+
+// A session may not hold an unbounded number of pairings and the process may not hold an unbounded
+// number of sessions. Both limits evict the oldest entry first.
+describe('hooks.server handle — session cache bounds', () => {
+	let backend: FakeBackend;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(T0);
+		backend = new FakeBackend();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('keeps at most eight pairings per session and evicts the oldest', async () => {
+		const { handle } = await startReplica();
+		const tabs = Array.from({ length: 9 }, (_, i) => {
+			backend.valid.add(`cookie-${i + 1}`);
+
+			return new Browser({ vord_auth: 'auth-1', vord_tenant: '7', vord_csrf: `cookie-${i + 1}` });
+		});
+		for (const tab of tabs) {
+			await tab.visit(handle, backend);
+		}
+		expect(backend.meCalls).toBe(9);
+
+		// The newest pairing and the ones after the oldest are still cached.
+		for (const tab of tabs.slice(1)) {
+			await tab.visit(handle, backend);
+		}
+		expect(backend.meCalls).toBe(9);
+
+		// The oldest was evicted to make room for the ninth.
+		await tabs[0].visit(handle, backend);
+		expect(backend.meCalls).toBe(10);
+	});
+
+	it('keeps at most ten thousand sessions and evicts the oldest', async () => {
+		const { handle } = await startReplica();
+		const sessions = Array.from({ length: 10_001 }, (_, i) => new Browser({ vord_auth: `auth-${i}`, vord_tenant: '7' }));
+		for (const session of sessions) {
+			await session.visit(handle, backend);
+		}
+		expect(backend.meCalls).toBe(10_001);
+
+		// The second session survived the eviction that the 10,001st made room with.
+		await sessions[1].visit(handle, backend);
+		expect(backend.meCalls).toBe(10_001);
+
+		await sessions[0].visit(handle, backend);
+		expect(backend.meCalls).toBe(10_002);
 	});
 });
 

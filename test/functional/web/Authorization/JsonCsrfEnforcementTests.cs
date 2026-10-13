@@ -191,6 +191,26 @@ public sealed class JsonCsrfEnforcementTests
     }
 
     [Test]
+    public async Task AuthMe_IssuedAntiforgeryCookie_UsesOnlyTheBase64UrlAlphabet()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        // The web only forwards a vord_csrf value made of these characters and treats anything else as
+        // a cookie the backend never issued, so the cookie the framework writes must never leave the
+        // alphabet: no percent-escapes, no base64 padding, no '+' or '/'.
+        for (int i = 0; i < 25; i++)
+        {
+            HttpResponseMessage response = await GetAuthMeAsync(client, antiforgeryCookie: null);
+            string cookie = ExtractAntiforgeryCookieValue(response);
+
+            await Assert.That(cookie).IsNotEmpty();
+            await Assert.That(cookie.All(c => char.IsAsciiLetterOrDigit(c) || (c == '-') || (c == '_'))).IsTrue();
+        }
+    }
+
+    [Test]
     public async Task AuthMe_WithBogusAntiforgeryCookie_IssuesAFreshPairThatPassesTheJsonGate()
     {
         using FunctionalTestFactory factory = new();

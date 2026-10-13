@@ -16,6 +16,10 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const CSRF_COOKIE = 'vord_csrf';
 
+// The framework serialises the antiforgery cookie with base64url (the URL-safe alphabet, no padding),
+// so anything else in that cookie is not something it issued.
+const CSRF_COOKIE_FORMAT = /^[A-Za-z0-9_-]+$/;
+
 type SessionEntry = { user: App.Locals['user']; csrfCookie: string | undefined; expiresAt: number };
 
 // Two levels: the outer key is the session (vord_auth, plus vord_tenant when present) and the inner key
@@ -39,6 +43,17 @@ setInterval(() => {
 		}
 	}
 }, SWEEP_INTERVAL_MS);
+
+// The cookie value the browser sent, or undefined when it holds none or one the backend could never
+// have issued. A value outside the antiforgery cookie's alphabet is not forwarded, because SvelteKit
+// hands the hook the decoded value and a decoded line break would make the server-side fetch throw,
+// signing the user out of every page. It is also not trusted as a cache key: treated as absent, the
+// backend mints a replacement and the hook writes it over the bad cookie.
+function browserCsrfCookieOf(event: Parameters<Handle>[0]['event']): string | undefined {
+	const value = event.cookies.get(CSRF_COOKIE);
+
+	return value !== undefined && CSRF_COOKIE_FORMAT.test(value) ? value : undefined;
+}
 
 function sessionKeyFor(authCookie: string, tenantCookie: string | undefined): string {
 	return tenantCookie ? `${authCookie}\0${tenantCookie}` : authCookie;
@@ -142,7 +157,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (cookie) {
 			const tenantCookie = event.cookies.get('vord_tenant');
 			const sessionKey = sessionKeyFor(cookie, tenantCookie);
-			const browserCsrfCookie = event.cookies.get(CSRF_COOKIE);
+			const browserCsrfCookie = browserCsrfCookieOf(event);
 			const cached = cacheGet(sessionKey, browserCsrfCookie);
 			if (cached) {
 				// The browser holds the cookie this entry's token pairs with, so there is nothing to write.
