@@ -149,14 +149,15 @@ public sealed class ClusterEndpointTests
     }
 
     private static async Task SeedLocalReportAsync(
-        DatabaseContext db, int tenantId, long machineId, string fingerprint, bool controlPlane = true, bool adminCredential = true, bool enrolled = false)
+        DatabaseContext db, int tenantId, long machineId, string fingerprint, bool controlPlane = true, bool adminCredential = true, bool enrolled = false, string? reporterError = null)
     {
+        string errorField = (reporterError is null) ? string.Empty : $",\"reporter_error\":\"{reporterError}\"";
         await db.InsertAsync(new MachineTelemetry
         {
             MachineId = machineId,
             TenantId = tenantId,
             TelemetryType = 14,
-            Payload = $$"""{"distro":"k3s","kubelet_version":"v1.30.4+k3s1","node_name":"cp-1","node_name_source":"certificate","has_kubelet":true,"control_plane":{{(controlPlane ? "true" : "false")}},"ca_fingerprint":"{{fingerprint}}","admin_credential_present":{{(adminCredential ? "true" : "false")}},"reporter_enrolled":{{(enrolled ? "true" : "false")}}}""",
+            Payload = $$"""{"distro":"k3s","kubelet_version":"v1.30.4+k3s1","node_name":"cp-1","node_name_source":"certificate","has_kubelet":true,"control_plane":{{(controlPlane ? "true" : "false")}},"ca_fingerprint":"{{fingerprint}}","admin_credential_present":{{(adminCredential ? "true" : "false")}},"reporter_enrolled":{{(enrolled ? "true" : "false")}}{{errorField}}}""",
             ReceivedAt = DateTimeOffset.UtcNow,
             ServerReceivedAt = DateTimeOffset.UtcNow,
             SourceEventId = Guid.NewGuid().ToString("N"),
@@ -576,6 +577,7 @@ public sealed class ClusterEndpointTests
         await Assert.That(activeReporterEligible.GetProperty("isPaused").GetBoolean()).IsFalse();
         await Assert.That(activeReporterEligible.GetProperty("remoteCommandsEnabled").GetBoolean()).IsTrue();
         await Assert.That(activeReporterEligible.GetProperty("enrolled").GetBoolean()).IsTrue();
+        await Assert.That(activeReporterEligible.GetProperty("reporterError").ValueKind).IsEqualTo(JsonValueKind.Null);
         await Assert.That(activeReporterEligible.GetProperty("authorizedSigningKeyIds")[0].GetInt32()).IsEqualTo(keyId);
         JsonElement controllerEligible = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == controllerId);
         await Assert.That(controllerEligible.GetProperty("enrolled").GetBoolean()).IsFalse();
@@ -639,6 +641,37 @@ public sealed class ClusterEndpointTests
         await Assert.That(eligible.GetProperty("machineId").GetInt64()).IsEqualTo(machineId);
         await Assert.That(eligible.GetProperty("remoteCommandsEnabled").ValueKind).IsEqualTo(JsonValueKind.Null);
         await Assert.That(eligible.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
+    }
+
+    [Test]
+    public async Task ClusterDetail_EligibleMachineWhoseReportSaysItsRecordWasCopied_CarriesTheErrorOnItsEntry()
+    {
+        // Intent: a clone reports itself enrolled with state_copied, and the page must be able to tell it from
+        // a host that enrolled itself without waiting for the candidate row, so the entry carries the error of
+        // the machine's own latest report.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, "Tenant 1");
+        int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
+        long cloneId = await SeedMachineAsync(db, tenantId, "clone-cp");
+        long ownerId = await SeedMachineAsync(db, tenantId, "owner-cp");
+        long clusterId = await SeedClusterAsync(db, tenantId, FingerprintA);
+        await SeedNodeAsync(db, tenantId, clusterId, "clone-1", cloneId, controlPlane: true);
+        await SeedNodeAsync(db, tenantId, clusterId, "owner-1", ownerId, controlPlane: true);
+        await SeedLocalReportAsync(db, tenantId, cloneId, FingerprintA, enrolled: true, reporterError: "state_copied");
+        await SeedLocalReportAsync(db, tenantId, ownerId, FingerprintA, enrolled: true);
+        HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/clusters/{clusterId}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        JsonElement eligible = doc.RootElement.GetProperty("data").GetProperty("eligibleMachines");
+        JsonElement clone = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == cloneId);
+        JsonElement owner = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == ownerId);
+        await Assert.That(clone.GetProperty("reporterError").GetString()).IsEqualTo("state_copied");
+        await Assert.That(clone.GetProperty("enrolled").GetBoolean()).IsTrue();
+        await Assert.That(owner.GetProperty("reporterError").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]

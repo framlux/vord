@@ -40,6 +40,12 @@ export interface PlannedCommand {
 	localKeyId: number;
 	/** Whether the machine was online when the plan was made. */
 	online: boolean;
+	/**
+	 * Whether the plan's other commands only make sense once this one was accepted. When it is refused the
+	 * rest are not sent: the disable plan's uninstall is the only one, because the unenrols that follow it
+	 * revoke the hosts' tokens and would leave the cluster objects behind.
+	 */
+	mustSucceedFirst: boolean;
 }
 
 export interface SkippedMachine {
@@ -167,9 +173,10 @@ function command(
 	machineName: string,
 	commandType: ReporterCommandType,
 	key: UsableSigningKey,
-	online: boolean
+	online: boolean,
+	mustSucceedFirst = false
 ): PlannedCommand {
-	return { machineId, machineName, commandType, localKeyId: key.localKeyId, online };
+	return { machineId, machineName, commandType, localKeyId: key.localKeyId, online, mustSucceedFirst };
 }
 
 function emptyPlan(): ReportingPlan {
@@ -201,7 +208,8 @@ function isEnrolled(context: ReportingContext, machine: KubernetesEligibleMachin
 // A host that holds a reporter record copied from another host reports itself enrolled, with the error
 // state_copied, and is a candidate of the cluster. It never enrolled, though: its agent accepts an unenrol
 // for the copy, but refuses an uninstall while remote commands are off, and the server refuses to send
-// one. So a copy is evidence for every purpose but that.
+// one. So a copy is evidence for every purpose but that. The copy shows in the machine's own latest
+// report (its eligible-machine entry) and in the candidate row, which can lag it, and either counts.
 function holdsCopiedRecord(context: ReportingContext, machineId: number): boolean {
 	return context.candidates.some((c) => c.machineId === machineId && c.reporterError === REPORTER_STATE_COPIED);
 }
@@ -209,7 +217,11 @@ function holdsCopiedRecord(context: ReportingContext, machineId: number): boolea
 // The evidence the server and the agent want before an uninstall goes through a host with remote commands
 // off: the host enrolled on its own record, not on a copy of another host's.
 function hasUninstallEvidence(context: ReportingContext, machine: KubernetesEligibleMachineDto): boolean {
-	return isEnrolled(context, machine) && holdsCopiedRecord(context, machine.machineId) === false;
+	return (
+		isEnrolled(context, machine) &&
+		machine.reporterError !== REPORTER_STATE_COPIED &&
+		holdsCopiedRecord(context, machine.machineId) === false
+	);
 }
 
 /** Enrols every eligible machine that is not enrolled yet and can be sent the command. */
@@ -280,7 +292,8 @@ export function disableBlock(context: ReportingContext, keys: UsableSigningKey[]
  * enrolled, and unenrols every other online candidate. A machine with remote commands off is only a
  * target once it has enrolled on a record of its own, never on a copy of another host's. Without a
  * machine to uninstall through nothing is sent: an unenrol alone would drop the hosts' tokens and
- * leave the cluster objects behind.
+ * leave the cluster objects behind. The uninstall is marked mustSucceedFirst and comes first, so
+ * sendPlanned holds back the unenrols when it is refused.
  */
 export function planDisable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
@@ -317,7 +330,7 @@ export function planDisable(context: ReportingContext, keys: UsableSigningKey[])
 
 	if (target !== undefined) {
 		plan.commands.push(
-			command(target.machine.machineId, target.machine.machineName, AGENT_UNINSTALL, target.assessment.key, true),
+			command(target.machine.machineId, target.machine.machineName, AGENT_UNINSTALL, target.assessment.key, true, true),
 			...unenrols
 		);
 	}
@@ -425,6 +438,50 @@ const commandWording: Record<ReporterCommandType, string> = {
 
 export function commandVerb(commandType: ReporterCommandType): string {
 	return commandWording[commandType];
+}
+
+/** Why a command was not sent after the one it depended on was refused. */
+export function notSentAfterRefusal(refused: PlannedCommand): string {
+	return `Not sent: the ${commandVerb(refused.commandType).toLowerCase()} was refused, so reporting is still on`;
+}
+
+/**
+ * Sends the planned commands one after another and reports each outcome in order. Every command is tried
+ * even when another is refused, except that once a command marked mustSucceedFirst is refused the rest are
+ * reported as not sent, because they would only undo part of what that command was meant to finish.
+ * `send` signs and sends one command and throws when it is refused.
+ */
+export async function sendPlanned(
+	commands: PlannedCommand[],
+	send: (planned: PlannedCommand) => Promise<void>
+): Promise<CommandResult[]> {
+	const results: CommandResult[] = [];
+	let refused: PlannedCommand | null = null;
+
+	for (const planned of commands) {
+		const result = {
+			machineId: planned.machineId,
+			machineName: planned.machineName,
+			commandType: planned.commandType
+		};
+
+		if (refused !== null) {
+			results.push({ ...result, accepted: false, message: notSentAfterRefusal(refused) });
+			continue;
+		}
+
+		try {
+			await send(planned);
+			results.push({ ...result, accepted: true, message: planned.online ? 'Accepted' : OFFLINE_HOST_ACCEPTED });
+		} catch (error) {
+			results.push({ ...result, accepted: false, message: describeSendError(error) });
+			if (planned.mustSucceedFirst) {
+				refused = planned;
+			}
+		}
+	}
+
+	return results;
 }
 
 const skipWording: Record<SkipReason, string> = {

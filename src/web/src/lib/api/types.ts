@@ -929,6 +929,8 @@ export interface KubernetesEligibleMachineDto {
 	remoteCommandsEnabled: boolean | null;
 	/** True when the machine's latest report says it is already enrolled as a reporter. */
 	enrolled: boolean;
+	/** The reporter error in the machine's own latest report (for example state_copied), or null. */
+	reporterError: string | null;
 	/** The ids of the signing keys authorized to send commands to the machine. */
 	authorizedSigningKeyIds: number[];
 }

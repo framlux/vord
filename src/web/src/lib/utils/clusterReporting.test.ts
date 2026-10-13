@@ -17,6 +17,7 @@ import {
 	describeSendError,
 	describeSkip,
 	disableBlock,
+	notSentAfterRefusal,
 	OFFLINE_HOST_ACCEPTED,
 	OFFLINE_HOST_NOTE,
 	planDisable,
@@ -26,6 +27,8 @@ import {
 	planUnenrolOne,
 	planUpdatePermissions,
 	sendBlock,
+	sendPlanned,
+	type PlannedCommand,
 	type ReportingContext
 } from './clusterReporting';
 
@@ -40,6 +43,7 @@ function machine(overrides: Partial<KubernetesEligibleMachineDto> = {}): Kuberne
 		isPaused: false,
 		remoteCommandsEnabled: true,
 		enrolled: false,
+		reporterError: null,
 		authorizedSigningKeyIds: [41],
 		...overrides
 	};
@@ -204,8 +208,8 @@ describe('planEnable', () => {
 		);
 
 		expect(plan.commands).toEqual([
-			{ machineId: 1, machineName: 'cp-1', commandType: AGENT_ENROL, localKeyId: 3, online: true },
-			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_ENROL, localKeyId: 3, online: true }
+			{ machineId: 1, machineName: 'cp-1', commandType: AGENT_ENROL, localKeyId: 3, online: true, mustSucceedFirst: false },
+			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_ENROL, localKeyId: 3, online: true, mustSucceedFirst: false }
 		]);
 		expect(plan.skipped).toEqual([]);
 	});
@@ -273,7 +277,7 @@ describe('planEnrolOne', () => {
 		const plan = planEnrolOne(machine({ machineId: 5, machineName: 'cp-5' }), [KEY]);
 
 		expect(plan.commands).toEqual([
-			{ machineId: 5, machineName: 'cp-5', commandType: AGENT_ENROL, localKeyId: 3, online: true }
+			{ machineId: 5, machineName: 'cp-5', commandType: AGENT_ENROL, localKeyId: 3, online: true, mustSucceedFirst: false }
 		]);
 		expect(plan.skipped).toEqual([]);
 	});
@@ -531,6 +535,50 @@ describe('planDisable', () => {
 		);
 
 		expect(plan.commands.map((c) => [c.machineId, c.commandType])).toEqual([[1, AGENT_UNINSTALL]]);
+	});
+
+	it('does not uninstall through a host whose own latest report says its record was copied, whatever its candidate row says', () => {
+		const eligibleMachines = [
+			machine({ machineId: 1, machineName: 'clone', remoteCommandsEnabled: false, enrolled: true, reporterError: 'state_copied' })
+		];
+
+		for (const candidates of [[], [candidate({ machineId: 1, machineName: 'clone' })]]) {
+			expect(planDisable(context({ eligibleMachines, candidates }), [KEY]).commands).toEqual([]);
+			expect(disableBlock(context({ eligibleMachines, candidates }), [KEY])?.machines).toEqual([
+				{ machineId: 1, machineName: 'clone', reason: 'remote_commands_disabled' }
+			]);
+		}
+	});
+
+	it('still uninstalls through a host whose own latest report carries another reporter error', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [
+					machine({ machineId: 1, remoteCommandsEnabled: false, enrolled: true, reporterError: 'tls_ca_changed' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.machineId, c.commandType])).toEqual([[1, AGENT_UNINSTALL]]);
+	});
+
+	it('marks the uninstall, and only the uninstall, as the command the others wait for', () => {
+		const plan = planDisable(
+			context({
+				eligibleMachines: [machine({ machineId: 1, machineName: 'cp-1' }), machine({ machineId: 2, machineName: 'cp-2' })],
+				candidates: [
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
+					candidate({ machineId: 2, machineName: 'cp-2' })
+				]
+			}),
+			[KEY]
+		);
+
+		expect(plan.commands.map((c) => [c.commandType, c.mustSucceedFirst])).toEqual([
+			[AGENT_UNINSTALL, true],
+			[AGENT_UNENROL, false]
+		]);
 	});
 
 	it('ranks the active reporter, then an enrolled machine, then the rest, whatever the capability says', () => {
@@ -806,7 +854,7 @@ describe('planUnenrolOne', () => {
 		);
 
 		expect(plan.commands).toEqual([
-			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_UNENROL, localKeyId: 3, online: true }
+			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_UNENROL, localKeyId: 3, online: true, mustSucceedFirst: false }
 		]);
 	});
 
@@ -829,7 +877,7 @@ describe('planUnenrolOne', () => {
 		);
 
 		expect(plan.commands).toEqual([
-			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_UNENROL, localKeyId: 3, online: true }
+			{ machineId: 2, machineName: 'cp-2', commandType: AGENT_UNENROL, localKeyId: 3, online: true, mustSucceedFirst: false }
 		]);
 		expect(plan.skipped).toEqual([]);
 	});
@@ -838,7 +886,7 @@ describe('planUnenrolOne', () => {
 		const plan = planUnenrolOne(context(), candidate({ machineId: 8, machineName: 'old-cp', online: false }), [KEY]);
 
 		expect(plan.commands).toEqual([
-			{ machineId: 8, machineName: 'old-cp', commandType: AGENT_UNENROL, localKeyId: 3, online: false }
+			{ machineId: 8, machineName: 'old-cp', commandType: AGENT_UNENROL, localKeyId: 3, online: false, mustSucceedFirst: false }
 		]);
 	});
 
@@ -1034,6 +1082,120 @@ describe('planUpdatePermissions', () => {
 		);
 
 		expect(plan.commands).toEqual([]);
+	});
+});
+
+describe('sendPlanned', () => {
+	function planned(overrides: Partial<PlannedCommand> = {}): PlannedCommand {
+		return {
+			machineId: 1,
+			machineName: 'cp-1',
+			commandType: AGENT_UNENROL,
+			localKeyId: 3,
+			online: true,
+			mustSucceedFirst: false,
+			...overrides
+		};
+	}
+
+	const uninstall = planned({ machineId: 1, machineName: 'cp-1', commandType: AGENT_UNINSTALL, mustSucceedFirst: true });
+	const unenrolTwo = planned({ machineId: 2, machineName: 'cp-2' });
+	const unenrolThree = planned({ machineId: 3, machineName: 'cp-3' });
+
+	function sender(refused: Set<number> = new Set()) {
+		const sent: number[] = [];
+		const send = async (command: PlannedCommand): Promise<void> => {
+			sent.push(command.machineId);
+			if (refused.has(command.machineId)) {
+				throw new ApiError(409, 'This host is paused');
+			}
+		};
+
+		return { sent, send };
+	}
+
+	it('sends every command and reports each as accepted, in order', async () => {
+		const { sent, send } = sender();
+
+		const results = await sendPlanned([uninstall, unenrolTwo, unenrolThree], send);
+
+		expect(sent).toEqual([1, 2, 3]);
+		expect(results.map((r) => [r.machineId, r.commandType, r.accepted, r.message])).toEqual([
+			[1, AGENT_UNINSTALL, true, 'Accepted'],
+			[2, AGENT_UNENROL, true, 'Accepted'],
+			[3, AGENT_UNENROL, true, 'Accepted']
+		]);
+	});
+
+	it('does not send the unenrols when the uninstall they follow is refused, and says why', async () => {
+		const { sent, send } = sender(new Set([1]));
+
+		const results = await sendPlanned([uninstall, unenrolTwo, unenrolThree], send);
+
+		expect(sent).toEqual([1]);
+		expect(results).toEqual([
+			{ machineId: 1, machineName: 'cp-1', commandType: AGENT_UNINSTALL, accepted: false, message: 'This host is paused' },
+			{
+				machineId: 2,
+				machineName: 'cp-2',
+				commandType: AGENT_UNENROL,
+				accepted: false,
+				message: 'Not sent: the uninstall was refused, so reporting is still on'
+			},
+			{
+				machineId: 3,
+				machineName: 'cp-3',
+				commandType: AGENT_UNENROL,
+				accepted: false,
+				message: 'Not sent: the uninstall was refused, so reporting is still on'
+			}
+		]);
+		expect(results[1].message).toBe(notSentAfterRefusal(uninstall));
+	});
+
+	it('holds the rest back for any failure of the command they wait for, not only a refusal from the server', async () => {
+		const sent: number[] = [];
+		const results = await sendPlanned([uninstall, unenrolTwo], async (command) => {
+			sent.push(command.machineId);
+			throw new Error('Failed to fetch');
+		});
+
+		expect(sent).toEqual([1]);
+		expect(results.map((r) => r.message)).toEqual([
+			'Failed to fetch',
+			'Not sent: the uninstall was refused, so reporting is still on'
+		]);
+	});
+
+	it('keeps sending after an unenrol is refused once the uninstall was accepted', async () => {
+		const { sent, send } = sender(new Set([2]));
+
+		const results = await sendPlanned([uninstall, unenrolTwo, unenrolThree], send);
+
+		expect(sent).toEqual([1, 2, 3]);
+		expect(results.map((r) => r.accepted)).toEqual([true, false, true]);
+	});
+
+	it('keeps sending after a refusal in a plan that has no command to wait for', async () => {
+		const { sent, send } = sender(new Set([1]));
+
+		const results = await sendPlanned(
+			[planned({ machineId: 1, commandType: AGENT_ENROL }), planned({ machineId: 2, commandType: AGENT_ENROL })],
+			send
+		);
+
+		expect(sent).toEqual([1, 2]);
+		expect(results.map((r) => r.accepted)).toEqual([false, true]);
+	});
+
+	it('words an accepted command to an offline host with the five minute warning', async () => {
+		const results = await sendPlanned([planned({ online: false })], async () => undefined);
+
+		expect(results[0]).toMatchObject({ accepted: true, message: OFFLINE_HOST_ACCEPTED });
+	});
+
+	it('sends nothing for an empty plan', async () => {
+		expect(await sendPlanned([], async () => undefined)).toEqual([]);
 	});
 });
 

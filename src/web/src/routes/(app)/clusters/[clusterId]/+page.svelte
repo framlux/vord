@@ -19,10 +19,8 @@
 		AGENT_UNENROL,
 		describeBlockReason,
 		describeReporterError,
-		describeSendError,
 		describeSkip,
 		disableBlock,
-		OFFLINE_HOST_ACCEPTED,
 		planDisable,
 		planEnable,
 		planEnrolOne,
@@ -33,6 +31,7 @@
 		type ReporterCommandType,
 		type ReportingPlan,
 		sendBlock,
+		sendPlanned,
 		type SkipReason
 	} from '$lib/utils/clusterReporting';
 	import { formatDateTime, formatRelativeTime } from '$lib/utils/format';
@@ -168,31 +167,18 @@
 
 	async function execute(plan: ReportingPlan): Promise<CommandResult[]> {
 		const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
-		const results: CommandResult[] = [];
-		for (const planned of plan.commands) {
-			const result = {
+
+		return sendPlanned(plan.commands, async (planned) => {
+			await sendSignedCommand(api, {
 				machineId: planned.machineId,
-				machineName: planned.machineName,
-				commandType: planned.commandType
-			};
-
-			try {
-				await sendSignedCommand(api, {
-					machineId: planned.machineId,
-					commandType: planned.commandType,
-					localKeyId: planned.localKeyId,
-					localKeys,
-					serverKeys,
-					userId: data.user?.id ?? 0,
-					tenantId: data.user?.activeTenantId ?? 0
-				});
-				results.push({ ...result, accepted: true, message: planned.online ? 'Accepted' : OFFLINE_HOST_ACCEPTED });
-			} catch (error) {
-				results.push({ ...result, accepted: false, message: describeSendError(error) });
-			}
-		}
-
-		return results;
+				commandType: planned.commandType,
+				localKeyId: planned.localKeyId,
+				localKeys,
+				serverKeys,
+				userId: data.user?.id ?? 0,
+				tenantId: data.user?.activeTenantId ?? 0
+			});
+		});
 	}
 
 	async function refresh(): Promise<void> {

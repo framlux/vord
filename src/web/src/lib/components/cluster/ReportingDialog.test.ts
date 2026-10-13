@@ -11,8 +11,8 @@ import ReportingDialog from './ReportingDialog.svelte';
 function plan(overrides: Partial<ReportingPlan> = {}): ReportingPlan {
 	return {
 		commands: [
-			{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: true },
-			{ machineId: 2, machineName: 'cp-2', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: true }
+			{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: true, mustSucceedFirst: false },
+			{ machineId: 2, machineName: 'cp-2', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: true, mustSucceedFirst: false }
 		],
 		skipped: [],
 		...overrides
@@ -66,8 +66,8 @@ describe('ReportingDialog', () => {
 		renderDialog({
 			plan: plan({
 				commands: [
-					{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_uninstall', localKeyId: 3, online: true },
-					{ machineId: 2, machineName: 'cp-2', commandType: 'k8s_reporter_unenrol', localKeyId: 3, online: true }
+					{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_uninstall', localKeyId: 3, online: true, mustSucceedFirst: true },
+					{ machineId: 2, machineName: 'cp-2', commandType: 'k8s_reporter_unenrol', localKeyId: 3, online: true, mustSucceedFirst: false }
 				]
 			})
 		});
@@ -83,7 +83,7 @@ describe('ReportingDialog', () => {
 	it('warns that an offline host must receive the command within five minutes', () => {
 		renderDialog({
 			plan: plan({
-				commands: [{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: false }]
+				commands: [{ machineId: 1, machineName: 'cp-1', commandType: 'k8s_reporter_enrol', localKeyId: 3, online: false, mustSucceedFirst: false }]
 			})
 		});
 

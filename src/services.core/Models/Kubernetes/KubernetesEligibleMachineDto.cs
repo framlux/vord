@@ -34,6 +34,14 @@ public sealed class KubernetesEligibleMachineDto
     /// <summary>True when the machine's latest report says it is already enrolled as a reporter.</summary>
     public bool Enrolled { get; set; }
 
+    /// <summary>
+    /// The reporter error in the machine's own latest report (<c>credentials_rejected</c>,
+    /// <c>tls_ca_changed</c> or <c>state_copied</c>), or null when it reports none. <c>state_copied</c> marks a
+    /// host whose reporter record was copied from another host: it reports itself enrolled but never was, so
+    /// it can be unenrolled and not uninstalled through while its remote commands are off.
+    /// </summary>
+    public string? ReporterError { get; set; }
+
     /// <summary>The IDs of the signing keys authorized to send commands to the machine, in ascending order.</summary>
     public List<int> AuthorizedSigningKeyIds { get; set; } = [];
 }

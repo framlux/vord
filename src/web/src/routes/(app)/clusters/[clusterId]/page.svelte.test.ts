@@ -98,6 +98,7 @@ function makeEligible(overrides: Partial<KubernetesEligibleMachineDto> = {}): Ku
 		isPaused: false,
 		remoteCommandsEnabled: true,
 		enrolled: false,
+		reporterError: null,
 		authorizedSigningKeyIds: [41],
 		...overrides
 	};
@@ -1142,6 +1143,77 @@ describe('cluster detail', () => {
 			await within(dialog).findByTestId('command-results');
 
 			expect(sentCommands().filter((c) => c.commandType === 'k8s_reporter_uninstall')).toHaveLength(1);
+		});
+
+		it('does not unenrol anyone when the uninstall is refused, because that would revoke the tokens and leave the cluster objects', async () => {
+			api.sendCommand.mockImplementation(async (request: SendCommandRequest) => {
+				if (request.commandType === 'k8s_reporter_uninstall') {
+					throw new ApiError(409, 'This host is paused');
+				}
+
+				return {};
+			});
+			renderPage(activeCluster());
+
+			const dialog = await openDisableDialog();
+			await fireEvent.click(within(dialog).getByRole('button', { name: 'Disable reporting' }));
+			const results = within(await within(dialog).findByTestId('command-results')).getAllByRole('listitem');
+
+			expect(sentSummary()).toEqual([[8, 'k8s_reporter_uninstall']]);
+			expect(results).toHaveLength(3);
+			expect(results[0]).toHaveTextContent('web-02');
+			expect(results[0]).toHaveAttribute('data-outcome', 'failed');
+			expect(results[0]).toHaveTextContent('This host is paused');
+
+			for (const unsent of results.slice(1)) {
+				expect(unsent).toHaveAttribute('data-outcome', 'failed');
+				expect(unsent).toHaveTextContent('Not sent: the uninstall was refused, so reporting is still on');
+			}
+		});
+
+		it('keeps unenrolling the other machines when one unenrol is refused after the uninstall was accepted', async () => {
+			api.sendCommand.mockImplementation(async (request: SendCommandRequest) => {
+				if (request.machineId === 7) {
+					throw new ApiError(400, 'This machine is not an enrolled reporter');
+				}
+
+				return {};
+			});
+			renderPage(activeCluster());
+
+			const dialog = await openDisableDialog();
+			await fireEvent.click(within(dialog).getByRole('button', { name: 'Disable reporting' }));
+			await within(dialog).findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([
+				[8, 'k8s_reporter_uninstall'],
+				[7, 'k8s_reporter_unenrol'],
+				[9, 'k8s_reporter_unenrol']
+			]);
+		});
+
+		it('does not uninstall through a host whose own report says its record was copied, and lists why', async () => {
+			renderPage(
+				activeCluster({
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
+					eligibleMachines: [
+						makeEligible({
+							machineId: 7,
+							machineName: 'web-01',
+							enrolled: true,
+							remoteCommandsEnabled: false,
+							reporterError: 'state_copied'
+						})
+					]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
+			expect(
+				within(screen.getByTestId('disable-blocked-machines')).getByText(
+					'web-01: Remote commands are disabled on this host (allow_remote_commands in the agent config)'
+				)
+			).toBeInTheDocument();
 		});
 
 		it('uninstalls through another online machine when the active reporter is offline, and skips the offline one with a reason', async () => {

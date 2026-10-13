@@ -133,9 +133,10 @@ public sealed class KubernetesReporterMachineReaderTests
         bool reporterEnrolled = false,
         string distro = "k3s",
         string nodeName = "cp-1",
-        bool hasKubelet = true)
+        bool hasKubelet = true,
+        string? reporterError = null)
     {
-        return JsonSerializer.Serialize(new Dictionary<string, object>
+        Dictionary<string, object> payload = new()
         {
             ["distro"] = distro,
             ["kubelet_version"] = "v1.30.4+k3s1",
@@ -146,7 +147,14 @@ public sealed class KubernetesReporterMachineReaderTests
             ["ca_fingerprint"] = fingerprint,
             ["admin_credential_present"] = adminCredentialPresent,
             ["reporter_enrolled"] = reporterEnrolled,
-        });
+        };
+
+        if (reporterError is not null)
+        {
+            payload["reporter_error"] = reporterError;
+        }
+
+        return JsonSerializer.Serialize(payload);
     }
 
     private static KubernetesNodeWithMachine NodeOf(long? machineId)
@@ -209,7 +217,42 @@ public sealed class KubernetesReporterMachineReaderTests
         await Assert.That(machine.IsPaused).IsFalse();
         await Assert.That(machine.RemoteCommandsEnabled).IsTrue();
         await Assert.That(machine.Enrolled).IsTrue();
+        await Assert.That(machine.ReporterError).IsNull();
         await Assert.That(machine.AuthorizedSigningKeyIds.ToArray()).IsEquivalentTo(new[] { 3, 9 });
+    }
+
+    [Test]
+    [Arguments("state_copied", "state_copied")]
+    [Arguments("credentials_rejected", "credentials_rejected")]
+    [Arguments("tls_ca_changed", "tls_ca_changed")]
+    [Arguments("something_else", null)]
+    public async Task LoadAsync_EligibleMachine_CarriesTheReporterErrorOfItsOwnLatestReport(string reported, string? expected)
+    {
+        // Intent: a copied reporter record is only visible in the machine's own report, and the page must
+        // not offer an uninstall through such a host. The error is the normalised one, so a code the agent
+        // does not send is not passed on.
+        Machine(21, "cp-host", PayloadJson(reporterEnrolled: true, reporterError: reported));
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Single().ReporterError).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task LoadAsync_EligibleMachineThatIsACandidateWithAnErrorButWhoseReportHasNone_HasNoReporterError()
+    {
+        // Intent: the entry describes the machine's own latest report, not its candidate row, so the two can
+        // differ while the row lags and the page judges each on its own.
+        Machine(21, "cp-host", PayloadJson(reporterEnrolled: true));
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [CandidateOf(21, "state_copied")], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Single().ReporterError).IsNull();
+        await Assert.That(result.Candidates.Single().ReporterError).IsEqualTo("state_copied");
     }
 
     [Test]

@@ -234,6 +234,7 @@ public sealed class KubernetesReporterMachineReader
                 IsPaused = cutoff.IsPaused(id),
                 RemoteCommandsEnabled = (capabilities is null) ? null : AgentCapabilities.HasRemoteCommands(capabilities.GetValueOrDefault(id)),
                 Enrolled = reports[id].ReporterEnrolled,
+                ReporterError = reports[id].ReporterError,
                 AuthorizedSigningKeyIds = keys.TryGetValue(id, out IReadOnlyList<int>? keyIds) ? keyIds.ToList() : [],
             })
             .OrderBy(m => m.MachineName, StringComparer.Ordinal)
