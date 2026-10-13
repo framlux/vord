@@ -84,7 +84,8 @@ have_systemd() {
 # error, so the callers leave the unit alone instead. `is-enabled` prints the state even when it
 # exits non-zero, and prints nothing at all for a unit it cannot find.
 #
-# Pure enough to be sourced and called directly in tests — see deployment/agent/install_test.sh.
+# Sourced and called directly in tests, with systemctl replaced by a function — see
+# deployment/agent/install_test.sh.
 unit_masked() {
     case "$(systemctl is-enabled "${PACKAGE_NAME}" 2>/dev/null || true)" in
         masked | masked-runtime) return 0 ;;

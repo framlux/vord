@@ -483,6 +483,31 @@ for step in start_agent enable_and_restart_after_update; do
     done
 done
 
+echo "== main runs the service steps that are tested above =="
+# main needs root and a package manager, so it cannot be run here. Reading its text is the cheap way
+# to hold the two paths to the steps the tests above cover: an --update that goes back to a bare
+# restart, or an install that stops calling start_agent, would leave those tests green and the
+# installer broken.
+UPDATE_PATH="$(sed -n '/^# --- Update-Only Path ---$/,/^    exit 0$/p' "${INSTALL_SH}")"
+if ! echo "${UPDATE_PATH}" | grep -q "upgraded successfully"; then
+    fail "could not find main's --update path to inspect"
+elif ! echo "${UPDATE_PATH}" | grep -qE '^[[:space:]]+enable_and_restart_after_update$'; then
+    fail "the --update path does not call enable_and_restart_after_update"
+elif echo "${UPDATE_PATH}" | grep -q "systemctl"; then
+    fail "the --update path calls systemctl itself instead of going through enable_and_restart_after_update"
+else
+    pass "the --update path calls enable_and_restart_after_update and nothing else on systemctl"
+fi
+
+INSTALL_PATH="$(sed -n '/^# --- Enable and Start the Agent ---$/,$p' "${INSTALL_SH}")"
+if ! echo "${INSTALL_PATH}" | grep -q "installed and running"; then
+    fail "could not find main's install path to inspect"
+elif echo "${INSTALL_PATH}" | grep -qE '^start_agent$'; then
+    pass "the install path calls start_agent"
+else
+    fail "the install path does not call start_agent"
+fi
+
 echo
 if [ "${FAILURES}" -eq 0 ]; then
     echo "All checks passed."
