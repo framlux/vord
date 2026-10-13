@@ -54,6 +54,102 @@ public class TelemetryPayloadParserTests
     }
 
     [Test]
+    public async Task TryParseSystemInfo_OverLongText_IsCutToTheColumnLengths()
+    {
+        // Every text field is cut to its column, so a long report cannot fail the Postgres UPDATE
+        // and stall the projection. The lengths are the schema's: summary Hostname and
+        // HardwareModel are 255, and the detail columns are 255 except BiosVersion at 64.
+        string payload = Serialize(new SystemInfoRecord
+        {
+            Hostname = new string('h', 300),
+            HardwareModel = new string('m', 400),
+            HardwareVendor = new string('v', 300),
+            HardwareSerial = new string('s', 300),
+            CpuBrand = new string('c', 300),
+            BiosVersion = new string('b', 100),
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.Hostname).IsEqualTo(new string('h', 255));
+        await Assert.That(f.HardwareModel).IsEqualTo(new string('m', 255));
+        await Assert.That(f.HardwareVendor).IsEqualTo(new string('v', 255));
+        await Assert.That(f.HardwareSerial).IsEqualTo(new string('s', 255));
+        await Assert.That(f.CpuBrand).IsEqualTo(new string('c', 255));
+        await Assert.That(f.BiosVersion).IsEqualTo(new string('b', 64));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_TextExactlyAtTheLimit_IsKeptWhole()
+    {
+        string payload = Serialize(new SystemInfoRecord
+        {
+            HardwareModel = new string('m', 255),
+            BiosVersion = new string('b', 64),
+        });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.HardwareModel).IsEqualTo(new string('m', 255));
+        await Assert.That(f.BiosVersion).IsEqualTo(new string('b', 64));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_ModelEndingInASurrogatePairAtTheCut_DropsThePairWhole()
+    {
+        // The emoji is two UTF-16 characters; cutting between them would leave a lone high surrogate
+        // that cannot be encoded into the column.
+        string model = new string('m', 254) + "\U0001F600";
+
+        string payload = Serialize(new SystemInfoRecord { HardwareModel = model });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.HardwareModel).IsEqualTo(new string('m', 254));
+    }
+
+    [Test]
+    public async Task TryParseOsVersion_OverLongText_IsCutToTheColumnLengths()
+    {
+        string payload = Serialize(new OsVersionRecord
+        {
+            Name = new string('n', 300),
+            Version = new string('v', 100),
+            Build = new string('k', 300),
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseOsVersion(payload, out OsVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.OsName).IsEqualTo(new string('n', 255));
+        await Assert.That(f.OsVersion).IsEqualTo(new string('v', 64));
+        await Assert.That(f.Kernel).IsEqualTo(new string('k', 255));
+    }
+
+    [Test]
+    public async Task TryParseCpuInfo_OverLongProcessorType_IsCutToTheColumnLength()
+    {
+        string payload = Serialize(new CpuInfoRecord { ProcessorType = new string('t', 100) });
+
+        bool ok = TelemetryPayloadParser.TryParseCpuInfo(payload, out CpuInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.CpuType).IsEqualTo(new string('t', 64));
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_OverLongVersion_IsCutToTheColumnLength()
+    {
+        string payload = Serialize(new AgentVersionRecord { Version = new string('a', 100) });
+
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.AgentVersion).IsEqualTo(new string('a', 64));
+    }
+
+    [Test]
     public async Task TryParseSystemInfo_MissingOptionalFields_YieldsNulls()
     {
         bool ok = TelemetryPayloadParser.TryParseSystemInfo("{}", out SystemInfoFragment? f);
