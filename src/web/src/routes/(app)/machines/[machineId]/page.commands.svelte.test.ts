@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineType, OperatingSystem } from '$lib/api/types';
 import type {
@@ -21,7 +21,8 @@ const { api, signPayload, getLocalKeys } = vi.hoisted(() => ({
 		getSigningKeys: vi.fn(),
 		getCommandHistory: vi.fn(),
 		getMachineAuthorizedKeys: vi.fn(),
-		getMachineStatus: vi.fn()
+		getMachineStatus: vi.fn(),
+		authorizeMachineKey: vi.fn()
 	},
 	signPayload: vi.fn(),
 	getLocalKeys: vi.fn()
@@ -46,6 +47,7 @@ vi.mock('$lib/api/client', () => {
 			getCommandHistory = api.getCommandHistory;
 			getMachineAuthorizedKeys = api.getMachineAuthorizedKeys;
 			getMachineStatus = api.getMachineStatus;
+			authorizeMachineKey = api.authorizeMachineKey;
 		}
 	};
 });
@@ -146,8 +148,8 @@ const accepted: CommandDto = {
 	resultMessage: null
 };
 
-async function openCommandsTab() {
-	render(MachinePage, {
+function renderPage(tier: string = subscription.tier) {
+	return render(MachinePage, {
 		props: {
 			data: {
 				machine,
@@ -155,34 +157,40 @@ async function openCommandsTab() {
 				authorizedKeys: [authorization],
 				machineAlertRules: [],
 				allAlertRules: [],
-				subscription,
+				subscription: { ...subscription, tier },
 				user
 			}
 		}
 	});
+}
+
+async function openCommandsTab() {
+	renderPage();
 
 	await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
 	await screen.findByRole('button', { name: 'Send' });
 }
 
+function arrangeMocks() {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-12T09:30:00.123Z'));
+	for (const fn of Object.values(api)) {
+		fn.mockReset();
+	}
+	api.getSigningKeys.mockResolvedValue({ keys: [serverKey], activeCount: 1, maxKeys: 5 });
+	api.getCommandHistory.mockResolvedValue([]);
+	api.getMachineAuthorizedKeys.mockResolvedValue([authorization]);
+	api.sendCommand.mockResolvedValue(accepted);
+	signPayload.mockReset();
+	signPayload.mockResolvedValue('SIGNATURE');
+	getLocalKeys.mockReset();
+	getLocalKeys.mockResolvedValue([
+		{ id: 3, label: 'Laptop', publicKeyBase64: 'PUBLIC-A', createdAt: '2026-10-01T00:00:00Z' }
+	]);
+}
+
 describe('machine page commands', () => {
-	beforeEach(() => {
-		vi.useFakeTimers({ toFake: ['Date'] });
-		vi.setSystemTime(new Date('2026-10-12T09:30:00.123Z'));
-		for (const fn of Object.values(api)) {
-			fn.mockReset();
-		}
-		api.getSigningKeys.mockResolvedValue({ keys: [serverKey], activeCount: 1, maxKeys: 5 });
-		api.getCommandHistory.mockResolvedValue([]);
-		api.getMachineAuthorizedKeys.mockResolvedValue([authorization]);
-		api.sendCommand.mockResolvedValue(accepted);
-		signPayload.mockReset();
-		signPayload.mockResolvedValue('SIGNATURE');
-		getLocalKeys.mockReset();
-		getLocalKeys.mockResolvedValue([
-			{ id: 3, label: 'Laptop', publicKeyBase64: 'PUBLIC-A', createdAt: '2026-10-01T00:00:00Z' }
-		]);
-	});
+	beforeEach(arrangeMocks);
 
 	afterEach(() => {
 		vi.useRealTimers();
@@ -230,5 +238,71 @@ describe('machine page commands', () => {
 
 		expect(await screen.findByText('Remote commands are not enabled on this machine')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+	});
+});
+
+describe('machine page tabs by tier', () => {
+	const teamNotice = 'Remote commands require a Team subscription.';
+
+	beforeEach(arrangeMocks);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it.each(['Free', 'Pro', 'Team', 'Enterprise'])(
+		'shows the Authorized Keys tab on the %s tier, with its form and its keys and no upgrade notice',
+		async (tier) => {
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByLabelText('Signing Key')).toBeInTheDocument();
+			expect(panel.getByRole('button', { name: 'Authorize' })).toBeInTheDocument();
+			expect(panel.getByRole('cell', { name: 'Laptop' })).toBeInTheDocument();
+			expect(panel.queryByText(teamNotice, { exact: false })).not.toBeInTheDocument();
+			expect(panel.queryByRole('link', { name: 'Upgrade your subscription' })).not.toBeInTheDocument();
+			expect(panel.queryByRole('alert')).not.toBeInTheDocument();
+		}
+	);
+
+	it('authorizes a signing key on the Pro tier', async () => {
+		const secondKey: SigningKeyDto = { ...serverKey, id: 42, label: 'Desk', fingerprint: 'fp-b', publicKey: 'PUBLIC-B' };
+		api.getSigningKeys.mockResolvedValue({ keys: [serverKey, secondKey], activeCount: 2, maxKeys: 5 });
+		api.authorizeMachineKey.mockResolvedValue(undefined);
+		renderPage('Pro');
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+		await screen.findByRole('option', { name: /Desk/ });
+		await fireEvent.change(screen.getByLabelText('Signing Key'), { target: { value: '42' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Authorize' }));
+
+		await waitFor(() => expect(api.authorizeMachineKey).toHaveBeenCalledWith(7, 42));
+	});
+
+	it.each(['Free', 'Pro'])('still shows the Team upgrade notice on the Commands tab on the %s tier', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		const notice = await within(screen.getByRole('tabpanel')).findByRole('alert');
+
+		expect(notice).toHaveTextContent(teamNotice);
+		expect(within(notice).getByRole('link', { name: 'Upgrade your subscription' })).toHaveAttribute(
+			'href',
+			'/settings/billing'
+		);
+		expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+	});
+
+	it.each(['Team', 'Enterprise'])('gives the %s tier the Commands tab form without the notice', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+		expect(screen.queryByText(teamNotice, { exact: false })).not.toBeInTheDocument();
 	});
 });

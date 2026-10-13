@@ -244,6 +244,26 @@ describe('ReportingDialog', () => {
 			expect(within(screen.getByTestId('command-results')).getAllByRole('listitem')).toHaveLength(2);
 		});
 
+		it('shows the message the server gave for a refused command, as it was given', () => {
+			renderDialog({
+				phase: 'done',
+				results: [
+					{
+						machineId: 2,
+						machineName: 'cp-2',
+						commandType: 'k8s_reporter_uninstall',
+						accepted: false,
+						message: 'Remote commands require a Team subscription'
+					}
+				]
+			});
+
+			const item = within(screen.getByTestId('command-results')).getByRole('listitem');
+
+			expect(item).toHaveTextContent('cp-2');
+			expect(item).toHaveTextContent('Remote commands require a Team subscription');
+		});
+
 		it('offers only Close', async () => {
 			const onclose = vi.fn();
 			renderDialog({ phase: 'done', results, onclose });

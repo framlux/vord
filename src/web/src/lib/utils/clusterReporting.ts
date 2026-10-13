@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { ApiError } from '$lib/api/client';
 import type {
 	KubernetesCandidateDto,
 	KubernetesClusterDetailDto,
@@ -61,12 +60,32 @@ export interface CommandResult {
 
 export type MachineAssessment = { key: UsableSigningKey } | { skip: SkipReason };
 
+// Enrolling needs the remote commands capability. Unenrol and uninstall are cleanup, which a host
+// accepts with the capability off, but an uninstall only reaches such a host when it once enrolled:
+// the server wants a candidate row or a report that says so, and the agent wants its reporter record.
+// A machine whose capabilities could not be read (null) is allowed: unknown is not disabled.
+function lacksCapabilityFor(machine: KubernetesEligibleMachineDto, commandType: ReporterCommandType, enrolled: boolean): boolean {
+	if (machine.remoteCommandsEnabled !== false) {
+		return false;
+	}
+
+	return commandType === AGENT_ENROL || (commandType === AGENT_UNINSTALL && enrolled === false);
+}
+
 /**
  * Decides whether a machine can be sent a command and with which of the user's keys. The order of
  * the reasons follows the server's: the key is checked before the pause, and the pause before the
- * capability. A machine whose capabilities could not be read (null) is allowed: unknown is not disabled.
+ * capability. The capability only counts for the commands that need it (see lacksCapabilityFor);
+ * `enrolled` says whether the machine is known to be enrolled and only matters for an uninstall. It
+ * defaults to what the machine's own report says; a caller that knows the machine is a candidate of the
+ * cluster passes true.
  */
-export function assessMachine(machine: KubernetesEligibleMachineDto, keys: UsableSigningKey[]): MachineAssessment {
+export function assessMachine(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[],
+	commandType: ReporterCommandType,
+	enrolled: boolean = machine.enrolled
+): MachineAssessment {
 	const key = keys.find((k) => machine.authorizedSigningKeyIds.includes(k.serverKeyId));
 	if (key === undefined) {
 		return { skip: 'key_not_authorised' };
@@ -74,7 +93,7 @@ export function assessMachine(machine: KubernetesEligibleMachineDto, keys: Usabl
 	if (machine.isPaused) {
 		return { skip: 'paused' };
 	}
-	if (machine.remoteCommandsEnabled === false) {
+	if (lacksCapabilityFor(machine, commandType, enrolled)) {
 		return { skip: 'remote_commands_disabled' };
 	}
 
@@ -87,16 +106,21 @@ export function assessMachine(machine: KubernetesEligibleMachineDto, keys: Usabl
  * authorisation is not judged, because the notice about the missing key says so once; a pause and a
  * disabled capability are facts about the machine and always count.
  */
-export function sendBlock(machine: KubernetesEligibleMachineDto, keys: UsableSigningKey[] | null): SkipReason | null {
+export function sendBlock(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[] | null,
+	commandType: ReporterCommandType,
+	enrolled: boolean = machine.enrolled
+): SkipReason | null {
 	if (keys === null || keys.length === 0) {
 		if (machine.isPaused) {
 			return 'paused';
 		}
 
-		return machine.remoteCommandsEnabled === false ? 'remote_commands_disabled' : null;
+		return lacksCapabilityFor(machine, commandType, enrolled) ? 'remote_commands_disabled' : null;
 	}
 
-	const assessment = assessMachine(machine, keys);
+	const assessment = assessMachine(machine, keys, commandType, enrolled);
 
 	return 'skip' in assessment ? assessment.skip : null;
 }
@@ -127,6 +151,13 @@ function isCandidate(context: ReportingContext, machineId: number): boolean {
 	return context.candidates.some((c) => c.machineId === machineId);
 }
 
+// A machine is known to be enrolled when the cluster lists it as a candidate or its own latest report
+// says so. This is the evidence the server wants before it uninstalls through a host with remote
+// commands off.
+function isEnrolled(context: ReportingContext, machine: KubernetesEligibleMachineDto): boolean {
+	return machine.enrolled || isCandidate(context, machine.machineId);
+}
+
 /** Enrols every eligible machine that is not enrolled yet and can be sent the command. */
 export function planEnable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
@@ -149,7 +180,7 @@ export function planEnrolOne(machine: KubernetesEligibleMachineDto, keys: Usable
 }
 
 function addEnrol(plan: ReportingPlan, machine: KubernetesEligibleMachineDto, keys: UsableSigningKey[]): void {
-	const assessment = assessMachine(machine, keys);
+	const assessment = assessMachine(machine, keys, AGENT_ENROL);
 	if ('key' in assessment) {
 		plan.commands.push(command(machine.machineId, machine.machineName, AGENT_ENROL, assessment.key, machine.online));
 	} else {
@@ -170,11 +201,14 @@ const disableBlockSummary =
  * Explains why reporting cannot be disabled, or returns null when an online eligible machine can be
  * sent the uninstall. The reasons follow the order the command is refused in (key, pause, capability)
  * and offline comes last, so a machine reads as unavailable for the first thing that has to change.
+ * The capability only keeps a machine out when it never enrolled: a host that did accepts the cleanup
+ * with remote commands off.
  */
 export function disableBlock(context: ReportingContext, keys: UsableSigningKey[] | null): DisableBlock | null {
 	const machines: SkippedMachine[] = [];
 	for (const machine of context.eligibleMachines) {
-		const reason = sendBlock(machine, keys) ?? (machine.online ? null : 'offline');
+		const reason =
+			sendBlock(machine, keys, AGENT_UNINSTALL, isEnrolled(context, machine)) ?? (machine.online ? null : 'offline');
 		if (reason === null) {
 			return null;
 		}
@@ -186,9 +220,10 @@ export function disableBlock(context: ReportingContext, keys: UsableSigningKey[]
 }
 
 /**
- * Uninstalls through one online eligible machine, preferring the holder and then a candidate, and
- * unenrols every other online candidate. Without a machine to uninstall through nothing is sent: an
- * unenrol alone would drop the hosts' tokens and leave the cluster objects behind.
+ * Uninstalls through one online eligible machine, preferring the holder, then a machine known to be
+ * enrolled, and unenrols every other online candidate. A machine with remote commands off is only a
+ * target once it has enrolled. Without a machine to uninstall through nothing is sent: an unenrol
+ * alone would drop the hosts' tokens and leave the cluster objects behind.
  */
 export function planDisable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
@@ -196,12 +231,16 @@ export function planDisable(context: ReportingContext, keys: UsableSigningKey[])
 
 	const viable = context.eligibleMachines
 		.filter((m) => m.online)
-		.map((machine) => ({ machine, assessment: assessMachine(machine, keys) }))
+		.map((machine) => ({
+			machine,
+			assessment: assessMachine(machine, keys, AGENT_UNINSTALL, isEnrolled(context, machine))
+		}))
 		.filter((entry): entry is { machine: KubernetesEligibleMachineDto; assessment: { key: UsableSigningKey } } =>
 			'key' in entry.assessment
 		);
-	const rank = (machineId: number): number => (machineId === holder ? 0 : isCandidate(context, machineId) ? 1 : 2);
-	viable.sort((a, b) => rank(a.machine.machineId) - rank(b.machine.machineId));
+	const rank = (machine: KubernetesEligibleMachineDto): number =>
+		machine.machineId === holder ? 0 : isEnrolled(context, machine) ? 1 : 2;
+	viable.sort((a, b) => rank(a.machine) - rank(b.machine));
 	const target = viable.at(0);
 
 	const described = eligibleById(context);
@@ -251,7 +290,11 @@ function addUnenrol(
 	keys: UsableSigningKey[]
 ): void {
 	const assessment: MachineAssessment =
-		described !== undefined ? assessMachine(described, keys) : keys.length > 0 ? { key: keys[0] } : { skip: 'key_not_authorised' };
+		described !== undefined
+			? assessMachine(described, keys, AGENT_UNENROL)
+			: keys.length > 0
+				? { key: keys[0] }
+				: { skip: 'key_not_authorised' };
 
 	if ('key' in assessment) {
 		into.push(command(candidate.machineId, candidate.machineName, AGENT_UNENROL, assessment.key, candidate.online));
@@ -303,7 +346,7 @@ export function planUpdatePermissions(context: ReportingContext, keys: UsableSig
 	considered.sort((a, b) => rank(a.candidate) - rank(b.candidate));
 
 	for (const { candidate, machine } of considered) {
-		const assessment = assessMachine(machine, keys);
+		const assessment = assessMachine(machine, keys, AGENT_ENROL);
 		if ('key' in assessment) {
 			plan.skipped.length = 0;
 			plan.commands.push(command(machine.machineId, machine.machineName, AGENT_ENROL, assessment.key, candidate.online));
@@ -365,16 +408,6 @@ export function describeReporterError(code: string): string {
 	return reporterErrorWording[code] ?? readable.charAt(0).toUpperCase() + readable.slice(1);
 }
 
-// The API client reports every 403 as a bare "Forbidden" without reading the response body, so the
-// server's Team-tier message never reaches this code. A machine admin reaching the send has had the
-// key checked against the machine already, so the subscription is what the refusal most likely means.
-const forbiddenWording =
-	'Forbidden. Remote commands require a Team subscription and a signing key authorised on this host.';
-
 export function describeSendError(error: unknown): string {
-	if (error instanceof ApiError && error.status === 403 && error.message === 'Forbidden') {
-		return forbiddenWording;
-	}
-
 	return error instanceof Error ? error.message : 'Failed to send the command';
 }

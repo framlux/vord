@@ -142,7 +142,7 @@ export class ApiClient {
 				throw new ApiError(401, 'Unauthorized');
 			}
 			if (response.status === 403) {
-				throw new ApiError(403, 'Forbidden');
+				throw new ApiError(403, await ApiClient.forbiddenMessage(response));
 			}
 			if (response.status === 404) {
 				throw new ApiError(404, 'Not found');
@@ -170,6 +170,23 @@ export class ApiClient {
 		}
 
 		throw lastError ?? new ApiError(0, 'Request failed after retries');
+	}
+
+	// A 403 can say why: a subscription gate answers with the tier it needs, and the page shows that
+	// instead of guessing. A refusal with no body, or one that is not an error envelope with a
+	// message, stays a bare "Forbidden".
+	private static async forbiddenMessage(response: Response): Promise<string> {
+		try {
+			const body = (await response.json()) as ApiResponse<unknown> | null;
+			const message = body?.message;
+			if (typeof message === 'string' && message.trim().length > 0) {
+				return message;
+			}
+		} catch {
+			// No body, or not JSON.
+		}
+
+		return 'Forbidden';
 	}
 
 	private async get<T>(path: string): Promise<T> {
