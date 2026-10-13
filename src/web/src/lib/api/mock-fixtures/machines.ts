@@ -9,12 +9,13 @@ import type {
 	MachineAuthorizedKeyDto
 } from '../types';
 import { MachineHealthStatus, OperatingSystem, MachineType } from '../types';
+import { mockFleetMachines } from './dashboard';
 import { daysAgo, hoursAgo, minutesAgo, secondsAgo } from './time';
 
 // Metadata for every machine in the mock fleet. Stays in sync with mockFleetOverview
 // (same ids, names, hostnames, online state). Tuple matches the order rows appear in
 // the dashboard so navigation between dashboard and /machines feels coherent.
-const baseMachines: MachineDto[] = [
+const machineMetadata: Omit<MachineDto, 'healthStatus'>[] = [
 	{
 		id: 1,
 		name: 'web-01',
@@ -322,6 +323,18 @@ const baseMachines: MachineDto[] = [
 		isPaused: false
 	}
 ];
+
+// Health is read from the dashboard fleet rather than written out again, so the machine list, the
+// dashboard and the machine detail show one state per machine, as the server does. A machine the fleet
+// does not list has never reported, which the server shows as Offline.
+const fleetHealthById: ReadonlyMap<number, MachineHealthStatus> = new Map(
+	mockFleetMachines.map((m) => [m.id, m.healthStatus])
+);
+
+const baseMachines: MachineDto[] = machineMetadata.map((machine) => ({
+	...machine,
+	healthStatus: fleetHealthById.get(machine.id) ?? MachineHealthStatus.Offline
+}));
 
 export const mockMachineList: PaginatedResponse<MachineDto> = {
 	items: baseMachines,
@@ -657,9 +670,7 @@ for (const machine of baseMachines) {
 	if (detailMap.has(machine.id)) {
 		continue;
 	}
-	const overview = baseMachines.find((m) => m.id === machine.id);
-	const fallbackHealth = overview?.isOnline ? MachineHealthStatus.Healthy : MachineHealthStatus.Offline;
-	detailMap.set(machine.id, sparseDetail(machine, fallbackHealth));
+	detailMap.set(machine.id, sparseDetail(machine, machine.healthStatus));
 }
 
 export const mockMachineDetailById: ReadonlyMap<number, MachineDetailDto> = detailMap;

@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { MockApiClient } from './mock-client';
 import { ApiError } from './client';
 import { MachineHealthStatus } from './types';
+import { mockFleetMachines, mockMachineById, mockMachineDetailById, mockMachineList } from './mock-fixtures';
 
 // Mock mode is where the assignment picker is worked on without a live tenant, so it has to
 // reproduce the one property the picker depends on: "select all matching" resolves exactly the set
@@ -94,5 +95,26 @@ describe('MockApiClient clusters', () => {
 
 		await expect(attempt).rejects.toBeInstanceOf(ApiError);
 		await expect(attempt).rejects.toMatchObject({ status: 404 });
+	});
+});
+
+// Mock mode is what the demo and the screenshots run on, so the machine list, the dashboard and the
+// machine page have to tell one story per machine, as the server does.
+describe('mock machine fixtures', () => {
+	it('gives every machine in the list the health the dashboard and the machine page show', () => {
+		const fleetHealth = new Map(mockFleetMachines.map((m) => [m.id, m.healthStatus]));
+
+		expect(mockMachineList.items.length).toBeGreaterThan(0);
+		for (const machine of mockMachineList.items) {
+			expect(machine.healthStatus, machine.name).toBe(fleetHealth.get(machine.id));
+			expect(mockMachineDetailById.get(machine.id)?.healthStatus, machine.name).toBe(machine.healthStatus);
+			expect(mockMachineById.get(machine.id)?.healthStatus, machine.name).toBe(machine.healthStatus);
+		}
+	});
+
+	it('derives online from health the way the server does: online exactly when the health is not Offline', () => {
+		for (const machine of mockMachineList.items) {
+			expect(machine.isOnline, machine.name).toBe(machine.healthStatus !== MachineHealthStatus.Offline);
+		}
 	});
 });

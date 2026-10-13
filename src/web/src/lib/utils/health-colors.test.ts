@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { MachineHealthStatus } from '$lib/api/types';
-import { getHealthColors, getVitalColor, getVitalSeverity } from './health-colors';
+import { getHealthColors, getVitalColor, getVitalSeverity, healthBorderClass } from './health-colors';
 
 describe('getHealthColors', () => {
     it('should return healthy colors with label "Healthy" for Healthy status', () => {
@@ -124,5 +124,31 @@ describe('getVitalSeverity', () => {
 
     it('should return "normal" for zero', () => {
         expect(getVitalSeverity(0)).toBe('normal');
+    });
+});
+
+describe('healthBorderClass', () => {
+    it('should colour the border by health for a machine that is not paused', () => {
+        expect(healthBorderClass(MachineHealthStatus.Healthy, false)).toBe('border-l-2 border-l-green-500');
+        expect(healthBorderClass(MachineHealthStatus.Warning, false)).toBe('border-l-2 border-l-amber-500');
+        expect(healthBorderClass(MachineHealthStatus.Critical, false)).toBe('border-l-2 border-l-red-500');
+        expect(healthBorderClass(MachineHealthStatus.Offline, false)).toBe(
+            'border-l-2 border-l-gray-300 dark:border-l-gray-600'
+        );
+    });
+
+    it('should show the paused border whatever health the paused machine froze at', () => {
+        for (const health of [
+            MachineHealthStatus.Healthy,
+            MachineHealthStatus.Warning,
+            MachineHealthStatus.Critical,
+            MachineHealthStatus.Offline
+        ]) {
+            expect(healthBorderClass(health, true)).toBe('border-l-2 border-l-indigo-500');
+        }
+    });
+
+    it('should leave the border transparent for an unknown health value', () => {
+        expect(healthBorderClass(999 as MachineHealthStatus, false)).toBe('border-l-2 border-l-transparent');
     });
 });

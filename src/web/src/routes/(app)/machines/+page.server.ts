@@ -5,6 +5,7 @@
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { redirect, error } from '@sveltejs/kit';
+import { normaliseStatusFilter } from '$lib/utils/machine-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, url }) => {
@@ -14,7 +15,8 @@ export const load: PageServerLoad = async ({ fetch, cookies, url }) => {
 	const search = url.searchParams.get('search') || undefined;
 	const os = url.searchParams.get('os') || undefined;
 	const type = url.searchParams.get('type') || undefined;
-	const status = url.searchParams.get('status') || undefined;
+	// A typed or bookmarked status may be in any case; the page's filter only selects the capitalised option.
+	const status = normaliseStatusFilter(url.searchParams.get('status')) || undefined;
 	const sortBy = url.searchParams.get('sortBy') || undefined;
 	const sortDir = url.searchParams.get('sortDir') || undefined;
 

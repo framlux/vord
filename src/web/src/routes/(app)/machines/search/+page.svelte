@@ -5,9 +5,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { PaginatedResponse, FleetMachineDto, MachineSearchParams } from '$lib/api/types';
-	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient, ApiError } from '$lib/api/client';
 	import { formatRelativeTime } from '$lib/utils/format';
+	import { healthBorderClass } from '$lib/utils/health-colors';
 	import { goto } from '$app/navigation';
 	import { ArrowUpDown, ChevronRight } from 'lucide-svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -96,26 +96,6 @@
 
 	function clearAllFilters() {
 		goto('/machines/search', { keepFocus: true });
-	}
-
-	function healthBorderClass(status: MachineHealthStatus, isPaused: boolean): string {
-		// A paused host's health is frozen, so its border must not claim one.
-		if (isPaused) {
-			return 'border-l-2 border-l-indigo-500';
-		}
-
-		switch (status) {
-			case MachineHealthStatus.Healthy:
-				return 'border-l-2 border-l-green-500';
-			case MachineHealthStatus.Warning:
-				return 'border-l-2 border-l-amber-500';
-			case MachineHealthStatus.Critical:
-				return 'border-l-2 border-l-red-500';
-			case MachineHealthStatus.Offline:
-				return 'border-l-2 border-l-gray-300 dark:border-l-gray-600';
-			default:
-				return 'border-l-2 border-l-transparent';
-		}
 	}
 
 	const activeFilterChips = $derived(buildFilterChips(filters));

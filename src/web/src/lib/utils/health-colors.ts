@@ -75,6 +75,28 @@ export function getHealthColors(status: MachineHealthStatus): HealthColorSet {
 	}
 }
 
+// Left border of a machine row. Shared by every list that shows machines so a row reads the same on
+// the dashboard, the machine list and the fleet search.
+export function healthBorderClass(status: MachineHealthStatus, isPaused: boolean): string {
+	// A paused host's health is frozen, so its border must not claim one.
+	if (isPaused) {
+		return 'border-l-2 border-l-indigo-500';
+	}
+
+	switch (status) {
+		case MachineHealthStatus.Healthy:
+			return 'border-l-2 border-l-green-500';
+		case MachineHealthStatus.Warning:
+			return 'border-l-2 border-l-amber-500';
+		case MachineHealthStatus.Critical:
+			return 'border-l-2 border-l-red-500';
+		case MachineHealthStatus.Offline:
+			return 'border-l-2 border-l-gray-300 dark:border-l-gray-600';
+		default:
+			return 'border-l-2 border-l-transparent';
+	}
+}
+
 export function getVitalColor(percent: number): string {
 	if (percent >= 95) return '#FF6467';
 	if (percent >= 80) return '#FBBF24';
