@@ -62,6 +62,18 @@ public sealed class MachineDto
     public bool IsOnline { get; set; }
 
     /// <summary>
+    /// The machine's swept health status, the same value the detail page and the dashboard show.
+    /// Bad health overrides online: an online machine can be Critical. A machine the server has
+    /// never heard from reads as Offline. A paused machine keeps its frozen value here, but
+    /// <see cref="IsPaused"/> takes precedence when it is displayed.
+    /// </summary>
+    /// <remarks>
+    /// Required so that every producer of this DTO has to say what the health is, rather than
+    /// silently reporting the enum's zero value, Healthy.
+    /// </remarks>
+    public required MachineHealthStatus HealthStatus { get; set; }
+
+    /// <summary>
     /// Whether the machine is paused for exceeding the tenant's machine limit. A paused machine is
     /// shown as paused in place of its online state.
     /// </summary>

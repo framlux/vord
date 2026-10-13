@@ -946,6 +946,34 @@ public class MachineStateServiceTests
     }
 
     [Test]
+    public async Task GetFleetOverviewAsync_OnlineStatusFilter_ReturnsEveryActiveHealthButOffline()
+    {
+        // Shares its meaning with the machine list: any swept health but Offline, and never a paused host.
+        using TestDatabaseFactory dbFactory = new();
+        List<long> ids = await SeedFleet(dbFactory, 0, 1, 2, 3, 2);
+        MachineStateService service = ServiceWith(dbFactory, TestQuotaPause.With(QuotaCutoff.After(ids[3]), 1));
+
+        PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(1, 25, 1, null, "online", "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.Machines.Select(m => m.Id).Order().ToList()).IsEquivalentTo(new List<long> { ids[0], ids[1], ids[2] });
+        await Assert.That(result.TotalCount).IsEqualTo(3);
+    }
+
+    [Test]
+    [Arguments("all")]
+    [Arguments("degraded")]
+    public async Task GetFleetOverviewAsync_UnrecognisedStatusFilter_AppliesNoFilter(string status)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedFleet(dbFactory, 0, 1, 2, 3);
+        MachineStateService service = ServiceWith(dbFactory, TestQuotaPause.Nothing());
+
+        PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(1, 25, 1, null, status, "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(4);
+    }
+
+    [Test]
     public async Task GetFleetOverviewAsync_PausedStatusFilter_ReturnsOnlyPausedMachines()
     {
         using TestDatabaseFactory dbFactory = new();

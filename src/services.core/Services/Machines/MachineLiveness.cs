@@ -30,13 +30,29 @@ public static class MachineLiveness
     }
 
     /// <summary>
+    /// The swept health of a machine, treating an absent summary row as offline: a machine that has
+    /// never reported has not been heard from, which is what Offline means.
+    /// </summary>
+    /// <param name="summary">The machine's summary row, or null when it has none.</param>
+    /// <returns>The row's swept health, or Offline when the machine has no row.</returns>
+    public static MachineHealthStatus Health(MachineStateSummary? summary)
+    {
+        if (summary is null)
+        {
+            return MachineHealthStatus.Offline;
+        }
+
+        return (MachineHealthStatus)summary.HealthStatus;
+    }
+
+    /// <summary>
     /// Whether a machine is online, treating an absent summary row as offline.
     /// </summary>
     /// <param name="summary">The machine's summary row, or null when it has none.</param>
     /// <returns>True when the row exists and the sweep has not declared it offline.</returns>
     public static bool IsOnline(MachineStateSummary? summary)
     {
-        return (summary is not null) && IsOnline(summary.HealthStatus);
+        return IsOnline((short)Health(summary));
     }
 
     /// <summary>

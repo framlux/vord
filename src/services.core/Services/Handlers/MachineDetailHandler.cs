@@ -90,6 +90,7 @@ public sealed class MachineDetailHandler
             SerialNumber = machine.SerialNumber,
             AssetTag = machine.AssetTagNumber,
             IsOnline = isOnline,
+            HealthStatus = MachineLiveness.Health(summary),
             IsPaused = cutoff.IsPaused(machine.Id),
             LastPing = lastPing,
             RegisteredOn = machine.RegisteredOn,
@@ -137,9 +138,7 @@ public sealed class MachineDetailHandler
         // status that disagrees with the list the user reached the machine from. A machine with
         // no summary row has never been heard from, which the fleet query treats as offline.
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
-        MachineHealthStatus healthStatus = summary is not null
-            ? (MachineHealthStatus)summary.HealthStatus
-            : MachineHealthStatus.Offline;
+        MachineHealthStatus healthStatus = MachineLiveness.Health(summary);
         bool isOnline = MachineLiveness.IsOnline(summary);
         DateTimeOffset? lastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt);
         QuotaCutoff cutoff = await QuotaCutoffDisplay.GetOrNoneAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId.Value, ct);
