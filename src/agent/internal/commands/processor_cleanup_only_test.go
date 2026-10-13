@@ -49,6 +49,11 @@ type cleanupOnlyFixture struct {
 	nonceChecks  int
 	recordChecks int
 	recordHeld   bool
+
+	// copiedHeld is whether the host holds a record written on another host, and copiedChecks how often that was
+	// asked.
+	copiedHeld   bool
+	copiedChecks int
 }
 
 // newCleanupOnlyFixture builds a processor whose executors are all one counting executor. The record check reads
@@ -90,6 +95,11 @@ func newCleanupOnlyFixture(t *testing.T, allowAll bool, recordHeld bool) *cleanu
 			f.recordChecks++
 
 			return f.recordHeld
+		},
+		CopiedRecordPresent: func() bool {
+			f.copiedChecks++
+
+			return f.copiedHeld
 		},
 	})
 
@@ -359,4 +369,71 @@ func TestProcess_RemoteCommandsOn_IgnoresTheRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Intent: A host with remote commands off whose only record was written on another host takes the unenrol, which
+// for such a record removes local files and nothing in the cluster. Uninstall, enrol and every other command stay
+// refused before any work: the host never enrolled, so its opt-out holds.
+func TestProcess_RemoteCommandsOff_WithOnlyACopiedRecord_RunsUnenrolAndRefusesTheRest(t *testing.T) {
+	f := newCleanupOnlyFixture(t, false, false)
+	f.copiedHeld = true
+
+	f.process(CommandK8sReporterUnenrol)
+	f.requireProcessed()
+
+	for _, commandType := range []CommandType{CommandK8sReporterUninstall, CommandK8sReporterEnrol, CommandReboot} {
+		t.Run(string(commandType), func(t *testing.T) {
+			g := newCleanupOnlyFixture(t, false, false)
+			g.copiedHeld = true
+
+			g.process(commandType)
+
+			g.requireRefusedBeforeAnyWork()
+		})
+	}
+}
+
+// Intent: An own record admits both cleanup commands without asking about copied ones, and the copied record is
+// asked about only when the own record has not already settled the question.
+func TestProcess_RemoteCommandsOff_CopiedRecordIsConsultedOnlyWhenNeeded(t *testing.T) {
+	own := newCleanupOnlyFixture(t, false, true)
+	own.copiedHeld = true
+
+	own.process(CommandK8sReporterUninstall)
+	own.requireProcessed()
+
+	if own.copiedChecks != 0 {
+		t.Errorf("the copied record was checked %d times although an own record admitted the command", own.copiedChecks)
+	}
+
+	flagOn := newCleanupOnlyFixture(t, true, false)
+
+	flagOn.process(CommandK8sReporterUninstall)
+	flagOn.requireProcessed()
+
+	if (flagOn.recordChecks != 0) || (flagOn.copiedChecks != 0) {
+		t.Errorf("records were checked (%d own, %d copied) although remote commands are on", flagOn.recordChecks, flagOn.copiedChecks)
+	}
+}
+
+// Intent: A host with no record of either kind refuses unenrol, and a processor without a copied-record check
+// fails closed for it.
+func TestProcess_RemoteCommandsOff_WithNoCopiedRecordOrNoCheck_RefusesUnenrol(t *testing.T) {
+	none := newCleanupOnlyFixture(t, false, false)
+
+	none.process(CommandK8sReporterUnenrol)
+	none.requireRefusedBeforeAnyWork()
+
+	if none.copiedChecks != 1 {
+		t.Errorf("the copied record was checked %d times, want once", none.copiedChecks)
+	}
+
+	unchecked := newCleanupOnlyFixture(t, false, false)
+	unchecked.copiedHeld = true
+	unchecked.processor = newTestProcessorWithOptions(unchecked.processor.handler, unchecked.store, unchecked.ack, cleanupTestDestructiveDelay, ProcessorOptions{
+		LocalRecordPresent: func() bool { return false },
+	})
+
+	unchecked.process(CommandK8sReporterUnenrol)
+	unchecked.requireRefusedBeforeAnyWork()
 }

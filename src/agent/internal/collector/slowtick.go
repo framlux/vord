@@ -17,6 +17,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/machineid"
 	"github.com/framlux/vord/internal/pause"
 	"github.com/framlux/vord/internal/state"
 )
@@ -233,7 +234,7 @@ func (st *SlowTick) collectSystemInfo(ctx context.Context, cpuinfoData string, c
 
 	payload := systemInfoPayload{
 		Hostname:         hostname,
-		UUID:             readFileTrimmed("/etc/machine-id"),
+		UUID:             machineid.Read("/"),
 		CPUType:          runtime.GOARCH,
 		CPUBrand:         cpuBrand,
 		CPUPhysicalCores: physicalCores,

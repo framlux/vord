@@ -81,19 +81,10 @@ func pendingPath(dataDir string) string {
 	return filepath.Join(dataDir, PendingFileName)
 }
 
-// uninitializedMachineID is what systemd leaves in /etc/machine-id until first boot has assigned one. Every
-// image carries it, so it says nothing about which host this is.
-const uninitializedMachineID = "uninitialized"
-
 // hostMachineID returns this host's machine id, read under root, or "" when the host has none that tells it apart
 // from another: the file is missing, unreadable, empty or still uninitialized.
 func hostMachineID(root string) string {
-	id := machineid.Read(root)
-	if id == uninitializedMachineID {
-		return ""
-	}
-
-	return id
+	return machineid.Read(root)
 }
 
 // copiedFromAnotherHost reports whether a record that names recorded as the machine id of the host it was written
@@ -107,24 +98,57 @@ func copiedFromAnotherHost(recorded string, host string) bool {
 // LocalRecordPresent reports whether this host holds a local record of having enrolled as a reporter candidate.
 // It is how the agent tells a host that still has cluster objects of its own to clean up from one that does not:
 // with remote commands off, only a host that holds a record polls for and accepts the cleanup commands, because
-// every such host had remote commands on when it enrolled. This is the one place that decides what counts as a
-// record, so a caller never looks at the files itself. The state file counts, and so does the pending file an enrol
-// leaves when it created a token Secret and never wrote the state file. A record that cannot be loaded still
+// every such host had remote commands on when it enrolled. The state file counts, and so does the pending file an
+// enrol leaves when it created a token Secret and never wrote the state file. A record that cannot be loaded still
 // counts, since the host enrolled once and the cluster may hold what it created, but one written on another host
-// does not: that host enrolled, not this one.
+// does not: that host enrolled, not this one. See CopiedRecordPresent for those.
 func LocalRecordPresent(dataDir string) bool {
 	return localRecordPresent(dataDir, hostMachineID("/"))
 }
 
+// CopiedRecordPresent reports whether this host holds a record that was written on another host, which is what a
+// disk image copied from an enrolled host carries. Such a record gives the host nothing in the cluster to clean
+// up, since the Secret it names is that host's, but unenrolling removes the file and ends the error the host
+// reports, and that touches nothing but local files. So with remote commands off a host that holds one polls for
+// and accepts the unenrol command, and still refuses uninstall, which needs a record of the host's own.
+func CopiedRecordPresent(dataDir string) bool {
+	return copiedRecordPresent(dataDir, hostMachineID("/"))
+}
+
 // localRecordPresent is LocalRecordPresent for a host whose machine id is host.
 func localRecordPresent(dataDir string, host string) bool {
+	own, _ := recordsPresent(dataDir, host)
+
+	return own
+}
+
+// copiedRecordPresent is CopiedRecordPresent for a host whose machine id is host.
+func copiedRecordPresent(dataDir string, host string) bool {
+	_, copied := recordsPresent(dataDir, host)
+
+	return copied
+}
+
+// recordsPresent is the one place that decides what a record is. It reports whether the state file or the pending
+// file is there and was written by a host with this machine id (or by one whose id cannot be compared), and whether
+// either is there and was written on another host. A record that cannot be loaded is judged by whatever its
+// host_machine_id says, and counts as the host's own when it says nothing.
+func recordsPresent(dataDir string, host string) (bool, bool) {
+	own, copied := false, false
+
 	for _, path := range []string{statePath(dataDir), pendingPath(dataDir)} {
-		if regularFileExists(path) && (copiedFromAnotherHost(recordedHostMachineID(path), host) == false) {
-			return true
+		if regularFileExists(path) == false {
+			continue
+		}
+
+		if copiedFromAnotherHost(recordedHostMachineID(path), host) {
+			copied = true
+		} else {
+			own = true
 		}
 	}
 
-	return false
+	return own, copied
 }
 
 // stateFileExists reports whether the state file is there, usable or not. Only a regular file counts, and any
@@ -376,14 +400,20 @@ func sweepStaleTempFiles(dataDir string, now time.Time) {
 	}
 }
 
-// syncDirectory flushes the directory entry of a rename. It is best effort: the file itself is already synced.
+// syncDirectory flushes the directory entry of a rename. It is best effort, since the file itself is already
+// synced and some filesystems cannot sync a directory, but a failure is logged so it does not go unseen.
 func syncDirectory(dir string) {
 	handle, err := os.Open(dir)
 	if err != nil {
+		slog.Warn("could not open the data directory to sync it after writing a reporter record", "error", err)
+
 		return
 	}
 
-	_ = handle.Sync()
+	if err := handle.Sync(); err != nil {
+		slog.Warn("could not sync the data directory after writing a reporter record", "error", err)
+	}
+
 	_ = handle.Close()
 }
 

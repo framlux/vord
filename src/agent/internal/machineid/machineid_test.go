@@ -43,6 +43,16 @@ func TestRead_TrimsTheFile(t *testing.T) {
 	}
 }
 
+// Intent: A machine id that systemd has not assigned yet is the same string on every image, so it is no id.
+func TestRead_Uninitialized_IsEmpty(t *testing.T) {
+	root := t.TempDir()
+	writeMachineID(t, root, "uninitialized\n")
+
+	if got := Read(root); got != "" {
+		t.Errorf("Read = %q, want empty", got)
+	}
+}
+
 // Intent: A file that is missing or empty gives no id rather than an error, so a container without the file works.
 func TestRead_MissingOrEmptyFile_IsEmpty(t *testing.T) {
 	if got := Read(t.TempDir()); got != "" {

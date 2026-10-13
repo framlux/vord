@@ -458,29 +458,39 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 }
 
 // newCommandAdmission decides which commands this host takes and when it asks for them, from the one fact that
-// settles both: whether remote commands are allowed. The processor options and the poll gate share a single
-// reporter-record check on the agent's data directory, so what the poll fetches and what the processor accepts
+// settles both: whether remote commands are allowed. The processor options and the poll gate share the same two
+// reporter-record checks on the agent's data directory, so what the poll fetches and what the processor accepts
 // cannot disagree.
 func newCommandAdmission(allowRemoteCommands bool, dataDir string) (commands.ProcessorOptions, func() bool) {
-	localRecordPresent := func() bool { return kubereporter.LocalRecordPresent(dataDir) }
+	return commandAdmissionFrom(
+		allowRemoteCommands,
+		func() bool { return kubereporter.LocalRecordPresent(dataDir) },
+		func() bool { return kubereporter.CopiedRecordPresent(dataDir) },
+	)
+}
 
+// commandAdmissionFrom is newCommandAdmission for the given record checks: whether the host holds a reporter
+// record of its own, and whether it holds one that was written on another host.
+func commandAdmissionFrom(allowRemoteCommands bool, localRecordPresent func() bool, copiedRecordPresent func() bool) (commands.ProcessorOptions, func() bool) {
 	options := commands.ProcessorOptions{
-		AllowAll:           allowRemoteCommands,
-		LocalRecordPresent: localRecordPresent,
+		AllowAll:            allowRemoteCommands,
+		LocalRecordPresent:  localRecordPresent,
+		CopiedRecordPresent: copiedRecordPresent,
 	}
 
-	return options, commandPollGate(allowRemoteCommands, localRecordPresent)
+	return options, commandPollGate(allowRemoteCommands, localRecordPresent, copiedRecordPresent)
 }
 
 // commandPollGate answers, on each tick, whether this host should ask the server for commands. A host that
 // allows remote commands always should. One that does not accepts only the cleanup commands, and only while it
-// holds a reporter record, so it asks only then. The record is read on every call, which is a file stat.
-func commandPollGate(allowRemoteCommands bool, localRecordPresent func() bool) func() bool {
+// holds a reporter record of its own or one copied from another host (which it can only unenrol), so it asks only
+// then. The records are read on every call, which is a file stat each.
+func commandPollGate(allowRemoteCommands bool, localRecordPresent func() bool, copiedRecordPresent func() bool) func() bool {
 	if allowRemoteCommands {
 		return func() bool { return true }
 	}
 
-	return localRecordPresent
+	return func() bool { return localRecordPresent() || copiedRecordPresent() }
 }
 
 func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter, paused func() bool, shouldPoll func() bool) {

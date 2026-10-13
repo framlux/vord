@@ -633,3 +633,88 @@ func TestPending_Save_SweepsStaleTemporaryFiles(t *testing.T) {
 		t.Error("savePending left a stale temporary file")
 	}
 }
+
+// Intent: A record written on another host is told apart from the host's own, whichever file holds it, so the
+// agent can unenrol a clone without taking it for an enrolled host. A host that holds both kinds has its own, and
+// a record that cannot be compared is the host's own.
+func TestRecordsPresent_SeparatesOwnFromCopiedRecords(t *testing.T) {
+	state := func(host string) string { return `{"host_machine_id":"` + host + `"}` }
+	pending := func(host string) string {
+		return `{"instance_id":"0123456789abcdef","host_machine_id":"` + host + `"}`
+	}
+
+	cases := []struct {
+		name             string
+		state, pending   string
+		host             string
+		wantOwn, wantCop bool
+	}{
+		{"nothing", "", "", hostMachineIDValue, false, false},
+		{"own state", state(hostMachineIDValue), "", hostMachineIDValue, true, false},
+		{"copied state", state(otherHostMachineID), "", hostMachineIDValue, false, true},
+		{"copied pending", "", pending(otherHostMachineID), hostMachineIDValue, false, true},
+		{"copied state, own pending", state(otherHostMachineID), pending(hostMachineIDValue), hostMachineIDValue, true, true},
+		{"damaged copied state", `{"instance_id":"0123456789abcdef","host_machine_id":"` + otherHostMachineID + `"}`, "", hostMachineIDValue, false, true},
+		{"state that says nothing about its host", `not json`, "", hostMachineIDValue, true, false},
+		{"another host's id, this host has none", state(otherHostMachineID), "", "", true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			if tc.state != "" {
+				if err := os.WriteFile(filepath.Join(dir, StateFileName), []byte(tc.state), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if tc.pending != "" {
+				if err := os.WriteFile(filepath.Join(dir, PendingFileName), []byte(tc.pending), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := localRecordPresent(dir, tc.host); got != tc.wantOwn {
+				t.Errorf("localRecordPresent = %v, want %v", got, tc.wantOwn)
+			}
+
+			if got := copiedRecordPresent(dir, tc.host); got != tc.wantCop {
+				t.Errorf("copiedRecordPresent = %v, want %v", got, tc.wantCop)
+			}
+		})
+	}
+}
+
+// Intent: The exported check reads the real host's machine id, so it is only exercised with a record that names
+// none, which is never a copy on any machine, and with a directory that holds nothing.
+func TestCopiedRecordPresent_ExportedCheckIgnoresRecordsThatNameNoHost(t *testing.T) {
+	dir := t.TempDir()
+
+	if CopiedRecordPresent(dir) {
+		t.Error("an empty data directory reported a copied record")
+	}
+
+	state := sampleState()
+	state.HostMachineID = ""
+
+	if err := SaveState(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	if CopiedRecordPresent(dir) {
+		t.Error("a state file that names no host was taken for a copy")
+	}
+}
+
+// Intent: A directory that cannot be synced after a record is written is not silent, although the write still
+// succeeds: the pending file is what makes a crash after the Secret create recoverable.
+func TestSyncDirectory_FailureIsLogged(t *testing.T) {
+	logs := captureLogs(t)
+
+	syncDirectory(filepath.Join(t.TempDir(), "missing"))
+
+	if strings.Contains(logs.String(), "could not open the data directory") == false {
+		t.Errorf("no warning was logged for a directory that could not be opened: %s", logs.String())
+	}
+}

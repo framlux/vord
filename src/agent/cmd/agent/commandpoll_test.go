@@ -64,6 +64,10 @@ func TestCommandPollGate_RemoteCommandsOn_AlwaysPollsWithoutTheRecordCheck(t *te
 		checks++
 
 		return false
+	}, func() bool {
+		checks++
+
+		return false
 	})
 
 	if gate() == false {
@@ -79,7 +83,7 @@ func TestCommandPollGate_RemoteCommandsOn_AlwaysPollsWithoutTheRecordCheck(t *te
 // on every tick so a cleanup that removes it ends the polling.
 func TestCommandPollGate_RemoteCommandsOff_FollowsTheRecord(t *testing.T) {
 	held := true
-	gate := commandPollGate(false, func() bool { return held })
+	gate := commandPollGate(false, func() bool { return held }, never)
 
 	if gate() == false {
 		t.Error("a host holding a reporter record did not poll")
@@ -164,10 +168,10 @@ func TestCommandPollTick_RemoteCommandsOff_RebootIsRejectedNotExecuted(t *testin
 		&storeNonceAdapter{store: store},
 		&grpcAckAdapter{client: client},
 		time.Hour,
-		commands.ProcessorOptions{AllowAll: false, LocalRecordPresent: always},
+		commands.ProcessorOptions{AllowAll: false, LocalRecordPresent: always, CopiedRecordPresent: never},
 	)
 
-	commandPollTick(context.Background(), client, processor, newPollTestState(), never, commandPollGate(false, always))
+	commandPollTick(context.Background(), client, processor, newPollTestState(), never, commandPollGate(false, always, never))
 
 	if len(client.polls) != 1 {
 		t.Fatalf("the server was polled %d times, want 1", len(client.polls))
@@ -379,5 +383,91 @@ func TestCommandAdmission_RemoteCommandsOff_WithOnlyAPendingFile_AdmitsCleanupOn
 
 	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageRefused {
 		t.Errorf("uninstall answered %q after the pending file was removed, want it refused", got)
+	}
+}
+
+// Intent: A host with remote commands off polls while it holds a record written on another host too, because it
+// can unenrol it, and stops when neither kind of record is left.
+func TestCommandPollGate_RemoteCommandsOff_PollsForACopiedRecord(t *testing.T) {
+	own, copied := false, true
+	gate := commandPollGate(false, func() bool { return own }, func() bool { return copied })
+
+	if gate() == false {
+		t.Error("a host holding only a copied record did not poll")
+	}
+
+	copied = false
+
+	if gate() {
+		t.Error("a host holding no record kept polling")
+	}
+
+	own = true
+
+	if gate() == false {
+		t.Error("a host holding its own record did not poll")
+	}
+}
+
+// newAdmissionHostFrom builds an admission host whose two record checks are answered by the test.
+func newAdmissionHostFrom(t *testing.T, allowRemoteCommands bool, own *bool, copied *bool) *admissionHost {
+	t.Helper()
+
+	h := &admissionHost{t: t, dataDir: t.TempDir(), client: &fakeConfigurationClient{}}
+	h.options, h.shouldPoll = commandAdmissionFrom(allowRemoteCommands, func() bool { return *own }, func() bool { return *copied })
+	h.processor = commands.NewProcessor(
+		commands.NewHandler(commands.HandlerDeps{}),
+		&storeNonceAdapter{store: newTestStore(t)},
+		&grpcAckAdapter{client: h.client},
+		time.Hour,
+		h.options,
+	)
+
+	return h
+}
+
+// Intent: A clone with remote commands off, whose only record was written on another host, can be unenrolled,
+// because that removes local files and nothing in the cluster, but it never takes an uninstall: it never
+// enrolled, so its opt-out holds and its admin credential is not used on its behalf. It polls to receive the
+// unenrol, and every other command is refused as before.
+func TestCommandAdmission_RemoteCommandsOff_WithOnlyACopiedRecord_AdmitsUnenrolOnly(t *testing.T) {
+	own, copied := false, true
+	h := newAdmissionHostFrom(t, false, &own, &copied)
+
+	if h.shouldPoll() == false {
+		t.Fatal("a host with remote commands off and a copied record did not poll")
+	}
+
+	want := map[commands.CommandType]string{
+		commands.CommandK8sReporterUnenrol:   messageAdmitted,
+		commands.CommandK8sReporterUninstall: messageRefused,
+		commands.CommandK8sReporterEnrol:     messageRefused,
+		commands.CommandReboot:               messageRefused,
+		commands.CommandKillProcess:          messageRefused,
+	}
+	for commandType, message := range want {
+		if got := h.answerTo(commandType); got != message {
+			t.Errorf("%s answered %q, want %q", commandType, got, message)
+		}
+	}
+
+	copied = false
+
+	if h.shouldPoll() {
+		t.Error("the host kept polling after the copied record was removed")
+	}
+
+	if got := h.answerTo(commands.CommandK8sReporterUnenrol); got != messageRefused {
+		t.Errorf("unenrol answered %q after the copied record was removed, want it refused", got)
+	}
+}
+
+// Intent: A copied record beside the host's own changes nothing for the own record: uninstall is admitted.
+func TestCommandAdmission_RemoteCommandsOff_WithAnOwnRecordBesideACopiedOne_AdmitsUninstall(t *testing.T) {
+	own, copied := true, true
+	h := newAdmissionHostFrom(t, false, &own, &copied)
+
+	if got := h.answerTo(commands.CommandK8sReporterUninstall); got != messageAdmitted {
+		t.Errorf("uninstall answered %q, want it admitted", got)
 	}
 }
