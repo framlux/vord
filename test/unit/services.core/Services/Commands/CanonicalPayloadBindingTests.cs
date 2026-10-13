@@ -162,6 +162,20 @@ public sealed class CanonicalPayloadBindingTests
     }
 
     [Test]
+    [Arguments("""{"a":"\u0000"}""")]
+    [Arguments("""{"\u0000":"x"}""")]
+    public async Task Matches_NulCharacterInSignedOrRequestedParams_IsFalse(string paramsJson)
+    {
+        // Intent: the same params shape judges the signed bytes and the request, and neither may hold a
+        // NUL, which the stored jsonb column cannot represent. Both sides agreeing on one is not a match.
+        string payload = TestCanonicalPayload.Build("kill_process", paramsJson);
+
+        await Assert.That(CanonicalPayloadBinding.Matches(payload, "kill_process", paramsJson)).IsFalse();
+        await Assert.That(CanonicalPayloadBinding.Matches(payload, "kill_process", null)).IsFalse();
+        await Assert.That(CanonicalPayloadBinding.Matches(TestCanonicalPayload.Build("kill_process"), "kill_process", paramsJson)).IsFalse();
+    }
+
+    [Test]
     public async Task Matches_OtherKeysAreLeftToTheAgent()
     {
         // Intent: the server compares only the two fields that decide whether a command may be sent. The id,

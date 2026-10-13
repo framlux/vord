@@ -1203,6 +1203,8 @@ public sealed class CommandEndpointTests
     [Arguments("""{"pid":"1","pid":"2"}""")]
     [Arguments("""{"\ud800":"x"}""")]
     [Arguments("""{"a":"\ud800"}""")]
+    [Arguments("""{"session_id":"\u0000"}""")]
+    [Arguments("""{"\u0000":"x"}""")]
     public async Task SubmitCommand_ParamsThatAreNotAnObjectOfStrings_Returns400WithTheParamsMessage(string commandParams)
     {
         // Intent: the agent refuses signed params that are not strings, so the server refuses the request

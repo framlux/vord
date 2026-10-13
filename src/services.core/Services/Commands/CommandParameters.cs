@@ -8,15 +8,21 @@ namespace Framlux.FleetManagement.Services.Core.Commands;
 
 /// <summary>
 /// The one definition of a remote command's parameters: a JSON object whose every value is a string and
-/// whose keys are unique. It is the shape the agent reads from a signed payload, which refuses any other,
-/// so the request validator, the payload comparison and the delivery path all judge it the same way.
+/// whose keys are unique, with no key or value containing a NUL character. It is the shape the agent reads
+/// from a signed payload, which refuses any other, so the request validator, the payload comparison and the
+/// delivery path all judge it the same way. A NUL is refused because the parameters are stored in a
+/// <c>jsonb</c> column, which cannot hold the escape <c>\u0000</c>: accepting it here would turn a malformed
+/// request into a server error when the row is inserted.
 /// </summary>
 public static class CommandParameters
 {
+    private const char NulCharacter = '\0';
+
     /// <summary>
     /// Reads command parameters from JSON text. Null and blank text mean no parameters and read as an empty
     /// map. Anything that is not an object of string values, including a duplicate key (which a lenient
-    /// reader would resolve by silently keeping one of the two), does not parse.
+    /// reader would resolve by silently keeping one of the two) and a key or value containing a NUL
+    /// character, does not parse.
     /// </summary>
     /// <param name="json">The JSON-encoded parameters as submitted, or null.</param>
     /// <param name="parameters">The parameters keyed ordinally, or an empty map when the text does not parse.</param>
@@ -48,7 +54,8 @@ public static class CommandParameters
     /// Reads command parameters from a parsed JSON value, with the same rules as <see cref="TryParse"/>
     /// except that the value must be present: only an object of unique string values reads. A key or value
     /// that parses as JSON but cannot be decoded into a string, such as a lone surrogate escape, is not a
-    /// string value, so it reads as a refusal instead of an exception.
+    /// string value, so it reads as a refusal instead of an exception. A key or value containing a NUL
+    /// character is refused too, because the stored column cannot hold it.
     /// </summary>
     /// <param name="element">The JSON value to read.</param>
     /// <param name="parameters">The parameters keyed ordinally, or an empty map when the value does not read.</param>
@@ -62,7 +69,16 @@ public static class CommandParameters
             {
                 foreach (JsonProperty property in element.EnumerateObject())
                 {
-                    if ((property.Value.ValueKind != JsonValueKind.String) || (result.TryAdd(property.Name, property.Value.GetString()!) == false))
+                    if (property.Value.ValueKind != JsonValueKind.String)
+                    {
+                        parameters = [];
+
+                        return false;
+                    }
+
+                    string value = property.Value.GetString()!;
+                    bool storable = (property.Name.Contains(NulCharacter) == false) && (value.Contains(NulCharacter) == false);
+                    if ((storable == false) || (result.TryAdd(property.Name, value) == false))
                     {
                         parameters = [];
 

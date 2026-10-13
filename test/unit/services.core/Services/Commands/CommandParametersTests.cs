@@ -98,6 +98,38 @@ public sealed class CommandParametersTests
     }
 
     [Test]
+    [Arguments("""{"a":"\u0000"}""")]
+    [Arguments("""{"a":"x\u0000y"}""")]
+    [Arguments("""{"\u0000":"x"}""")]
+    [Arguments("""{"a\u0000":"x"}""")]
+    [Arguments("""{"ok":"1","a":"\u0000"}""")]
+    public async Task TryParse_NulCharacterInAKeyOrAValue_IsRefused(string json)
+    {
+        // Intent: the stored column is jsonb, which cannot hold the escape for NUL. Such text is valid JSON
+        // and decodes into a string, so without this refusal it would pass validation and fail the insert as
+        // a server error instead of the request being refused as malformed.
+        bool parsed = CommandParameters.TryParse(json, out Dictionary<string, string> parameters);
+
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(parameters.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryParse_OtherControlCharactersAndEscapes_AreStillRead()
+    {
+        // Intent: only NUL is refused. The column accepts every other character JSON can carry, so the
+        // refusal must not widen into rejecting text a user could legitimately send.
+        bool parsed = CommandParameters.TryParse("""{"tab":"a\tb","bell":"\u0007","one":"\u0001","nl":"x\ny","slash":"a\\b"}""", out Dictionary<string, string> parameters);
+
+        await Assert.That(parsed).IsTrue();
+        await Assert.That(parameters["tab"]).IsEqualTo("a\tb");
+        await Assert.That(parameters["bell"]).IsEqualTo("\a");
+        await Assert.That(parameters["one"]).IsEqualTo("\u0001");
+        await Assert.That(parameters["nl"]).IsEqualTo("x\ny");
+        await Assert.That(parameters["slash"]).IsEqualTo("a\\b");
+    }
+
+    [Test]
     public async Task TryParse_NestingBeyondTheParsersDepth_IsRefusedWithoutThrowing()
     {
         string json = new string('[', 200) + new string(']', 200);

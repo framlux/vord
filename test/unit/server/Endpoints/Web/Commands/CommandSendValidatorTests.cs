@@ -254,6 +254,8 @@ public sealed class CommandSendValidatorTests
     [Arguments("""{"a":"b"}{"c":"d"}""")]
     [Arguments("""{"\ud800":"x"}""")]
     [Arguments("""{"a":"\ud800"}""")]
+    [Arguments("""{"a":"\u0000"}""")]
+    [Arguments("""{"\u0000":"x"}""")]
     public async Task ParamsThatAreNotAnObjectOfStrings_FailValidationWithTheParamsMessage(string commandParams)
     {
         // Intent: the agent refuses a signed params value that is not a string, so the server refuses it
