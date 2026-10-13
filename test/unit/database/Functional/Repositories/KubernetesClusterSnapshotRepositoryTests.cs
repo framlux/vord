@@ -163,6 +163,44 @@ public class KubernetesClusterSnapshotRepositoryTests
             110);
     }
 
+    /// <summary>
+    /// The most parameters one statement may carry while a snapshot is applied: the repository puts at
+    /// most 500 values in a list, and the statements around a list add only a few scalar parameters.
+    /// </summary>
+    private const int LargestStatementParameters = 520;
+
+    /// <summary>
+    /// The longest statement text allowed while a snapshot is applied. LinqToDB writes a list of names
+    /// into the text, so a list of 500 of the 11-character names these tests use makes a statement of
+    /// about 7,100 characters, while the whole name list of even the smallest large snapshot (1,001
+    /// names) makes one of over 13,000.
+    /// </summary>
+    private const int LargestStatementLength = 8_000;
+
+    private static async Task AssertStatementsBoundedAsync(StatementSizeRecorder recorder)
+    {
+        await Assert.That(recorder.MaxParameters).IsLessThanOrEqualTo(LargestStatementParameters);
+        await Assert.That(recorder.MaxTextLength).IsLessThanOrEqualTo(LargestStatementLength);
+    }
+
+    private static string NodeNameOf(int index)
+    {
+        return $"node-{index:D4}";
+    }
+
+    private static List<ClusterSnapshotNode> NodesNamed(IEnumerable<int> indexes)
+    {
+        return indexes.Select(i => Node(NodeNameOf(i))).ToList();
+    }
+
+    private static async Task SeedReporterOnlyNodesAsync(DatabaseContext db, int tenantId, long clusterId, IEnumerable<int> indexes)
+    {
+        foreach (int index in indexes)
+        {
+            await SeedNodeAsync(db, tenantId, clusterId, NodeNameOf(index), null, lastReporterSeenAt: T0.AddHours(-1));
+        }
+    }
+
     private static ClusterSnapshot Snapshot(
         long telemetryId,
         int tenantId,
@@ -516,6 +554,35 @@ public class KubernetesClusterSnapshotRepositoryTests
         Dictionary<string, KubernetesNode> kept = await NodesOfAsync(dbFactory.Context, first);
         await Assert.That(kept.Keys).IsEquivalentTo(new[] { "c" });
         await Assert.That(kept["c"].Id).IsEqualTo(nodeC);
+    }
+
+    [Test]
+    public async Task Snapshot_UidDiffersAndTheSnapshotListsMoreNodesThanOneListHolds_MovesEveryListedNode()
+    {
+        // Intent: the nodes to move are looked up a chunk of the listed names at a time. All 1,001 listed
+        // nodes, including the one alone in the last chunk, move to the cluster of the snapshot's UID, and
+        // the node the snapshot does not list stays where it was.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        StatementSizeRecorder recorder = new();
+        dbFactory.Context.AddInterceptor(recorder);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long machineId = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long first = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, uid: UidB);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, first, machineId, T0.AddMinutes(-20));
+        await SeedReporterOnlyNodesAsync(dbFactory.Context, tenantId, first, Enumerable.Range(0, 1001));
+        await SeedNodeAsync(dbFactory.Context, tenantId, first, "not-listed", lastReporterSeenAt: T0.AddHours(-1));
+
+        SnapshotOutcome outcome = await ApplyAsync(
+            repo, Snapshot(10, tenantId, machineId, T0, uid: UidA, nodes: NodesNamed(Enumerable.Range(0, 1001))));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        KubernetesCluster created = await dbFactory.Context.KubernetesClusters.SingleAsync(c => c.Id != first);
+        await Assert.That(created.KubeSystemUid).IsEqualTo(UidA);
+        await Assert.That((await NodesOfAsync(dbFactory.Context, created.Id)).Keys)
+            .IsEquivalentTo(Enumerable.Range(0, 1001).Select(NodeNameOf));
+        await Assert.That((await NodesOfAsync(dbFactory.Context, first)).Keys).IsEquivalentTo(new[] { "not-listed" });
+        await AssertStatementsBoundedAsync(recorder);
     }
 
     [Test]
@@ -1073,6 +1140,38 @@ public class KubernetesClusterSnapshotRepositoryTests
         await Assert.That(nodes["cp-1"].MachineId).IsEqualTo(machineX);
         await Assert.That(nodes["w-1"].MachineId).IsEqualTo(sender);
         await Assert.That((await CandidateOfAsync(dbFactory.Context, sender))!.ClusterId).IsEqualTo(older);
+    }
+
+    [Test]
+    public async Task Snapshot_OverlapMerge_FoundOnlyInTheLastChunkOfListedNames_StillMerges()
+    {
+        // Intent: the overlap is looked for a chunk of the listed names at a time, and a node name that
+        // only the last chunk holds must still join the clusters. The snapshot lists 1,001 nodes, so the
+        // name the other cluster shares is alone in the third chunk.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        StatementSizeRecorder recorder = new();
+        dbFactory.Context.AddInterceptor(recorder);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        long older = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA, displayName: "prod");
+        long younger = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, younger, sender, T0.AddMinutes(-30));
+        await SeedNodeAsync(dbFactory.Context, tenantId, older, NodeNameOf(1000), null, lastLocalReportAt: T0.AddMinutes(-20));
+        await SeedNodeAsync(dbFactory.Context, tenantId, younger, NodeNameOf(0), sender, lastLocalReportAt: T0.AddMinutes(-2));
+
+        SnapshotOutcome outcome = await ApplyAsync(
+            repo, Snapshot(10, tenantId, sender, T0, nodes: NodesNamed(Enumerable.Range(0, 1001))));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        KubernetesCluster survivor = await dbFactory.Context.KubernetesClusters.SingleAsync();
+        await Assert.That(survivor.Id).IsEqualTo(older);
+        await Assert.That(survivor.KubeSystemUid).IsEqualTo(UidA);
+        Dictionary<string, KubernetesNode> nodes = await NodesOfAsync(dbFactory.Context, older);
+        await Assert.That(nodes.Count).IsEqualTo(1001);
+        await Assert.That(nodes[NodeNameOf(0)].MachineId).IsEqualTo(sender);
+        await Assert.That((await CandidateOfAsync(dbFactory.Context, sender))!.ClusterId).IsEqualTo(older);
+        await AssertStatementsBoundedAsync(recorder);
     }
 
     [Test]
@@ -1722,6 +1821,60 @@ public class KubernetesClusterSnapshotRepositoryTests
         await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, truncated: true, nodes: []));
 
         await Assert.That((await NodesOfAsync(dbFactory.Context, clusterId)).Keys).IsEquivalentTo(new[] { "reporter-only" });
+    }
+
+    [Test]
+    public async Task Snapshot_OfMoreNodesThanOneListHolds_UpsertsEveryNodeWithoutSendingTheWholeNameList()
+    {
+        // Intent: a snapshot of 1,201 nodes on a new cluster lists far more names than one statement
+        // should carry. Every node is still upserted, and none of the statements the repository sent
+        // carried the whole list, which a larger cluster would turn into one the database refuses.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        StatementSizeRecorder recorder = new();
+        dbFactory.Context.AddInterceptor(recorder);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+
+        SnapshotOutcome outcome = await ApplyAsync(
+            repo, Snapshot(10, tenantId, sender, T0, nodes: NodesNamed(Enumerable.Range(0, 1201))));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        KubernetesCluster cluster = await dbFactory.Context.KubernetesClusters.SingleAsync();
+        Dictionary<string, KubernetesNode> nodes = await NodesOfAsync(dbFactory.Context, cluster.Id);
+        await Assert.That(nodes.Count).IsEqualTo(1201);
+        await Assert.That(nodes.Keys).IsEquivalentTo(Enumerable.Range(0, 1201).Select(NodeNameOf));
+        await Assert.That(nodes.Values.All(n => n.LastReporterSeenAt == T0)).IsTrue();
+        await AssertStatementsBoundedAsync(recorder);
+    }
+
+    [Test]
+    public async Task Snapshot_NonTruncatedSnapshotOfSomeOfThe1201Nodes_UpdatesThoseAndRemovesTheOther601()
+    {
+        // Intent: a second complete snapshot that lists 600 of the 1,201 nodes the first one created
+        // updates the rows it lists in place, found whichever chunk of the name list they fall in, and
+        // removes the other 601, with the removal sent as bounded statements too.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long sender = await SeedMachineAsync(dbFactory.Context, tenantId);
+        await ApplyAsync(repo, Snapshot(10, tenantId, sender, T0, nodes: NodesNamed(Enumerable.Range(0, 1201))));
+        KubernetesCluster cluster = await dbFactory.Context.KubernetesClusters.SingleAsync();
+        Dictionary<string, KubernetesNode> before = await NodesOfAsync(dbFactory.Context, cluster.Id);
+        StatementSizeRecorder recorder = new();
+        dbFactory.Context.AddInterceptor(recorder);
+        List<int> kept = Enumerable.Range(0, 300).Concat(Enumerable.Range(901, 300)).ToList();
+
+        SnapshotOutcome outcome = await ApplyAsync(
+            repo, Snapshot(11, tenantId, sender, T0.AddMinutes(1), nodes: NodesNamed(kept)));
+
+        await Assert.That(outcome).IsEqualTo(SnapshotOutcome.Accepted);
+        Dictionary<string, KubernetesNode> after = await NodesOfAsync(dbFactory.Context, cluster.Id);
+        await Assert.That(after.Count).IsEqualTo(600);
+        await Assert.That(after.Keys).IsEquivalentTo(kept.Select(NodeNameOf));
+        await Assert.That(after.Values.All(n => n.LastReporterSeenAt == T0.AddMinutes(1))).IsTrue();
+        await Assert.That(after.All(pair => pair.Value.Id == before[pair.Key].Id)).IsTrue();
+        await AssertStatementsBoundedAsync(recorder);
     }
 
     [Test]

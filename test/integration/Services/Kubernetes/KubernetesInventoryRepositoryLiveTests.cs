@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
@@ -39,6 +40,15 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
     private const string FingerprintA = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
     private const string FingerprintB = "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978";
+
+    /// <summary>
+    /// The most parameters, and the longest text, one statement may have while a large snapshot is
+    /// applied: the repository puts at most 500 values in a list, and LinqToDB writes a list of the
+    /// 11-character names these tests use into the text, so a chunk makes a statement of about 7,100
+    /// characters while the whole 1,201-name list makes one of over 16,000.
+    /// </summary>
+    private const int LargestStatementParameters = 520;
+    private const int LargestStatementLength = 8_000;
 
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
@@ -1026,7 +1036,8 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     {
         // Intent: the reporting rules of garbage collection run as set-based SQL on Postgres: an expired
         // candidate is removed, a cluster with no candidate and a stale snapshot goes back to its local
-        // state with its Lease epoch cleared, an agentless node survives a stale snapshot while a
+        // state with its Lease epoch cleared (including the node no machine is linked to any more, which
+        // a fresh local report once described), an agentless node survives a stale snapshot while a
         // candidate remains, and a cluster with neither nodes nor candidates is deleted.
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
@@ -1088,8 +1099,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         });
         long linkedNode = await SeedNodeAsync(reverted, "linked", expiredMachine, now.AddHours(-1), now.AddHours(-3));
         long agentlessGone = await SeedNodeAsync(reverted, "agentless", null, null, now.AddHours(-3));
+        long unlinkedGone = await SeedNodeAsync(reverted, "moved-away", null, now.AddMinutes(-5), now.AddHours(-3));
 
-        long kept = await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
+        long kept =await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
         await db.InsertAsync(new KubernetesReporterCandidate
         {
             TenantId = tenantId,
@@ -1109,10 +1121,11 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await repo.CollectGarbageAsync(now, CancellationToken.None);
 
-        await Assert.That(deleted).IsGreaterThanOrEqualTo(3);
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(4);
         await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == expiredMachine)).IsEqualTo(0);
         await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == liveMachine)).IsEqualTo(1);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == agentlessGone)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == unlinkedGone)).IsEqualTo(0);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.Id == empty)).IsEqualTo(0);
 
         KubernetesNode node = await db.KubernetesNodes.SingleAsync(n => n.Id == linkedNode);
@@ -1188,6 +1201,8 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
         await Assert.That(cluster.ActiveReporterMachineId).IsNull();
         await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
+
+        await CleanUpKubernetesRowsAsync(db, tenantId);
     }
 
     [Test]
@@ -1419,6 +1434,56 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LargeSnapshot_UpsertsEveryNodeAndALaterCompleteOneRemovesTheRestOnPostgres()
+    {
+        // Intent: a snapshot of 1,201 nodes on a new cluster is upserted in full, and a second complete
+        // snapshot that lists 600 of them removes the other 601, on Postgres, where an IN list and a
+        // delete by id are real statements with a real parameter limit. No statement may carry the whole
+        // list, and the rows are removed again afterwards because the class shares one database.
+        await using DatabaseContext db = CreateContext();
+        StatementSizeRecorder recorder = new();
+        db.AddInterceptor(recorder);
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+
+        try
+        {
+            long sender = await SeedMachineAsync(db, tenantId);
+            string uid = Guid.NewGuid().ToString();
+            string fingerprint = NewFingerprint();
+            DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+            List<int> kept = Enumerable.Range(0, 300).Concat(Enumerable.Range(901, 300)).ToList();
+
+            SnapshotOutcome first = await repo.ApplyClusterSnapshotAsync(
+                LiveSnapshot(10, tenantId, sender, at, uid, fingerprint, nodes: LargeSnapshotNodes(Enumerable.Range(0, 1201))),
+                at, CancellationToken.None);
+
+            await Assert.That(first).IsEqualTo(SnapshotOutcome.Accepted);
+            KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+            List<string> created = await db.KubernetesNodes
+                .Where(n => n.ClusterId == cluster.Id).Select(n => n.NodeName).ToListAsync();
+            await Assert.That(created.Count).IsEqualTo(1201);
+            await Assert.That(created).IsEquivalentTo(Enumerable.Range(0, 1201).Select(LargeSnapshotNodeName));
+
+            SnapshotOutcome second = await repo.ApplyClusterSnapshotAsync(
+                LiveSnapshot(11, tenantId, sender, at.AddMinutes(1), uid, fingerprint, nodes: LargeSnapshotNodes(kept)),
+                at.AddMinutes(1), CancellationToken.None);
+
+            await Assert.That(second).IsEqualTo(SnapshotOutcome.Accepted);
+            List<string> remaining = await db.KubernetesNodes
+                .Where(n => n.ClusterId == cluster.Id).Select(n => n.NodeName).ToListAsync();
+            await Assert.That(remaining.Count).IsEqualTo(600);
+            await Assert.That(remaining).IsEquivalentTo(kept.Select(LargeSnapshotNodeName));
+            await Assert.That(recorder.MaxParameters).IsLessThanOrEqualTo(LargestStatementParameters);
+            await Assert.That(recorder.MaxTextLength).IsLessThanOrEqualTo(LargestStatementLength);
+        }
+        finally
+        {
+            await CleanUpKubernetesRowsAsync(db, tenantId);
+        }
+    }
+
+    [Test]
     public async Task Live_SnapshotFencing_IsPerLeaseEpochOnPostgres()
     {
         // Intent: the epoch comparison reads back what Postgres stored. A new Lease epoch restarts the
@@ -1475,6 +1540,16 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     private static ClusterSnapshotNode LiveNode(string name, string? machineId = null)
     {
         return new ClusterSnapshotNode(name, machineId, ["worker"], "True", null, [], false, "v1.30.4+k3s1", "containerd://1.7.23", 3, 110);
+    }
+
+    private static string LargeSnapshotNodeName(int index)
+    {
+        return $"node-{index:D4}";
+    }
+
+    private static List<ClusterSnapshotNode> LargeSnapshotNodes(IEnumerable<int> indexes)
+    {
+        return indexes.Select(i => LiveNode(LargeSnapshotNodeName(i))).ToList();
     }
 
     private static ClusterSnapshot LiveSnapshot(

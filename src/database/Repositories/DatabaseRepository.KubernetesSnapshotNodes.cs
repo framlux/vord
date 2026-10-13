@@ -15,6 +15,9 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>A machine's id with its system id, which is all the machine-id link needs of a machine.</summary>
     private sealed record MachineSystemId(long Id, string SystemId);
 
+    /// <summary>A node's id and name with the time of its last local report, which is all the removal of absent nodes needs of a row.</summary>
+    private sealed record NodeReportStamp(long Id, string NodeName, DateTimeOffset? LastLocalReportAt);
+
     /// <summary>
     /// Creates or updates a row for every node the snapshot lists, then links the new and still unlinked
     /// rows to machines by machine id. Fields only a node's own machine can report are left alone, except
@@ -29,14 +32,8 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         List<ClusterSnapshotNode> listed = snapshot.Nodes.DistinctBy(n => n.Name, StringComparer.Ordinal).ToList();
         List<string> names = listed.Select(n => n.Name).ToList();
 
-        Dictionary<string, KubernetesNode> existing = [];
-        if (names.Count > 0)
-        {
-            List<KubernetesNode> rows = await _db.KubernetesNodes
-                .Where(n => (n.ClusterId == clusterId) && names.Contains(n.NodeName))
-                .ToListAsync(ct);
-            existing = rows.ToDictionary(n => n.NodeName, StringComparer.Ordinal);
-        }
+        List<KubernetesNode> rows = await LoadNodesByNameAsync(clusterId, names, ct);
+        Dictionary<string, KubernetesNode> existing = rows.ToDictionary(n => n.NodeName, StringComparer.Ordinal);
 
         List<(KubernetesNode Row, ClusterSnapshotNode Listed)> unlinked = [];
         foreach (ClusterSnapshotNode node in listed)
@@ -182,24 +179,52 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     }
 
     /// <summary>
+    /// Loads the cluster's nodes that have one of the given names, a chunk of names at a time so that no
+    /// statement carries a list as long as the cluster is large.
+    /// </summary>
+    private async Task<List<KubernetesNode>> LoadNodesByNameAsync(long clusterId, List<string> names, CancellationToken ct)
+    {
+        List<KubernetesNode> nodes = [];
+        foreach (string[] chunk in names.Chunk(KubernetesInListChunkSize))
+        {
+            List<string> chunkNames = chunk.ToList();
+            nodes.AddRange(await _db.KubernetesNodes
+                .Where(n => (n.ClusterId == clusterId) && chunkNames.Contains(n.NodeName))
+                .ToListAsync(ct));
+        }
+
+        return nodes;
+    }
+
+    /// <summary>
     /// Deletes the cluster's nodes that a complete snapshot no longer lists, unless their own machine
     /// has reported within the staleness threshold, which can mean the cluster reporter is the one that
-    /// is wrong or lagging.
+    /// is wrong or lagging. The nodes the snapshot lists are compared in memory with the cluster's rows,
+    /// and the rows to remove are deleted by id a chunk at a time, so no statement carries a list as long
+    /// as the snapshot.
     /// </summary>
     private async Task RemoveNodesAbsentFromSnapshotAsync(long clusterId, ClusterSnapshot snapshot, CancellationToken ct)
     {
         DateTimeOffset localReportStaleBefore = snapshot.ServerReceivedAt - KubernetesReportingPolicy.StaleThreshold;
-        List<string> names = snapshot.Nodes.Select(n => n.Name).Distinct(StringComparer.Ordinal).ToList();
+        HashSet<string> listed = snapshot.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
 
-        IQueryable<KubernetesNode> absent = _db.KubernetesNodes
-            .Where(n => (n.ClusterId == clusterId)
-                && ((n.LastLocalReportAt == null) || (n.LastLocalReportAt < localReportStaleBefore)));
+        List<NodeReportStamp> stored = await _db.KubernetesNodes
+            .Where(n => n.ClusterId == clusterId)
+            .Select(n => new NodeReportStamp(n.Id, n.NodeName, n.LastLocalReportAt))
+            .ToListAsync(ct);
 
-        if (names.Count > 0)
+        List<long> absent = stored
+            .Where(n => (listed.Contains(n.NodeName) == false)
+                && ((n.LastLocalReportAt == null) || (n.LastLocalReportAt < localReportStaleBefore)))
+            .Select(n => n.Id)
+            .ToList();
+
+        foreach (long[] chunk in absent.Chunk(KubernetesInListChunkSize))
         {
-            absent = absent.Where(n => names.Contains(n.NodeName) == false);
+            List<long> chunkIds = chunk.ToList();
+            await _db.KubernetesNodes
+                .Where(n => (n.ClusterId == clusterId) && chunkIds.Contains(n.Id))
+                .DeleteAsync(ct);
         }
-
-        await absent.DeleteAsync(ct);
     }
 }

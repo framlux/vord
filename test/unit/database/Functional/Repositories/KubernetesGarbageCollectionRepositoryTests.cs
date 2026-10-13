@@ -178,8 +178,10 @@ public class KubernetesGarbageCollectionRepositoryTests : KubernetesInventoryRep
         IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
         DatabaseContext db = dbFactory.Context;
         int tenantId = await SeedTenantAsync(db);
+        long machine = await SeedMachineAsync(db, tenantId);
         long clusterId = await SeedReportingClusterAsync(db, tenantId, FingerprintA, GcNow.AddDays(-2), GcNow.AddMinutes(-minutesSinceSnapshot));
-        await SeedReporterNodeAsync(db, tenantId, clusterId, "kept", "a1", GcNow.AddMinutes(-minutesSinceSnapshot), lastLocalReportAt: GcNow.AddMinutes(-5));
+        await SeedReporterNodeAsync(
+            db, tenantId, clusterId, "kept", "a1", GcNow.AddMinutes(-minutesSinceSnapshot), machineId: machine, lastLocalReportAt: GcNow.AddMinutes(-5));
 
         await repo.CollectGarbageAsync(GcNow, CancellationToken.None);
 
@@ -188,27 +190,37 @@ public class KubernetesGarbageCollectionRepositoryTests : KubernetesInventoryRep
     }
 
     [Test]
-    public async Task CollectGarbage_ReportingDisabled_DeletesReporterOnlyNodesAndClearsTheRestToTheirLocalFields()
+    public async Task CollectGarbage_ReportingDisabled_DeletesReporterOnlyAndUnlinkedNodesAndClearsTheRestToTheirLocalFields()
     {
         // Intent: once no machine is a candidate and snapshots have stopped, the cluster goes back to
-        // what local reports alone know. Nodes that only the reporter ever described are removed,
-        // nodes a machine reports keep their local fields and lose every reporter column, and the
-        // cluster loses its reporter state and its Lease epoch, with the transition count back to 0.
+        // what local reports alone know. Nodes that only the reporter ever described are removed, and so
+        // is a node no machine is linked to any more even though a local report once described it, since
+        // its source now reports into another row. Nodes a machine reports keep their local fields and
+        // lose every reporter column, and the cluster loses its reporter state and its Lease epoch, with
+        // the transition count back to 0.
         using TestDatabaseFactory dbFactory = new();
         IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
         DatabaseContext db = dbFactory.Context;
         int tenantId = await SeedTenantAsync(db);
         long machine = await SeedMachineAsync(db, tenantId);
+        long machineLinkedByMachineId = await SeedMachineAsync(db, tenantId);
         DateTimeOffset snapshot = GcNow.AddHours(-2);
         long clusterId = await SeedReportingClusterAsync(db, tenantId, FingerprintA, GcNow.AddDays(-2), snapshot, machine);
         long agentless = await SeedReporterNodeAsync(db, tenantId, clusterId, "agentless", "a1", snapshot);
+        long unlinkedWithFreshReport = await SeedReporterNodeAsync(
+            db, tenantId, clusterId, "moved-away", "a3", snapshot, lastLocalReportAt: GcNow.AddMinutes(-5));
+        long linkedWithoutLocalReport = await SeedReporterNodeAsync(
+            db, tenantId, clusterId, "linked-by-machine-id", "a4", snapshot, machineId: machineLinkedByMachineId);
         long linked = await SeedReporterNodeAsync(
             db, tenantId, clusterId, "linked", "a2", snapshot, machineId: machine, lastLocalReportAt: GcNow.AddHours(-1));
 
         int deleted = await repo.CollectGarbageAsync(GcNow, CancellationToken.None);
 
-        await Assert.That(deleted).IsEqualTo(1);
+        await Assert.That(deleted).IsEqualTo(3);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == agentless)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == unlinkedWithFreshReport)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == linkedWithoutLocalReport)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync()).IsEqualTo(1);
 
         KubernetesNode node = await db.KubernetesNodes.SingleAsync(n => n.Id == linked);
         await Assert.That(node.NodeMachineId).IsNull();
@@ -283,8 +295,10 @@ public class KubernetesGarbageCollectionRepositoryTests : KubernetesInventoryRep
         IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
         DatabaseContext db = dbFactory.Context;
         int tenantId = await SeedTenantAsync(db);
+        long machine = await SeedMachineAsync(db, tenantId);
         long clusterId = await SeedReportingClusterAsync(db, tenantId, FingerprintA, GcNow.AddDays(-2), null);
-        await SeedReporterNodeAsync(db, tenantId, clusterId, "linked", "a1", GcNow.AddDays(-1), lastLocalReportAt: GcNow.AddHours(-1));
+        await SeedReporterNodeAsync(
+            db, tenantId, clusterId, "linked", "a1", GcNow.AddDays(-1), machineId: machine, lastLocalReportAt: GcNow.AddHours(-1));
 
         await repo.CollectGarbageAsync(GcNow, CancellationToken.None);
 
@@ -325,9 +339,10 @@ public class KubernetesGarbageCollectionRepositoryTests : KubernetesInventoryRep
         DatabaseContext db = dbFactory.Context;
         int tenantId = await SeedTenantAsync(db);
         int otherTenant = await SeedTenantAsync(db);
+        long machine = await SeedMachineAsync(db, tenantId);
         long stale = await SeedReportingClusterAsync(db, tenantId, FingerprintA, GcNow.AddDays(-2), GcNow.AddHours(-3));
         long live = await SeedReportingClusterAsync(db, otherTenant, FingerprintA, GcNow.AddDays(-2), GcNow.AddMinutes(-5));
-        await SeedReporterNodeAsync(db, tenantId, stale, "linked", "a1", GcNow.AddHours(-3), lastLocalReportAt: GcNow.AddHours(-1));
+        await SeedReporterNodeAsync(db, tenantId, stale, "linked", "a1", GcNow.AddHours(-3), machineId: machine, lastLocalReportAt: GcNow.AddHours(-1));
         await SeedReporterNodeAsync(db, otherTenant, live, "agentless", "a2", GcNow.AddMinutes(-5));
 
         await repo.CollectGarbageAsync(GcNow, CancellationToken.None);

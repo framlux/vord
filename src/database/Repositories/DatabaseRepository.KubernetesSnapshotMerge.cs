@@ -27,16 +27,24 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         DateTimeOffset recentSince = snapshot.ServerReceivedAt - KubernetesRecentReportWindow;
         List<string> names = snapshot.Nodes.Select(n => n.Name).Distinct(StringComparer.Ordinal).ToList();
 
-        return await _db.KubernetesClusters
-            .Where(c => (c.TenantId == tenantId)
-                && (c.Id != clusterId)
-                && (c.KubeSystemUid == null)
-                && ((c.CaFingerprint == fingerprint)
-                    || _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && (n.ReportedCaFingerprint == fingerprint) && (n.LastLocalReportAt >= recentSince)))
-                && _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && names.Contains(n.NodeName)))
-            .OrderBy(c => c.Id)
-            .Select(c => c.Id)
-            .ToListAsync(ct);
+        // A cluster qualifies when any one listed name matches a node of it, so the clusters found for the
+        // chunks of names combine into the answer for the whole list.
+        SortedSet<long> overlapping = [];
+        foreach (string[] chunk in names.Chunk(KubernetesInListChunkSize))
+        {
+            List<string> chunkNames = chunk.ToList();
+            overlapping.UnionWith(await _db.KubernetesClusters
+                .Where(c => (c.TenantId == tenantId)
+                    && (c.Id != clusterId)
+                    && (c.KubeSystemUid == null)
+                    && ((c.CaFingerprint == fingerprint)
+                        || _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && (n.ReportedCaFingerprint == fingerprint) && (n.LastLocalReportAt >= recentSince)))
+                    && _db.KubernetesNodes.Any(n => (n.ClusterId == c.Id) && chunkNames.Contains(n.NodeName)))
+                .Select(c => c.Id)
+                .ToListAsync(ct));
+        }
+
+        return overlapping.ToList();
     }
 
     /// <summary>

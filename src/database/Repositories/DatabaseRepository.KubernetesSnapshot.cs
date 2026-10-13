@@ -273,9 +273,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             return;
         }
 
-        List<KubernetesNode> moving = await _db.KubernetesNodes
-            .Where(n => (n.ClusterId == fromId) && names.Contains(n.NodeName))
-            .ToListAsync(ct);
+        List<KubernetesNode> moving = await LoadNodesByNameAsync(fromId, names, ct);
 
         Dictionary<string, KubernetesNode> targetByName = await NodesByNameAsync(toId, ct);
         foreach (KubernetesNode node in moving)

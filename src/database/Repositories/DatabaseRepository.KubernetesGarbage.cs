@@ -70,10 +70,11 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>
     /// Reverts every cluster of the tenant that has reporter state, no candidate left and no snapshot
     /// newer than the staleness threshold to what local reports alone know: nodes that only the
-    /// reporter described are deleted, the other nodes lose their reporter columns, and the cluster
-    /// loses its reporter columns and its Lease epoch, because enabling reporting again creates a new
-    /// Lease. A cluster that is still receiving snapshots is never touched, however far its
-    /// candidates' local reports lag. Must run inside the tenant's transaction and lock.
+    /// reporter described, and nodes no machine is linked to, are deleted, the other nodes lose their
+    /// reporter columns, and the cluster loses its reporter columns and its Lease epoch, because
+    /// enabling reporting again creates a new Lease. A cluster that is still receiving snapshots is
+    /// never touched, however far its candidates' local reports lag. Must run inside the tenant's
+    /// transaction and lock.
     /// </summary>
     /// <returns>The number of node rows deleted.</returns>
     private async Task<int> RevertClustersWithReportingDisabledAsync(int tenantId, DateTimeOffset snapshotStaleBefore, CancellationToken ct)
@@ -101,8 +102,11 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             return 0;
         }
 
-        int agentlessNodes = await _db.KubernetesNodes
-            .Where(n => disabled.Contains(n.ClusterId) && (n.LastLocalReportAt == null))
+        // A node no machine is linked to is dead even when a local report once described it: a live
+        // report re-links any existing row for its machine, so an unlinked row belongs to a machine that
+        // moved to another cluster, was renamed or was deleted, and its source now reports into another row.
+        int deadNodes = await _db.KubernetesNodes
+            .Where(n => disabled.Contains(n.ClusterId) && ((n.LastLocalReportAt == null) || (n.MachineId == null)))
             .DeleteAsync(ct);
 
         await _db.KubernetesNodes
@@ -139,6 +143,6 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             "Kubernetes clusters {ClusterIds} have no reporter candidates and no recent snapshot, so their reporter state was cleared",
             disabled);
 
-        return agentlessNodes;
+        return deadNodes;
     }
 }

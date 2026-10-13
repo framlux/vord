@@ -122,9 +122,9 @@ public interface IKubernetesInventoryRepository
     /// <item>
     /// A cluster with reporter state, no candidates and no snapshot newer than
     /// <see cref="KubernetesReportingPolicy.StaleThreshold"/> goes back to its local state: nodes no
-    /// local report ever described are deleted, the other nodes lose their reporter columns, and the
-    /// cluster loses its reporter columns and Lease epoch. A cluster still receiving snapshots is
-    /// never reverted.
+    /// local report ever described and nodes no machine is linked to are deleted, the other nodes lose
+    /// their reporter columns, and the cluster loses its reporter columns and Lease epoch. A cluster
+    /// still receiving snapshots is never reverted.
     /// </item>
     /// <item>A cluster with no nodes and no candidates is deleted.</item>
     /// </list>
