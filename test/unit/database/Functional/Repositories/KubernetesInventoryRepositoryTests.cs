@@ -1098,6 +1098,100 @@ public class KubernetesInventoryRepositoryTests : KubernetesInventoryRepositoryT
     }
 
     [Test]
+    public async Task GetOldestUnprojectedKubernetesReceipt_SkipsEveryRowTheBatchReadWouldSkip()
+    {
+        // Intent: lag is the age of the oldest row the projector will actually pick up, so a row of
+        // another type, one outside the read window, one not yet visible, and one the cursor has
+        // passed are all invisible to it, whatever their receipt time. Each of them has a lower id than
+        // the row that counts, so any predicate that went missing would return its time instead. The
+        // row that counts sits exactly on the visibility edge, which is inclusive.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        DateTimeOffset receivedAfter = T0.AddDays(-8);
+        DateTimeOffset visibleBefore = T0.AddSeconds(-30);
+        DateTimeOffset expected = visibleBefore;
+
+        async Task<long> InsertRowAsync(short type, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
+        {
+            return await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+                telemetryType: type, receivedAt: receivedAt, serverReceivedAt: serverReceivedAt));
+        }
+
+        long passedByCursor = await InsertRowAsync(14, T0.AddMinutes(-50), T0.AddMinutes(-50));
+        await InsertRowAsync(6, T0.AddMinutes(-40), T0.AddMinutes(-40));
+        await InsertRowAsync(14, receivedAfter, T0.AddMinutes(-30));
+        await InsertRowAsync(14, T0.AddMinutes(-20), visibleBefore.AddTicks(1));
+        await InsertRowAsync(15, T0.AddMinutes(-10), expected);
+        await InsertRowAsync(14, T0.AddMinutes(-1), T0.AddMinutes(-1));
+
+        DateTimeOffset? oldest = await repo.GetOldestUnprojectedKubernetesReceiptAsync(
+            passedByCursor, receivedAfter, visibleBefore, CancellationToken.None);
+
+        await Assert.That(oldest).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task GetOldestUnprojectedKubernetesReceipt_TakesTheFirstRowById_NotTheEarliestReceipt()
+    {
+        // Intent: the projector applies rows in id order, so the next row it will read is the lowest id
+        // past the cursor even when a later id carries an older receipt time. The query takes that
+        // first row rather than aggregating the minimum, which would scan every unprojected row
+        // exactly when the backlog is largest.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        DateTimeOffset firstReceipt = T0.AddMinutes(-5);
+        await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            telemetryType: 14, receivedAt: firstReceipt, serverReceivedAt: firstReceipt));
+        await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            telemetryType: 14, receivedAt: T0.AddMinutes(-20), serverReceivedAt: T0.AddMinutes(-20)));
+
+        DateTimeOffset? oldest = await repo.GetOldestUnprojectedKubernetesReceiptAsync(
+            0, T0.AddDays(-8), T0, CancellationToken.None);
+
+        await Assert.That(oldest).IsEqualTo(firstReceipt);
+    }
+
+    [Test]
+    public async Task GetOldestUnprojectedKubernetesReceipt_AdvancesWithTheCursorAndEndsAtNull()
+    {
+        // Intent: as the cursor passes each row the answer moves to the next one, and once nothing is
+        // left the answer is null, which the gauge reports as zero lag.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+        DatabaseContext db = dbFactory.Context;
+        DateTimeOffset firstReceipt = T0.AddMinutes(-20);
+        DateTimeOffset secondReceipt = T0.AddMinutes(-10);
+        long first = await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            telemetryType: 14, receivedAt: firstReceipt, serverReceivedAt: firstReceipt));
+        long second = await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachineTelemetry(
+            telemetryType: 15, receivedAt: secondReceipt, serverReceivedAt: secondReceipt));
+        DateTimeOffset receivedAfter = T0.AddDays(-8);
+
+        DateTimeOffset? beforeAny = await repo.GetOldestUnprojectedKubernetesReceiptAsync(0, receivedAfter, T0, CancellationToken.None);
+        DateTimeOffset? afterFirst = await repo.GetOldestUnprojectedKubernetesReceiptAsync(first, receivedAfter, T0, CancellationToken.None);
+        DateTimeOffset? afterSecond = await repo.GetOldestUnprojectedKubernetesReceiptAsync(second, receivedAfter, T0, CancellationToken.None);
+
+        await Assert.That(beforeAny).IsEqualTo(firstReceipt);
+        await Assert.That(afterFirst).IsEqualTo(secondReceipt);
+        await Assert.That(afterSecond).IsNull();
+    }
+
+    [Test]
+    public async Task GetOldestUnprojectedKubernetesReceipt_NothingStored_ReturnsNull()
+    {
+        // Intent: an empty telemetry table has no lag; the answer is null, not a default time.
+        using TestDatabaseFactory dbFactory = new();
+        IKubernetesInventoryRepository repo = CreateRepo(dbFactory);
+
+        DateTimeOffset? oldest = await repo.GetOldestUnprojectedKubernetesReceiptAsync(
+            0, T0.AddDays(-8), T0, CancellationToken.None);
+
+        await Assert.That(oldest).IsNull();
+    }
+
+    [Test]
     [Arguments(null)]
     [Arguments("")]
     public async Task ApplyLocalReport_NoKubeletVersion_KeepsTheStoredVersion(string? kubeletVersion)

@@ -44,6 +44,20 @@ public interface IKubernetesInventoryRepository
         long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, int batchSize, CancellationToken ct);
 
     /// <summary>
+    /// Returns the server receipt time of the next row <see cref="GetKubernetesTelemetryBatchAsync"/>
+    /// would return after the same cursor and bounds, which is the oldest row the projector has not yet
+    /// applied, or null when it has none. It repeats the batch read's predicates exactly and takes the
+    /// first row by id, as the batch does, instead of the minimum receipt time, so it never has to visit
+    /// every unprojected row.
+    /// </summary>
+    /// <param name="afterId">Only rows with a greater id count.</param>
+    /// <param name="receivedAfter">The start of the read window, exclusive.</param>
+    /// <param name="visibleBefore">The latest server receipt time of a row that counts, inclusive.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<DateTimeOffset?> GetOldestUnprojectedKubernetesReceiptAsync(
+        long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, CancellationToken ct);
+
+    /// <summary>
     /// Applies one local report in its own transaction under the tenant's Kubernetes lock: resolves the
     /// machine into a cluster by established membership, through a node or a reporter candidate row, or
     /// by CA fingerprint (a machine whose node reports the CA of exactly one other cluster moves to

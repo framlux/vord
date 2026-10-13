@@ -150,6 +150,21 @@ public sealed class AddCoreObservabilityTests
     }
 
     [Test]
+    public async Task KubernetesProjectionMetricsIsRegisteredOnTheWorkerOnly()
+    {
+        // The Kubernetes inventory projector is a worker-only hosted service. Its lag gauge reads the
+        // projector's cursor, so a copy in the API server would report the same lag from a process that
+        // projects nothing, and the worker's copy needs a descriptor to be constructed at all.
+        using ServiceProvider apiServer = Build("http://collector:4317", ObservabilityHost.ApiServer);
+        using ServiceProvider worker = Build("http://collector:4317", ObservabilityHost.ServicesWorker);
+
+        await Assert.That(apiServer.GetService<KubernetesProjectionMetrics>()).IsNull();
+        await Assert.That(worker.GetService<KubernetesProjectionMetrics>()).IsNotNull();
+        await Assert.That(worker.GetServices<ObservableMetricsDescriptor>()
+            .Any(descriptor => descriptor.MetricsType == typeof(KubernetesProjectionMetrics))).IsTrue();
+    }
+
+    [Test]
     public async Task JobMetricsResolvesInBothHosts()
     {
         // The Hangfire duration filter is constructed from the container in both processes, so this

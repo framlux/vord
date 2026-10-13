@@ -26,6 +26,21 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     /// <summary>The telemetry type of a machine's local Kubernetes node report.</summary>
     private const short KubernetesNodeTelemetryType = 14;
 
+    /// <summary>
+    /// The rows the Kubernetes projector may read past its cursor, written once so the batch read and
+    /// the lag measurement can never disagree about which rows count. The telemetry type filter is a
+    /// SQL literal rather than a parameter so the planner can prove it implies the predicate of the
+    /// partial index over the Kubernetes types; a parameter would keep that index out of reach. Only
+    /// rows that have been visible for the safety lag are read (ServerReceivedAt &lt;= visibleBefore),
+    /// so a lower-id row that committed after the cursor passed it is still picked up instead of being
+    /// skipped forever.
+    /// </summary>
+    private const string KubernetesProjectorReadableRows =
+        """
+        WHERE "TelemetryType" IN (14, 15) AND "Id" > @afterId AND "ReceivedAt" > @receivedAfter
+          AND "ServerReceivedAt" <= @visibleBefore
+        """;
+
     /// <summary>The distro value a report carries when the host's layout matched no known distribution.</summary>
     private const string UnknownKubernetesDistro = "unknown";
 
@@ -78,16 +93,10 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
     public async Task<IReadOnlyList<MachineTelemetry>> GetKubernetesTelemetryBatchAsync(
         long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, int batchSize, CancellationToken ct)
     {
-        // The telemetry type filter is a SQL literal rather than a parameter so the planner can prove
-        // it implies the predicate of the partial index over the Kubernetes types; a parameter would
-        // keep that index out of reach. Only rows that have been visible for the safety lag are read
-        // (ServerReceivedAt <= visibleBefore), so a lower-id row that committed after the cursor passed
-        // it is still picked up instead of being skipped forever.
         List<MachineTelemetry> rows = await _db.QueryToListAsync<MachineTelemetry>(
-            """
+            $"""
             SELECT * FROM "MachineTelemetry"
-            WHERE "TelemetryType" IN (14, 15) AND "Id" > @afterId AND "ReceivedAt" > @receivedAfter
-              AND "ServerReceivedAt" <= @visibleBefore
+            {KubernetesProjectorReadableRows}
             ORDER BY "Id" LIMIT @batchSize
             """,
             ct,
@@ -97,6 +106,28 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
             new DataParameter("@batchSize", batchSize));
 
         return rows;
+    }
+
+    /// <inheritdoc/>
+    public async Task<DateTimeOffset?> GetOldestUnprojectedKubernetesReceiptAsync(
+        long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, CancellationToken ct)
+    {
+        // The first readable row by id, exactly as the batch read takes it, and never MIN of the
+        // receipt time: the minimum would have to visit every unprojected row, so the query would cost
+        // the most during the backlog it exists to report. Ids ascend with insert, so the first row by
+        // id is the one the projector applies next.
+        List<DateTimeOffset> receipts = await _db.QueryToListAsync<DateTimeOffset>(
+            $"""
+            SELECT "ServerReceivedAt" FROM "MachineTelemetry"
+            {KubernetesProjectorReadableRows}
+            ORDER BY "Id" LIMIT 1
+            """,
+            ct,
+            new DataParameter("@afterId", afterId),
+            new DataParameter("@receivedAfter", receivedAfter),
+            new DataParameter("@visibleBefore", visibleBefore));
+
+        return receipts.Count == 0 ? null : receipts[0];
     }
 
     /// <inheritdoc/>

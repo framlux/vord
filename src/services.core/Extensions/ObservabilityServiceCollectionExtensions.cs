@@ -75,6 +75,12 @@ public static class ObservabilityServiceCollectionExtensions
             // descriptor it would never be constructed, its instrument would never be created, and
             // vord_fleet_machines would never exist while every test still passed.
             AddObservable<FleetMetrics>(services);
+
+            // The Kubernetes inventory projector runs only in this process, and nothing injects its lag
+            // gauge, so without its descriptor the gauge would never be constructed and would never
+            // exist. The API server must not register it: it would report the same cursor's lag from
+            // a process that projects nothing.
+            AddObservable<KubernetesProjectionMetrics>(services);
         }
 
         // The worker's projection records skipped rows into this class and the API server's cluster

@@ -156,6 +156,140 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_OldestUnprojectedReceipt_ReadsOneRowThroughThePartialIndex()
+    {
+        // Intent: the lag gauge asks for the next unprojected row while the backlog may be at its
+        // largest, so the statement must stop at the first row by id through the partial index over the
+        // Kubernetes types, never aggregate the minimum receipt time over every unprojected row. Thousands
+        // of rows of other types and a handful of Kubernetes rows sit in one daily partition; the
+        // partition holding the data must be read through an index descended from the partial index,
+        // and no aggregate may appear anywhere in the plan.
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long machineId = await SeedMachineAsync(seedDb, tenantId);
+        try
+        {
+            long cursor = await seedDb.MachineTelemetry.MaxAsync(t => (long?)t.Id) ?? 0;
+
+            await using NpgsqlConnection connection = new(_migratedConnectionString);
+            await connection.OpenAsync();
+            await ExecuteAsync(
+                connection,
+                """
+                INSERT INTO "MachineTelemetry"
+                    ("MachineId", "TenantId", "RetentionClass", "TelemetryType", "Payload", "ReceivedAt", "ServerReceivedAt", "SourceEventId")
+                SELECT @machineId, @tenantId, 0, (g % 5) + 1, '{}', now(), now(), 'other-' || g
+                FROM generate_series(1, 6000) AS g
+                """,
+                ("machineId", machineId), ("tenantId", tenantId));
+            await ExecuteAsync(
+                connection,
+                """
+                INSERT INTO "MachineTelemetry"
+                    ("MachineId", "TenantId", "RetentionClass", "TelemetryType", "Payload", "ReceivedAt", "ServerReceivedAt", "SourceEventId")
+                SELECT @machineId, @tenantId, 0, 14 + (g % 2), '{}', now(), now(), 'kubernetes-' || g
+                FROM generate_series(1, 5) AS g
+                """,
+                ("machineId", machineId), ("tenantId", tenantId));
+            await ExecuteAsync(connection, "ANALYZE \"MachineTelemetry\"");
+
+            string loadedPartition = await ScalarAsync(
+                connection,
+                $"""
+                SELECT c.relname FROM "MachineTelemetry" t JOIN pg_class c ON c.oid = t.tableoid
+                WHERE t."TelemetryType" = 14 AND t."MachineId" = {machineId} LIMIT 1
+                """);
+
+            (string statement, DateTimeOffset? oldest) = await CaptureStatementAsync(repo => repo.GetOldestUnprojectedKubernetesReceiptAsync(
+                cursor, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), CancellationToken.None));
+            string explain = await ScalarAsync(connection, $"EXPLAIN (FORMAT JSON) {statement}");
+
+            JsonElement plan = JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan");
+            List<(string Relation, string Index)> indexScans = [];
+            List<string> sequentialScans = [];
+            CollectScans(plan, null, indexScans, sequentialScans);
+
+            List<(string Relation, string Index)> loadedPartitionScans = indexScans.Where(scan => scan.Relation == loadedPartition).ToList();
+            bool everyScanUsesPartialIndex = true;
+            foreach ((string _, string indexName) in loadedPartitionScans)
+            {
+                List<string> ancestors = await IndexAncestorsAsync(connection, indexName);
+                everyScanUsesPartialIndex = everyScanUsesPartialIndex && ancestors.Contains(PartialIndexName);
+            }
+
+            await Assert.That(oldest).IsNotNull();
+            await Assert.That(loadedPartition).StartsWith("MachineTelemetry_Short_");
+            await Assert.That(loadedPartitionScans.Count).IsGreaterThan(0);
+            await Assert.That(everyScanUsesPartialIndex).IsTrue();
+            await Assert.That(sequentialScans.Contains(loadedPartition)).IsFalse();
+            await Assert.That(ContainsNodeType(plan, "Aggregate")).IsFalse();
+            await Assert.That(plan.GetProperty("Node Type").GetString()).IsEqualTo("Limit");
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(seedDb, tenantId);
+        }
+    }
+
+    [Test]
+    public async Task Live_OldestUnprojectedReceipt_IsTheReceiptOfTheRowTheBatchReadReturnsFirst()
+    {
+        // Intent: lag counts only rows the projector will read, so on the production database the answer
+        // must be the server receipt time of the first row the batch read returns past the same cursor,
+        // whatever other rows sit before it: another type, one outside the read window, one not yet
+        // visible. After the last readable row both reads come back empty.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        try
+        {
+            DateTimeOffset now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
+            DateTimeOffset receivedAfter = now.AddDays(-8);
+            DateTimeOffset visibleBefore = now.AddSeconds(-5);
+            long cursor = await db.MachineTelemetry.MaxAsync(t => (long?)t.Id) ?? 0;
+
+            async Task<long> InsertAsync(short type, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
+            {
+                return await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+                {
+                    MachineId = machineId,
+                    TenantId = tenantId,
+                    TelemetryType = type,
+                    Payload = "{}",
+                    ReceivedAt = receivedAt,
+                    ServerReceivedAt = serverReceivedAt,
+                    SourceEventId = Guid.NewGuid().ToString("N"),
+                });
+            }
+
+            await InsertAsync(6, now.AddMinutes(-9), now.AddMinutes(-9));
+            await InsertAsync(14, receivedAfter, now.AddMinutes(-8));
+            await InsertAsync(14, now.AddSeconds(-3), visibleBefore.AddSeconds(1));
+            long node = await InsertAsync(14, now.AddMinutes(-2), now.AddMinutes(-2));
+            long snapshot = await InsertAsync(15, now.AddSeconds(-30), now.AddSeconds(-30));
+
+            DateTimeOffset? beforeAny = await repo.GetOldestUnprojectedKubernetesReceiptAsync(cursor, receivedAfter, visibleBefore, CancellationToken.None);
+            DateTimeOffset? afterNode = await repo.GetOldestUnprojectedKubernetesReceiptAsync(node, receivedAfter, visibleBefore, CancellationToken.None);
+            DateTimeOffset? afterSnapshot = await repo.GetOldestUnprojectedKubernetesReceiptAsync(snapshot, receivedAfter, visibleBefore, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> firstBatch = await repo.GetKubernetesTelemetryBatchAsync(cursor, receivedAfter, visibleBefore, 1, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> secondBatch = await repo.GetKubernetesTelemetryBatchAsync(node, receivedAfter, visibleBefore, 1, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> thirdBatch = await repo.GetKubernetesTelemetryBatchAsync(snapshot, receivedAfter, visibleBefore, 1, CancellationToken.None);
+
+            await Assert.That(beforeAny).IsEqualTo(now.AddMinutes(-2));
+            await Assert.That(beforeAny).IsEqualTo(firstBatch[0].ServerReceivedAt);
+            await Assert.That(afterNode).IsEqualTo(now.AddSeconds(-30));
+            await Assert.That(afterNode).IsEqualTo(secondBatch[0].ServerReceivedAt);
+            await Assert.That(afterSnapshot).IsNull();
+            await Assert.That(thirdBatch.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(db, tenantId);
+        }
+    }
+
+    [Test]
     public async Task Live_TenantLock_SerialisesConcurrentApplies()
     {
         // Intent: two first reports from different machines of one tenant, carrying a fingerprint no
@@ -1838,6 +1972,19 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     /// </summary>
     private static async Task<(string Statement, IReadOnlyList<MachineTelemetry> Rows)> CaptureBatchStatementAsync()
     {
+        // The window bounds are fixed, far outside any time the seeded rows can carry, so the result
+        // does not depend on the clocks of the test host and the database.
+        return await CaptureStatementAsync(repo => repo.GetKubernetesTelemetryBatchAsync(
+            0, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), 500, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Runs one repository read and returns the statement it sent with every parameter replaced by a
+    /// literal, because a plain EXPLAIN cannot take parameters, along with what the read returned.
+    /// </summary>
+    private static async Task<(string Statement, TResult Result)> CaptureStatementAsync<TResult>(
+        Func<IKubernetesInventoryRepository, Task<TResult>> read)
+    {
         string statement = string.Empty;
         DataOptions<DatabaseContext> options = new(new DataOptions()
             .UsePostgreSQL(_migratedConnectionString)
@@ -1850,12 +1997,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             }));
         await using DatabaseContext db = new(options);
 
-        // The window bounds are fixed, far outside any time the seeded rows can carry, so the result
-        // does not depend on the clocks of the test host and the database.
-        IReadOnlyList<MachineTelemetry> rows = await CreateRepo(db).GetKubernetesTelemetryBatchAsync(
-            0, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), 500, CancellationToken.None);
+        TResult result = await read(CreateRepo(db));
 
-        return (statement, rows);
+        return (statement, result);
     }
 
     private static string InlineParameters(DbCommand command)
@@ -1905,6 +2049,28 @@ public sealed class KubernetesInventoryRepositoryLiveTests
                 CollectScans(child, relation, indexScans, sequentialScans);
             }
         }
+    }
+
+    /// <summary>Reports whether a JSON plan contains a node of the given type anywhere.</summary>
+    private static bool ContainsNodeType(JsonElement node, string nodeType)
+    {
+        if (node.GetProperty("Node Type").GetString() == nodeType)
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("Plans", out JsonElement children))
+        {
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                if (ContainsNodeType(child, nodeType))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
