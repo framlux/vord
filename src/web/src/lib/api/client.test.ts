@@ -1275,6 +1275,20 @@ describe('ApiClient', () => {
             expect(fetchFn).toHaveBeenCalledTimes(1);
         });
 
+        // Only the gate's own status is a rejection to recover from. The same body on any other 4xx
+        // is some other refusal, and repeating the request could do real work twice.
+        it.each([409, 422, 429])('should not retry a %i that carries the antiforgery body', async (status) => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(reply(status, antiforgeryBody));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect(failure).toBeInstanceOf(ApiError);
+            expect((failure as ApiError).status).toBe(status);
+            expect((failure as ApiError).message).toBe('Request failed');
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
         it('should never retry a GET, even for an antiforgery-shaped 400', async () => {
             const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
             fetchFn.mockResolvedValue(reply(400, antiforgeryBody));
