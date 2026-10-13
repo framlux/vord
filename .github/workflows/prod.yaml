@@ -162,10 +162,11 @@ jobs:
         working-directory: src/agent
         env:
           NFPM_RPM_PASSPHRASE: ${{ secrets.RPM_SIGNING_KEY_PASSPHRASE }}
-        # L2: pinned to a specific nfpm version so a breaking change upstream cannot silently
-        # alter agent packaging mid-release. Bump via Dependabot (gomod ecosystem).
+        # nfpm is pinned to a specific version so a breaking change upstream cannot silently alter
+        # agent packaging mid-release. The pin lives in packaging/install_nfpm.sh, which the package
+        # regression test in CI installs from too, so the tested packages come from this nfpm.
         run: |
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          sh packaging/install_nfpm.sh
           nfpm --version
 
           # BIN_ARCH names the built binary; PKG_ARCH is what nfpm labels the package. They

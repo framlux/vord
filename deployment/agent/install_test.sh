@@ -3,10 +3,9 @@
 # Licensed under the MIT License
 # See LICENSE for details.
 #
-# Minimal manual smoke test for install.sh's flag parsing and non-interactive resolution. Run
-# directly:
+# Smoke test for install.sh's flag parsing, non-interactive resolution, validation and the service
+# steps that follow an install or an update. CI runs it in the test-go job; run it directly with:
 #   bash deployment/agent/install_test.sh
-# Not wired into CI — invoke by hand when changing the flag contract.
 
 set -euo pipefail
 
@@ -395,6 +394,119 @@ check_config_has_token "${PLACEHOLDER_DIR}/does-not-exist.toml" unconfigured "a 
 # An explicitly empty token is not a configured host: treating it as one would make a re-run with a
 # real --token silently keep the broken config.
 check_config_has_token "${PLACEHOLDER_DIR}/empty-token.toml" unconfigured "an empty token counts as unconfigured"
+
+echo "== a masked unit is detected, and no other unit state is =="
+# systemctl is replaced by a function after sourcing, because install.sh puts the system bin
+# directories ahead of PATH and a stub on PATH would lose to the real systemctl. The stub answers
+# is-enabled the way systemd does: the state on stdout, and a non-zero exit for everything but
+# enabled. An unknown unit prints nothing.
+check_unit_masked() {
+    local state="$1" expect="$2" label="$3"
+    local status=0
+    STUB_STATE="${state}" bash -c '
+        set -euo pipefail
+        source "$1"
+        systemctl() {
+            printf "%s" "${STUB_STATE}"
+            [ "${STUB_STATE}" = "enabled" ]
+        }
+        unit_masked
+    ' _ "${INSTALL_SH}" >/dev/null 2>&1 || status=$?
+    if [ "${expect}" = "masked" ] && [ "${status}" -eq 0 ]; then
+        pass "${label}"
+    elif [ "${expect}" = "not-masked" ] && [ "${status}" -ne 0 ]; then
+        pass "${label}"
+    else
+        fail "${label} (unit_masked returned ${status})"
+    fi
+}
+
+check_unit_masked "masked" masked "a masked unit is masked"
+check_unit_masked "masked-runtime" masked "a runtime-masked unit is masked"
+check_unit_masked "enabled" not-masked "an enabled unit is not masked"
+check_unit_masked "disabled" not-masked "a disabled unit is not masked"
+check_unit_masked "static" not-masked "a static unit is not masked"
+check_unit_masked "" not-masked "a unit systemd cannot find is not masked"
+
+echo "== the service steps leave a masked unit alone and otherwise enable and restart it =="
+# Runs one of install.sh's service steps against a stub systemctl that records every call other
+# than is-enabled, and prints the calls (and the installer's own output) for the caller to judge.
+run_service_step() {
+    local step="$1" state="$2"
+    STUB_STATE="${state}" bash -c '
+        set -euo pipefail
+        source "$1"
+        have_systemd() { return 0; }
+        systemctl() {
+            if [ "$1" = "is-enabled" ]; then
+                printf "%s" "${STUB_STATE}"
+                [ "${STUB_STATE}" = "enabled" ]
+            else
+                echo "CALL $*"
+            fi
+        }
+        "$2"
+    ' _ "${INSTALL_SH}" "${step}" 2>&1
+}
+
+service_calls() {
+    echo "$1" | grep '^CALL ' | tr '\n' ';'
+}
+
+for step in start_agent enable_and_restart_after_update; do
+    MASKED_OUTPUT="$(run_service_step "${step}" masked)" && MASKED_STATUS=0 || MASKED_STATUS=$?
+    if [ "${MASKED_STATUS}" -ne 0 ]; then
+        fail "${step} on a masked unit exited ${MASKED_STATUS}: ${MASKED_OUTPUT}"
+    elif [ -n "$(service_calls "${MASKED_OUTPUT}")" ]; then
+        fail "${step} touched a masked unit: $(service_calls "${MASKED_OUTPUT}")"
+    elif ! echo "${MASKED_OUTPUT}" | grep -q "is masked"; then
+        fail "${step} left a masked unit alone without saying so: ${MASKED_OUTPUT}"
+    else
+        pass "${step} leaves a masked unit alone, exits 0 and says so"
+    fi
+
+    if [ "${step}" = "start_agent" ]; then
+        EXPECTED_CALLS="CALL enable vord-agent;CALL reset-failed vord-agent;CALL restart vord-agent;"
+    else
+        EXPECTED_CALLS="CALL enable vord-agent;CALL restart vord-agent;"
+    fi
+
+    for state in enabled disabled; do
+        UNMASKED_OUTPUT="$(run_service_step "${step}" "${state}")" && UNMASKED_STATUS=0 || UNMASKED_STATUS=$?
+        if [ "${UNMASKED_STATUS}" -ne 0 ]; then
+            fail "${step} on a unit that is ${state} exited ${UNMASKED_STATUS}: ${UNMASKED_OUTPUT}"
+        elif [ "$(service_calls "${UNMASKED_OUTPUT}")" = "${EXPECTED_CALLS}" ]; then
+            pass "${step} enables and restarts a unit that is ${state}"
+        else
+            fail "${step} on a unit that is ${state} made the calls '$(service_calls "${UNMASKED_OUTPUT}")', expected '${EXPECTED_CALLS}'"
+        fi
+    done
+done
+
+echo "== main runs the service steps that are tested above =="
+# main needs root and a package manager, so it cannot be run here. Reading its text is the cheap way
+# to hold the two paths to the steps the tests above cover: an --update that goes back to a bare
+# restart, or an install that stops calling start_agent, would leave those tests green and the
+# installer broken.
+UPDATE_PATH="$(sed -n '/^# --- Update-Only Path ---$/,/^    exit 0$/p' "${INSTALL_SH}")"
+if ! echo "${UPDATE_PATH}" | grep -q "upgraded successfully"; then
+    fail "could not find main's --update path to inspect"
+elif ! echo "${UPDATE_PATH}" | grep -qE '^[[:space:]]+enable_and_restart_after_update$'; then
+    fail "the --update path does not call enable_and_restart_after_update"
+elif echo "${UPDATE_PATH}" | grep -q "systemctl"; then
+    fail "the --update path calls systemctl itself instead of going through enable_and_restart_after_update"
+else
+    pass "the --update path calls enable_and_restart_after_update and nothing else on systemctl"
+fi
+
+INSTALL_PATH="$(sed -n '/^# --- Enable and Start the Agent ---$/,$p' "${INSTALL_SH}")"
+if ! echo "${INSTALL_PATH}" | grep -q "installed and running"; then
+    fail "could not find main's install path to inspect"
+elif echo "${INSTALL_PATH}" | grep -qE '^start_agent$'; then
+    pass "the install path calls start_agent"
+else
+    fail "the install path does not call start_agent"
+fi
 
 echo
 if [ "${FAILURES}" -eq 0 ]; then

@@ -48,6 +48,10 @@ dotnet run --project test/integration/integration.csproj
 # Go agent's cluster reporter against a real k3s in Podman (build tag k3s_integration, never part of go test ./...)
 make -C src/agent test-k3s
 
+# Agent deb/rpm upgrades through the real apt and dnf in Debian 12 and Rocky Linux 9 containers (Docker or Podman;
+# CONTAINER_CLI picks one, Docker first). Needs Go, envsubst and the agent-v3.3.0 tag
+make -C src/agent test-packages
+
 # Web frontend (SvelteKit / Vitest)
 pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web build
 
@@ -259,6 +263,28 @@ immutable, so read the highest existing tag before choosing the next one — `gi
 `<Version>`; it no longer does. Bump either on its own cadence. The two version lines share a
 starting point only because the agent's first independent tag must not regress below the last
 version it shipped under the old lockstep scheme (package managers refuse a "downgrade").
+
+**Agent package upgrades re-enable and restart the unit.** The deb and rpm (`src/agent/nfpm.yaml`, scripts in
+`src/agent/packaging/`) leave `vord-agent` enabled and running after an upgrade, a downgrade or a reinstall; only a
+real removal stops and disables it. An operator who wants the agent off on a host runs `systemctl mask vord-agent`:
+the enable and the restart then fail harmlessly, `install.sh` skips both, and the unit stays masked across upgrades
+(removing the package is the other way out). The old package's scripts always run on an upgrade, and every release
+up to and including `agent-v3.3.0` stops and disables the unit in its pre-remove, so fixing `preremove.sh` alone
+would never heal a host upgrading from one of them. The fix therefore lives in the new package's last-running script:
+deb `postinst` (which runs after the old pre-remove) and, for rpm, `packaging/posttrans.sh` wired as
+`rpm.scripts.posttrans`. rpm gets its own script because it runs the old package's `%preun` after the new package's
+`%post`, so anything `%post` did to the service is undone; `postinstall.sh` therefore only reloads systemd for rpm,
+and `posttrans.sh` ignores its argument because rpm versions disagree on what it is. The maintainer scripts are POSIX
+sh (rpm runs them with `/bin/sh` whatever the shebang says) and CI shellchecks them as `sh`. `make -C src/agent
+test-packages` (CI job `test-agent-packages`) pins all of this against the real package managers: it builds the
+packages with the nfpm pinned in `packaging/install_nfpm.sh` (the release workflow installs it from the same script),
+builds the baseline from the `agent-v3.3.0` scripts in git rather than downloading a published package, and checks the
+unit after a fresh install, an upgrade from the released package, an upgrade to a newer version, a downgrade, a
+removal, a reinstall after removal and a masked unit, with real systemd enablement and only start, stop, restart,
+is-active, daemon-reload and reset-failed faked. The same job runs every maintainer script directly with each argument
+form dpkg and rpm pass it and checks the exact, ordered `systemctl` calls it makes, counts the start and restart calls
+in each package transaction (exactly one for an install, upgrade or downgrade), and fails on a scriptlet error in the
+package manager's output, because dnf exits 0 when an rpm scriptlet fails.
 
 Cutting a release:
 

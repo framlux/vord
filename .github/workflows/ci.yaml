@@ -122,6 +122,33 @@ jobs:
         # re-serves it is responsible for diffing itself against this one.
         run: shellcheck --severity=warning deployment/agent/install.sh
 
+      - name: Lint the package scripts
+        # The maintainer scripts run as root on every customer machine on install, upgrade and
+        # removal, and rpm runs them with /bin/sh whatever their shebang says, so they are checked
+        # as POSIX sh. The package test scripts live beside them and are held to the same rule.
+        run: shellcheck --shell=sh --severity=warning src/agent/packaging/*.sh
+
+  # Drives the real apt and dnf through install, upgrade, downgrade and removal of the agent's deb
+  # and rpm in containers, which no Go test can. Its own job, because it builds an image per distro
+  # and needs the full tag history: the baseline is the last shipped agent's own maintainer scripts.
+  test-agent-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version: '1.26.x'
+
+      # ubuntu-latest runners ship with Docker pre-installed and the daemon already running, and
+      # the test prefers it when both Docker and Podman are present.
+      - name: Test agent deb and rpm upgrades
+        run: make -C src/agent test-packages
+
   test-web:
     runs-on: ubuntu-latest
     permissions:

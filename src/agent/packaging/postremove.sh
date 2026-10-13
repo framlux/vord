@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Copyright (c) 2026 Framlux LLC
 # Licensed under the MIT License
 # See LICENSE for details.
