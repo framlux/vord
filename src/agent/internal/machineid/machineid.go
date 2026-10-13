@@ -19,8 +19,9 @@ const Path = "etc/machine-id"
 const uninitialized = "uninitialized"
 
 // Read returns the trimmed contents of the machine id file under root, which is "/" for the real host and a
-// directory in tests. An empty root means "/". A file that cannot be read, is empty or still says uninitialized
-// gives "", because none of those tells one host from another.
+// directory in tests. An empty root means "/". A file that cannot be read gives "". The contents are returned as
+// they are, including "uninitialized", because registration and the system-info report send the id to the
+// server, which refuses an empty one.
 func Read(root string) string {
 	if root == "" {
 		root = "/"
@@ -31,7 +32,15 @@ func Read(root string) string {
 		return ""
 	}
 
-	id := strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(data))
+}
+
+// ReadHostIdentity returns the machine id as a means of telling this host from another: Read, except that an id
+// that identifies no host gives "". That is a file that cannot be read, is empty or still says "uninitialized".
+// The reporter uses it to tell state it wrote itself from state copied from another host, where "" means "cannot
+// tell" and never counts as a difference.
+func ReadHostIdentity(root string) string {
+	id := Read(root)
 	if id == uninitialized {
 		return ""
 	}

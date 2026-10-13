@@ -84,7 +84,7 @@ func pendingPath(dataDir string) string {
 // hostMachineID returns this host's machine id, read under root, or "" when the host has none that tells it apart
 // from another: the file is missing, unreadable, empty or still uninitialized.
 func hostMachineID(root string) string {
-	return machineid.Read(root)
+	return machineid.ReadHostIdentity(root)
 }
 
 // copiedFromAnotherHost reports whether a record that names recorded as the machine id of the host it was written
