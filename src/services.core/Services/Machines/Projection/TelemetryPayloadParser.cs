@@ -343,27 +343,27 @@ internal static class TelemetryPayloadParser
 
     private static SystemInfoFragment ParseSystemInfoCore(JsonElement root) =>
         new SystemInfoFragment(
-            Hostname: ReadString(root, "hostname"),
-            HardwareModel: ReadString(root, "hardware_model"),
+            Hostname: ReadString(root, "hostname", MachineStateColumnLimits.Hostname),
+            HardwareModel: ReadString(root, "hardware_model", MachineStateColumnLimits.HardwareModel),
             IpAddresses: root.TryGetProperty("ip_addresses", out JsonElement ip) ? ip.GetRawText() : null,
-            HardwareVendor: ReadString(root, "hardware_vendor"),
-            HardwareSerial: ReadString(root, "hardware_serial"),
-            CpuBrand: ReadString(root, "cpu_brand"),
+            HardwareVendor: ReadString(root, "hardware_vendor", MachineStateColumnLimits.HardwareVendor),
+            HardwareSerial: ReadString(root, "hardware_serial", MachineStateColumnLimits.HardwareSerial),
+            CpuBrand: ReadString(root, "cpu_brand", MachineStateColumnLimits.CpuBrand),
             CpuCores: ReadInt(root, "cpu_physical_cores"),
             MemoryTotalBytes: ReadLong(root, "physical_memory"),
             UptimeSeconds: ReadLong(root, "uptime_seconds"),
-            BiosVersion: ReadString(root, "bios_version"));
+            BiosVersion: ReadString(root, "bios_version", MachineStateColumnLimits.BiosVersion));
 
     private static OsVersionFragment ParseOsVersionCore(JsonElement root) =>
         new OsVersionFragment(
-            OsName: ReadString(root, "name"),
-            OsVersion: ReadString(root, "version"),
+            OsName: ReadString(root, "name", MachineStateColumnLimits.OsName),
+            OsVersion: ReadString(root, "version", MachineStateColumnLimits.OsVersion),
             // OsVersionRecord has no kernel field; the agent reports the output of "uname -r" in build.
-            Kernel: ReadString(root, "build"));
+            Kernel: ReadString(root, "build", MachineStateColumnLimits.Kernel));
 
     private static CpuInfoFragment ParseCpuInfoCore(JsonElement root) =>
         new CpuInfoFragment(
-            CpuType: ReadString(root, "processor_type"),
+            CpuType: ReadString(root, "processor_type", MachineStateColumnLimits.CpuType),
             CpuPhysicalCpus: ReadNumericText(root, "number_of_cores"),
             CpuLogicalCpus: ReadInt(root, "logical_processors"));
 
@@ -463,10 +463,22 @@ internal static class TelemetryPayloadParser
     }
 
     private static AgentVersionFragment ParseAgentVersionCore(JsonElement root) =>
-        new AgentVersionFragment(AgentVersion: ReadString(root, "version"));
+        new AgentVersionFragment(AgentVersion: ReadString(root, "version", MachineStateColumnLimits.AgentVersion));
 
-    private static string? ReadString(JsonElement root, string name) =>
-        root.TryGetProperty(name, out JsonElement e) ? e.GetString() : null;
+    /// <summary>
+    /// Reads a string that is stored in a bounded column, so that nothing an agent reports can fail
+    /// the write and stall the projection: NUL characters, which Postgres refuses in any text value,
+    /// are removed, and then the value is cut to the column's length. The NULs go first so they do
+    /// not use up room that the remaining text could have had.
+    /// </summary>
+    /// <param name="root">The payload root element.</param>
+    /// <param name="name">The JSON property name to read.</param>
+    /// <param name="maxLength">The length of the column the value is stored in.</param>
+    /// <returns>The reported text without NULs, cut to <paramref name="maxLength"/>, or null when it is absent.</returns>
+    private static string? ReadString(JsonElement root, string name, int maxLength) =>
+        root.TryGetProperty(name, out JsonElement e)
+            ? MachineStateColumnLimits.Clamp(e.GetString()?.Replace("\0", string.Empty), maxLength)
+            : null;
 
     private static int? ReadInt(JsonElement root, string name) =>
         root.TryGetProperty(name, out JsonElement e) ? e.GetInt32() : null;

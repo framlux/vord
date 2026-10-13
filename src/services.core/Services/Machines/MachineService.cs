@@ -379,7 +379,7 @@ public sealed class MachineService : IMachineService
             SerialNumber = normalizedSerial,
             SystemId = normalizedSystemId,
             AssetTagNumber = request.AssetTag,
-            MachineType = ConvertRpcMachineTypeToDatabaseMachineType(request.MachineType),
+            MachineType = MachineTypeMapping.ToStored(request.MachineType),
             OperatingSystem = ConvertRpcOsTypeToDatabaseOsType(request.Os),
             RegistrationTokenId = token.Id,
             RegisteredOn = now,
@@ -484,17 +484,6 @@ public sealed class MachineService : IMachineService
 
         return Convert.ToHexStringLower(hashBytes);
     }
-
-    private static MachineTypes ConvertRpcMachineTypeToDatabaseMachineType(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType input)
-        => input switch
-        {
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType => MachineTypes.BareMetalServer,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType => MachineTypes.Desktop,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType => MachineTypes.Laptop,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.UnknownType => MachineTypes.Unknown,
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType => MachineTypes.VirtualMachine,
-            _ => MachineTypes.Unknown,
-        };
 
     private static OperatingSystems ConvertRpcOsTypeToDatabaseOsType(Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType input)
         => input switch

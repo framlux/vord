@@ -49,7 +49,8 @@ public sealed class MachineIdSelectionEndpointTests
         int tenantId,
         string hostname,
         OperatingSystems os = OperatingSystems.Ubuntu,
-        short healthStatus = 0)
+        short healthStatus = 0,
+        MachineTypes machineType = MachineTypes.BareMetalServer)
     {
         Machine machine = new()
         {
@@ -57,7 +58,7 @@ public sealed class MachineIdSelectionEndpointTests
             Name = hostname,
             SerialNumber = $"sn-{Guid.NewGuid():N}",
             SystemId = $"sid-{Guid.NewGuid():N}",
-            MachineType = MachineTypes.BareMetalServer,
+            MachineType = machineType,
             OperatingSystem = os,
             RegistrationTokenId = 0,
             RegisteredOn = DateTimeOffset.UtcNow,
@@ -72,7 +73,7 @@ public sealed class MachineIdSelectionEndpointTests
             TenantId = tenantId,
             Name = hostname,
             OperatingSystem = (byte)os,
-            MachineType = 0,
+            MachineType = (byte)machineType,
             Hostname = hostname,
             HealthStatus = healthStatus,
             LastSeenAt = DateTimeOffset.UtcNow
@@ -264,6 +265,29 @@ public sealed class MachineIdSelectionEndpointTests
         JsonElement data = await ReadData(response);
 
         await Assert.That(ReadIds(data)).IsEquivalentTo(new List<long> { ubuntuId });
+    }
+
+    [Test]
+    [Arguments("SingleBoardComputer")]
+    [Arguments("singleboardcomputer")]
+    public async Task Ids_TypeFilter_SingleBoardComputer_ReturnsOnlyBoards(string type)
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        long board = await SeedMachine(db, tenantId, "raspberrypi", os: OperatingSystems.Debian, machineType: MachineTypes.SingleBoardComputer);
+        await SeedMachine(db, tenantId, "rack-server", machineType: MachineTypes.BareMetalServer);
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/ids?type={type}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        JsonElement data = await ReadData(response);
+
+        await Assert.That(ReadIds(data)).IsEquivalentTo(new List<long> { board });
+        await Assert.That(data.GetProperty("totalCount").GetInt32()).IsEqualTo(1);
     }
 
     [Test]

@@ -74,11 +74,12 @@ func (RegistrationStatus) EnumDescriptor() ([]byte, []int) {
 type MachineType int32
 
 const (
-	MachineType_UNKNOWN_TYPE           MachineType = 0
-	MachineType_DESKTOP_TYPE           MachineType = 1
-	MachineType_LAPTOP_TYPE            MachineType = 2
-	MachineType_BARE_METAL_SERVER_TYPE MachineType = 3
-	MachineType_VIRTUAL_MACHINE_TYPE   MachineType = 4
+	MachineType_UNKNOWN_TYPE               MachineType = 0
+	MachineType_DESKTOP_TYPE               MachineType = 1
+	MachineType_LAPTOP_TYPE                MachineType = 2
+	MachineType_BARE_METAL_SERVER_TYPE     MachineType = 3
+	MachineType_VIRTUAL_MACHINE_TYPE       MachineType = 4
+	MachineType_SINGLE_BOARD_COMPUTER_TYPE MachineType = 5
 )
 
 // Enum value maps for MachineType.
@@ -89,13 +90,15 @@ var (
 		2: "LAPTOP_TYPE",
 		3: "BARE_METAL_SERVER_TYPE",
 		4: "VIRTUAL_MACHINE_TYPE",
+		5: "SINGLE_BOARD_COMPUTER_TYPE",
 	}
 	MachineType_value = map[string]int32{
-		"UNKNOWN_TYPE":           0,
-		"DESKTOP_TYPE":           1,
-		"LAPTOP_TYPE":            2,
-		"BARE_METAL_SERVER_TYPE": 3,
-		"VIRTUAL_MACHINE_TYPE":   4,
+		"UNKNOWN_TYPE":               0,
+		"DESKTOP_TYPE":               1,
+		"LAPTOP_TYPE":                2,
+		"BARE_METAL_SERVER_TYPE":     3,
+		"VIRTUAL_MACHINE_TYPE":       4,
+		"SINGLE_BOARD_COMPUTER_TYPE": 5,
 	}
 )
 
@@ -516,13 +519,14 @@ const file_AgentRegistration_proto_rawDesc = "" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage*G\n" +
 	"\x12RegistrationStatus\x12\x18\n" +
 	"\x14UNKNOWN_REGISTRATION\x10\x00\x12\x17\n" +
-	"\x13REGISTRATION_ACTIVE\x10\x01*x\n" +
+	"\x13REGISTRATION_ACTIVE\x10\x01*\x98\x01\n" +
 	"\vMachineType\x12\x10\n" +
 	"\fUNKNOWN_TYPE\x10\x00\x12\x10\n" +
 	"\fDESKTOP_TYPE\x10\x01\x12\x0f\n" +
 	"\vLAPTOP_TYPE\x10\x02\x12\x1a\n" +
 	"\x16BARE_METAL_SERVER_TYPE\x10\x03\x12\x18\n" +
-	"\x14VIRTUAL_MACHINE_TYPE\x10\x04*}\n" +
+	"\x14VIRTUAL_MACHINE_TYPE\x10\x04\x12\x1e\n" +
+	"\x1aSINGLE_BOARD_COMPUTER_TYPE\x10\x05*}\n" +
 	"\x13OperatingSystemType\x12\x0e\n" +
 	"\n" +
 	"UNKNOWN_OS\x10\x00\x12\x0e\n" +

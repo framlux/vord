@@ -40,28 +40,41 @@ public sealed class ConfigurationServiceTests
     [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType, MachineTypes.BareMetalServer)]
     [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType, MachineTypes.Desktop)]
     [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType, MachineTypes.Laptop)]
-    public async Task ResolveReportedMachineType_KnownType_MapsToStoredEnum(
+    [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.SingleBoardComputerType, MachineTypes.SingleBoardComputer)]
+    public async Task GetConfiguration_ReportedKnownType_IsStored(
         Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported,
         MachineTypes expected)
     {
-        await Assert.That(ConfigurationService.ResolveReportedMachineType(reported)).IsEqualTo(expected);
+        // A silently unmapped type would be ignored here, leaving a host that an older agent could
+        // not classify wrong for ever, so each type is asserted by the value that reaches the store.
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ConfigurationService service = CreateService(machineRepo: machineRepo);
+
+        await service.GetConfiguration(new GetConfigurationRequest { MachineId = 42, MachineType = reported }, CreateAuthenticatedContext(42));
+
+        await machineRepo.Received(1).UpdateMachineTypeAsync(42, expected, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task ResolveReportedMachineType_UnknownType_IsIgnored()
+    [Arguments(6)]
+    [Arguments(999)]
+    [Arguments(-1)]
+    public async Task GetConfiguration_ReportedUndefinedType_IsIgnored(int rawReported)
     {
-        // UnknownType means the agent could not classify the host, not that the host is unknown.
-        // Treating it as an assertion would let a detection failure erase a good stored value.
-        await Assert.That(ConfigurationService.ResolveReportedMachineType(
-            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.UnknownType)).IsNull();
-    }
+        // An agent must not be able to write an enum value the rest of the system cannot read, and
+        // the first value beyond the contract is ignored for the same reason as the far ones.
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ConfigurationService service = CreateService(machineRepo: machineRepo);
 
-    [Test]
-    public async Task ResolveReportedMachineType_OutOfRangeValue_IsIgnored()
-    {
-        // An agent must not be able to write an enum value the rest of the system cannot read.
-        await Assert.That(ConfigurationService.ResolveReportedMachineType(
-            (Framlux.FleetManagement.Grpc.AgentRegistration.MachineType)999)).IsNull();
+        GetConfigurationRequest request = new()
+        {
+            MachineId = 42,
+            MachineType = (Framlux.FleetManagement.Grpc.AgentRegistration.MachineType)rawReported,
+        };
+
+        await service.GetConfiguration(request, CreateAuthenticatedContext(42));
+
+        await machineRepo.DidNotReceive().UpdateMachineTypeAsync(Arg.Any<long>(), Arg.Any<MachineTypes>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

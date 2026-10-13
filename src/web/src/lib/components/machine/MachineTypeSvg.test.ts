@@ -112,6 +112,50 @@ describe('MachineTypeSvg', () => {
 		expect(offlineStops.length).toBeGreaterThan(0);
 	});
 
+	describe('silhouettes', () => {
+		function shapeOf(machineType: MachineType) {
+			const { container } = render(MachineTypeSvg, {
+				props: { machineType, healthStatus: MachineHealthStatus.Healthy, isOnline: true, size: 160 }
+			});
+
+			return container;
+		}
+
+		it.each([
+			[MachineType.BareMetalServer, 'server'],
+			[MachineType.Desktop, 'desktop'],
+			[MachineType.Laptop, 'laptop'],
+			[MachineType.VirtualMachine, 'vm'],
+			[MachineType.SingleBoardComputer, 'sbc'],
+			[MachineType.Unknown, 'unknown']
+		])('draws machine type %s with its own shape (%s)', (machineType, shape) => {
+			const container = shapeOf(machineType);
+
+			expect(container.querySelectorAll('[data-machine-shape]').length).toBe(1);
+			expect(container.querySelector(`[data-machine-shape="${shape}"]`)).not.toBeNull();
+		});
+
+		it('draws a single-board computer as a board, not as the unknown box with its question mark', () => {
+			const container = shapeOf(MachineType.SingleBoardComputer);
+
+			expect(container.querySelector('[data-machine-shape="unknown"]')).toBeNull();
+			expect(container.querySelector('text')).toBeNull();
+		});
+
+		it('draws the board with its GPIO header pins', () => {
+			const container = shapeOf(MachineType.SingleBoardComputer);
+
+			expect(container.querySelectorAll('[data-machine-shape="sbc"] [data-gpio-pin]').length).toBe(20);
+		});
+
+		it('keeps the question mark for a machine type it does not know', () => {
+			const container = shapeOf(99 as MachineType);
+
+			expect(container.querySelector('[data-machine-shape="unknown"]')).not.toBeNull();
+			expect(container.querySelector('text')?.textContent).toBe('?');
+		});
+	});
+
 	it('should set aria-label to Online when isOnline is true', () => {
 		const { container } = render(MachineTypeSvg, {
 			props: {
@@ -146,6 +190,7 @@ describe('MachineTypeSvg', () => {
 			MachineType.Desktop,
 			MachineType.Laptop,
 			MachineType.VirtualMachine,
+			MachineType.SingleBoardComputer,
 			MachineType.Unknown
 		];
 
@@ -170,6 +215,7 @@ describe('MachineTypeSvg', () => {
 			MachineType.Desktop,
 			MachineType.Laptop,
 			MachineType.VirtualMachine,
+			MachineType.SingleBoardComputer,
 			MachineType.Unknown
 		];
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/framlux/vord/internal/board"
 )
 
 type systemInfoPayload struct {
@@ -46,7 +48,23 @@ func readFileTrimmed(path string) string {
 }
 
 func readDMI(field string) string {
-	return readFileTrimmed("/sys/class/dmi/id/" + filepath.Base(field))
+	return readDMIAt("/", field)
+}
+
+// readDMIAt reads a DMI field under root, which is "/" for the real host and a directory in tests.
+func readDMIAt(root string, field string) string {
+	return readFileTrimmed(filepath.Join(root, "sys/class/dmi/id", filepath.Base(field)))
+}
+
+// pickHardwareModel returns the model to report: the SMBIOS product name when the firmware has one,
+// otherwise the board's own name from its device tree, which is all a single-board computer without
+// SMBIOS has. Either way the value is cut to what the server stores.
+func pickHardwareModel(dmiProductName string, boardModel string) string {
+	if dmiProductName != "" {
+		return board.LimitModel(dmiProductName)
+	}
+
+	return board.LimitModel(boardModel)
 }
 
 // cpuBrandFromData extracts the CPU brand string from /proc/cpuinfo content.

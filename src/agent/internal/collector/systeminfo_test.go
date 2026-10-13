@@ -273,3 +273,30 @@ func TestSystemInfoPayloadNilIPs(t *testing.T) {
 		t.Errorf("IpAddresses should be nil, got %v", decoded.IpAddresses)
 	}
 }
+
+// Intent: The firmware's product name is the hardware model when it has one; a board without
+// SMBIOS reports its device-tree name instead; and what is reported always fits the server's column.
+func TestPickHardwareModel(t *testing.T) {
+	tests := []struct {
+		name       string
+		dmiProduct string
+		boardModel string
+		want       string
+	}{
+		{"firmware product name wins over the board name", "PowerEdge R640", "Raspberry Pi 4 Model B Rev 1.4", "PowerEdge R640"},
+		{"board name when there is no product name", "", "Raspberry Pi 4 Model B Rev 1.4", "Raspberry Pi 4 Model B Rev 1.4"},
+		{"product name alone", "PowerEdge R640", "", "PowerEdge R640"},
+		{"neither", "", "", ""},
+		{"long product name is cut to 255 bytes", strings.Repeat("p", 300), "", strings.Repeat("p", 255)},
+		{"long board name is cut to 255 bytes", "", strings.Repeat("b", 300), strings.Repeat("b", 255)},
+		{"a cut never splits a character", strings.Repeat("é", 200), "", strings.Repeat("é", 127)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pickHardwareModel(tt.dmiProduct, tt.boardModel); got != tt.want {
+				t.Errorf("pickHardwareModel = %d bytes %q, want %d bytes %q", len(got), got, len(tt.want), tt.want)
+			}
+		})
+	}
+}

@@ -25,6 +25,7 @@ enum MachineType {
     LAPTOP_TYPE = 2;
     BARE_METAL_SERVER_TYPE = 3;
     VIRTUAL_MACHINE_TYPE = 4;
+    SINGLE_BOARD_COMPUTER_TYPE = 5;
 }
 
 enum OperatingSystemType {

@@ -465,4 +465,39 @@ describe('MachineAssignmentModal', () => {
 		expect(within(frozen).queryByLabelText('Status: Critical')).not.toBeInTheDocument();
 		expect(within(live).getByLabelText('Status: Healthy')).toBeInTheDocument();
 	});
+
+	describe('type filter', () => {
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		function typeSelect() {
+			return screen.getByLabelText('Type') as HTMLSelectElement;
+		}
+
+		it('offers the single-board computer, and names every type readably', async () => {
+			render(MachineAssignmentModal, { props: baseProps() });
+			expect(await screen.findByText('web-01')).toBeInTheDocument();
+
+			const labels = Array.from(typeSelect().options).map((o) => o.textContent?.trim());
+
+			expect(labels).toContain('Single-board computer');
+			// The option text used to be the raw enum key.
+			expect(labels).toContain('Bare Metal Server');
+			expect(labels).not.toContain('BareMetalServer');
+		});
+
+		it('searches for single-board computers by their enum name', async () => {
+			vi.useFakeTimers();
+			render(MachineAssignmentModal, { props: baseProps() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			await fireEvent.change(typeSelect(), { target: { value: 'SingleBoardComputer' } });
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(searchMachinesMock).toHaveBeenLastCalledWith(
+				expect.objectContaining({ type: 'SingleBoardComputer' })
+			);
+		});
+	});
 });

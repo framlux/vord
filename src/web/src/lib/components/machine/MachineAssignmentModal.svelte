@@ -6,6 +6,7 @@
 	import { untrack } from 'svelte';
 	import { ApiClient } from '$lib/api/client';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
+	import { getTypeName } from '$lib/utils/enums';
 	import { MachineHealthStatus, OperatingSystem, MachineType, type FleetMachineDto } from '$lib/api/types';
 	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
@@ -247,7 +248,13 @@
 	// The server parses these by enum name, case-insensitively, so the option values are the names
 	// themselves rather than the numeric values the DTOs carry.
 	const osOptions = [OperatingSystem.Ubuntu, OperatingSystem.Debian, OperatingSystem.RedHat, OperatingSystem.Fedora, OperatingSystem.Windows, OperatingSystem.MacOS];
-	const typeOptions = [MachineType.BareMetalServer, MachineType.VirtualMachine, MachineType.Desktop, MachineType.Laptop];
+	const typeOptions = [
+		MachineType.BareMetalServer,
+		MachineType.VirtualMachine,
+		MachineType.Desktop,
+		MachineType.Laptop,
+		MachineType.SingleBoardComputer
+	];
 </script>
 
 <svelte:window onkeydown={(e) => { if (open && e.key === 'Escape') oncancel?.(); }} />
@@ -305,7 +312,7 @@
 						<select id="machine-picker-type" bind:value={machineType} onchange={applyFilterChange} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
 							<option value="">Any type</option>
 							{#each typeOptions as option}
-								<option value={MachineType[option]}>{MachineType[option]}</option>
+								<option value={MachineType[option]}>{getTypeName(option)}</option>
 							{/each}
 						</select>
 					</div>

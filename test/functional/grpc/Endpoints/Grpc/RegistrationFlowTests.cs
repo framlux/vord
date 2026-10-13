@@ -66,6 +66,71 @@ public sealed class RegistrationFlowTests
     }
 
     [Test]
+    public async Task RegisterSystem_SingleBoardComputer_StoresTheTypeOnTheMachineAndTheSummary()
+    {
+        // A Raspberry Pi registers as a single-board computer. The type travels through the real
+        // gRPC pipeline and must land as 5 on both rows: the machine list reads one and the fleet
+        // views read the other.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RegisterSystemResponse response = await client.RegisterSystemAsync(new RegisterSystemRequest
+        {
+            Hostname = "raspberrypi",
+            SerialNumber = "sn-sbc-001",
+            SystemId = "sys-sbc-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.SingleBoardComputerType,
+            Os = OperatingSystemType.DebianOs
+        });
+
+        await Assert.That(response.MachineId).IsGreaterThan(0);
+        await Assert.That(response.ErrorMessage).IsEmpty();
+
+        Machine? machine = await db.Machines.FirstOrDefaultAsync(m => m.Id == response.MachineId);
+        MachineStateSummary? summary = await db.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == response.MachineId);
+
+        await Assert.That(machine!.MachineType).IsEqualTo(MachineTypes.SingleBoardComputer);
+        await Assert.That((int)machine.MachineType).IsEqualTo(5);
+        await Assert.That(summary!.MachineType).IsEqualTo((byte)5);
+    }
+
+    [Test]
+    public async Task RegisterSystem_MachineTypeBeyondTheContract_IsRefusedAsInvalid()
+    {
+        // The first value after the last defined one is refused, with the wording an older agent
+        // looks for, and nothing is registered.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(async () => await client.RegisterSystemAsync(new RegisterSystemRequest
+        {
+            Hostname = "future-board",
+            SerialNumber = "sn-future-001",
+            SystemId = "sys-future-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = (MachineType)6,
+            Os = OperatingSystemType.DebianOs
+        }));
+
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Invalid machine type");
+        await Assert.That(await db.Machines.AnyAsync(m => m.SerialNumber == "sn-future-001")).IsFalse();
+    }
+
+    [Test]
     public async Task RegisterSystem_BeforeAnyTelemetry_SummaryReadsOffline()
     {
         // Registration pre-creates the summary row so later telemetry writes are pure updates.

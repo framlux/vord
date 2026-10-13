@@ -57,8 +57,38 @@ describe('getTypeName', () => {
         expect(getTypeName(MachineType.VirtualMachine)).toBe('Virtual Machine');
     });
 
+    it('should return "Single-board computer" for MachineType.SingleBoardComputer', () => {
+        expect(getTypeName(MachineType.SingleBoardComputer)).toBe('Single-board computer');
+    });
+
     it('should return "Unknown" for an invalid enum value', () => {
         expect(getTypeName(999 as MachineType)).toBe('Unknown');
+    });
+
+    it('should return "Unknown" for the first value past the known ones', () => {
+        expect(getTypeName(6 as MachineType)).toBe('Unknown');
+    });
+});
+
+describe('MachineType values', () => {
+    // These numbers are what the server sends and stores, so a renumbering here would label every
+    // machine as a different kind of thing.
+    it.each([
+        ['Unknown', MachineType.Unknown, 0],
+        ['Desktop', MachineType.Desktop, 1],
+        ['Laptop', MachineType.Laptop, 2],
+        ['BareMetalServer', MachineType.BareMetalServer, 3],
+        ['VirtualMachine', MachineType.VirtualMachine, 4],
+        ['SingleBoardComputer', MachineType.SingleBoardComputer, 5]
+    ])('should keep %s at %i', (_name, value, expected) => {
+        expect(value).toBe(expected);
+    });
+
+    it('should have exactly the six known members', () => {
+        const names = Object.keys(MachineType).filter((key) => isNaN(Number(key)));
+        expect(names.sort()).toEqual(
+            ['BareMetalServer', 'Desktop', 'Laptop', 'SingleBoardComputer', 'Unknown', 'VirtualMachine']
+        );
     });
 });
 
@@ -113,6 +143,14 @@ describe('getTypeFilterOptions', () => {
         expect(labels).toContain('Laptop');
         expect(labels).toContain('Bare Metal Server');
         expect(labels).toContain('Virtual Machine');
+        expect(labels).toContain('Single-board computer');
+    });
+
+    it('should offer the single-board computer by its enum name', () => {
+        expect(getTypeFilterOptions()).toContainEqual({
+            value: 'SingleBoardComputer',
+            label: 'Single-board computer'
+        });
     });
 
     it('should have enum key names as values for non-All options', () => {
@@ -123,11 +161,12 @@ describe('getTypeFilterOptions', () => {
         expect(values).toContain('Laptop');
         expect(values).toContain('BareMetalServer');
         expect(values).toContain('VirtualMachine');
+        expect(values).toContain('SingleBoardComputer');
     });
 
     it('should have one more option than the number of enum members', () => {
         const options = getTypeFilterOptions();
-        // 5 enum members + 1 "All Types" entry
-        expect(options.length).toBe(6);
+        // 6 enum members + 1 "All Types" entry
+        expect(options.length).toBe(7);
     });
 });

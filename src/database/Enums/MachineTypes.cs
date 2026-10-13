@@ -32,5 +32,10 @@ public enum MachineTypes : byte
     /// <summary>
     /// Represents a virtual machine.
     /// </summary>
-    VirtualMachine = 4
+    VirtualMachine = 4,
+
+    /// <summary>
+    /// Represents a single-board computer such as a Raspberry Pi.
+    /// </summary>
+    SingleBoardComputer = 5
 }

@@ -24,6 +24,8 @@ export function getTypeName(type: MachineType): string {
 			return 'Bare Metal Server';
 		case MachineType.VirtualMachine:
 			return 'Virtual Machine';
+		case MachineType.SingleBoardComputer:
+			return 'Single-board computer';
 		default:
 			return 'Unknown';
 	}

@@ -127,6 +127,82 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task GetConfiguration_ReportedSingleBoardComputer_CorrectsAnUnknownMachineAndSummary()
+    {
+        // The owner's case: a Raspberry Pi that registered as Unknown with an older agent is
+        // corrected by the first configuration fetch of the new one. Both rows must move.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+
+        await db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.MachineType, MachineTypes.Unknown)
+            .UpdateAsync();
+        await db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.MachineType, (byte)MachineTypes.Unknown)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        await client.GetConfigurationAsync(
+            new GetConfigurationRequest
+            {
+                MachineId = machineId,
+                MachineType = Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.SingleBoardComputerType,
+            },
+            headers: headers);
+
+        Machine? stored = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
+        MachineStateSummary? summary = await db.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == machineId);
+
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.SingleBoardComputer);
+        await Assert.That(summary!.MachineType).IsEqualTo((byte)5);
+    }
+
+    [Test]
+    public async Task GetConfiguration_UnknownReportedType_LeavesAStoredSingleBoardComputerAlone()
+    {
+        // A board whose agent later loses the signal, for instance by moving into a container that
+        // hides the device tree, reports Unknown; that is no opinion and keeps the stored type.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+
+        await db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.MachineType, MachineTypes.SingleBoardComputer)
+            .UpdateAsync();
+        await db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.MachineType, (byte)MachineTypes.SingleBoardComputer)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        await client.GetConfigurationAsync(
+            new GetConfigurationRequest
+            {
+                MachineId = machineId,
+                MachineType = Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.UnknownType,
+            },
+            headers: headers);
+
+        Machine? stored = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
+        MachineStateSummary? summary = await db.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == machineId);
+
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.SingleBoardComputer);
+        await Assert.That(summary!.MachineType).IsEqualTo((byte)5);
+    }
+
+    [Test]
     public async Task GetConfiguration_UnknownReportedType_DoesNotOverwriteStoredType()
     {
         // Every agent released before the field existed sends the zero value, and a current agent

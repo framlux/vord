@@ -7,6 +7,8 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/framlux/vord/internal/db"
@@ -474,4 +476,92 @@ func TestSlowTickTick_NotPausedAdvances(t *testing.T) {
 	if st.tickNum != 1 {
 		t.Errorf("expected the tick count to advance to 1, got %d", st.tickNum)
 	}
+}
+
+// collectedSystemInfo runs the system-info collector against a fixture root, with the given
+// /proc/cpuinfo text as the slow tick would have read it, and returns the payload it queued.
+func collectedSystemInfo(t *testing.T, files map[string]string, cpuinfo string) systemInfoPayload {
+	t.Helper()
+
+	root := t.TempDir()
+	for path, content := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := newTestStore(t)
+	st := NewSlowTick(store, state.New(), neverPaused())
+	st.root = root
+
+	st.collectSystemInfo(context.Background(), cpuinfo, nil, fixtureSlowMeminfo, nil, "123456.78 67890.12", nil)
+
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 telemetry item, got %d", len(items))
+	}
+
+	var payload systemInfoPayload
+	if err := json.Unmarshal([]byte(items[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	return payload
+}
+
+// Intent: A single-board computer has no SMBIOS product name, so the hardware model it reports is the
+// name its device tree gives the board, or failing that the model its cpuinfo prints; where the
+// firmware does name the product, that name stays the model.
+func TestSlowTickCollectSystemInfo_HardwareModel(t *testing.T) {
+	const piModel = "Raspberry Pi 4 Model B Rev 1.4"
+	deviceTree := map[string]string{
+		"sys/firmware/devicetree/base/compatible": "raspberrypi,4-model-b\x00brcm,bcm2711\x00",
+		"sys/firmware/devicetree/base/model":      piModel + "\x00",
+	}
+
+	t.Run("device-tree model when there is no product name", func(t *testing.T) {
+		if got := collectedSystemInfo(t, deviceTree, "").HardwareModel; got != piModel {
+			t.Errorf("HardwareModel = %q, want %q", got, piModel)
+		}
+	})
+
+	t.Run("product name wins over the device-tree model", func(t *testing.T) {
+		files := map[string]string{"sys/class/dmi/id/product_name": "PowerEdge R640\n"}
+		for path, content := range deviceTree {
+			files[path] = content
+		}
+
+		if got := collectedSystemInfo(t, files, "").HardwareModel; got != "PowerEdge R640" {
+			t.Errorf("HardwareModel = %q, want the product name", got)
+		}
+	})
+
+	t.Run("cpuinfo model when the device tree is masked", func(t *testing.T) {
+		cpuinfo := "processor\t: 0\n\nRevision\t: d03114\nModel\t\t: " + piModel + "\n"
+
+		if got := collectedSystemInfo(t, nil, cpuinfo).HardwareModel; got != piModel {
+			t.Errorf("HardwareModel = %q, want %q", got, piModel)
+		}
+	})
+
+	t.Run("device-tree model wins over the cpuinfo model", func(t *testing.T) {
+		cpuinfo := "Model\t\t: Some Other Board\n"
+
+		if got := collectedSystemInfo(t, deviceTree, cpuinfo).HardwareModel; got != piModel {
+			t.Errorf("HardwareModel = %q, want %q", got, piModel)
+		}
+	})
+
+	t.Run("nothing to report", func(t *testing.T) {
+		if got := collectedSystemInfo(t, nil, fixtureSlowCpuinfo).HardwareModel; got != "" {
+			t.Errorf("HardwareModel = %q, want empty", got)
+		}
+	})
 }

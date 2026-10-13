@@ -54,6 +54,202 @@ public class TelemetryPayloadParserTests
     }
 
     [Test]
+    public async Task TryParseSystemInfo_OverLongText_IsCutToTheColumnLengths()
+    {
+        // Every text field is cut to its column, so a long report cannot fail the Postgres UPDATE
+        // and stall the projection. The lengths are the schema's: summary Hostname and
+        // HardwareModel are 255, and the detail columns are 255 except BiosVersion at 64.
+        string payload = Serialize(new SystemInfoRecord
+        {
+            Hostname = new string('h', 300),
+            HardwareModel = new string('m', 400),
+            HardwareVendor = new string('v', 300),
+            HardwareSerial = new string('s', 300),
+            CpuBrand = new string('c', 300),
+            BiosVersion = new string('b', 100),
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.Hostname).IsEqualTo(new string('h', 255));
+        await Assert.That(f.HardwareModel).IsEqualTo(new string('m', 255));
+        await Assert.That(f.HardwareVendor).IsEqualTo(new string('v', 255));
+        await Assert.That(f.HardwareSerial).IsEqualTo(new string('s', 255));
+        await Assert.That(f.CpuBrand).IsEqualTo(new string('c', 255));
+        await Assert.That(f.BiosVersion).IsEqualTo(new string('b', 64));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_TextExactlyAtTheLimit_IsKeptWhole()
+    {
+        string payload = Serialize(new SystemInfoRecord
+        {
+            HardwareModel = new string('m', 255),
+            BiosVersion = new string('b', 64),
+        });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.HardwareModel).IsEqualTo(new string('m', 255));
+        await Assert.That(f.BiosVersion).IsEqualTo(new string('b', 64));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_ModelEndingInASurrogatePairAtTheCut_DropsThePairWhole()
+    {
+        // The emoji is two UTF-16 characters; cutting between them would leave a lone high surrogate
+        // that cannot be encoded into the column.
+        string model = new string('m', 254) + "\U0001F600";
+
+        string payload = Serialize(new SystemInfoRecord { HardwareModel = model });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.HardwareModel).IsEqualTo(new string('m', 254));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_NulCharacters_AreRemovedFromEveryTextField()
+    {
+        // Postgres refuses a NUL in any text value, and the projection retries a failing batch for
+        // ever, so a NUL must never survive the parse.
+        string payload = Serialize(new SystemInfoRecord
+        {
+            Hostname = "web\0-01",
+            HardwareModel = "Raspberry\0 Pi 4 Model B\0",
+            HardwareVendor = "\0Dell",
+            HardwareSerial = "SVC\0123",
+            CpuBrand = "Xeon\0",
+            BiosVersion = "2.1\0.0",
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.Hostname).IsEqualTo("web-01");
+        await Assert.That(f.HardwareModel).IsEqualTo("Raspberry Pi 4 Model B");
+        await Assert.That(f.HardwareVendor).IsEqualTo("Dell");
+        await Assert.That(f.HardwareSerial).IsEqualTo("SVC123");
+        await Assert.That(f.CpuBrand).IsEqualTo("Xeon");
+        await Assert.That(f.BiosVersion).IsEqualTo("2.1.0");
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_NulCharactersAreRemovedBeforeTheCut()
+    {
+        // Cutting first would spend half the column on characters that are then thrown away.
+        string payload = Serialize(new SystemInfoRecord
+        {
+            Hostname = string.Concat(Enumerable.Repeat("h\0", 300)),
+        });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.Hostname).IsEqualTo(new string('h', 255));
+    }
+
+    [Test]
+    public async Task TryParseSystemInfo_TextOfOnlyNulCharacters_BecomesEmptyNotNull()
+    {
+        string payload = Serialize(new SystemInfoRecord { HardwareModel = "\0\0" });
+
+        TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
+
+        await Assert.That(f!.HardwareModel).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task TryParseOsVersion_NulCharacters_AreRemoved()
+    {
+        string payload = Serialize(new OsVersionRecord
+        {
+            Name = "Debian\0 GNU/Linux",
+            Version = "12\0",
+            Build = "6.1.0\0-rpi",
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseOsVersion(payload, out OsVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.OsName).IsEqualTo("Debian GNU/Linux");
+        await Assert.That(f.OsVersion).IsEqualTo("12");
+        await Assert.That(f.Kernel).IsEqualTo("6.1.0-rpi");
+    }
+
+    [Test]
+    public async Task TryParseCpuInfo_NulCharactersInTheProcessorType_AreRemoved()
+    {
+        string payload = Serialize(new CpuInfoRecord { ProcessorType = "ARMv8\0" });
+
+        TelemetryPayloadParser.TryParseCpuInfo(payload, out CpuInfoFragment? f);
+
+        await Assert.That(f!.CpuType).IsEqualTo("ARMv8");
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_NulCharacters_AreRemoved()
+    {
+        string payload = Serialize(new AgentVersionRecord { Version = "3.4\0.0" });
+
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.AgentVersion).IsEqualTo("3.4.0");
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_VersionOfOnlyNulCharacters_ReturnsFalseSoTheRecordedVersionSurvives()
+    {
+        string payload = Serialize(new AgentVersionRecord { Version = "\0\0" });
+
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(f).IsNull();
+    }
+
+    [Test]
+    public async Task TryParseOsVersion_OverLongText_IsCutToTheColumnLengths()
+    {
+        string payload = Serialize(new OsVersionRecord
+        {
+            Name = new string('n', 300),
+            Version = new string('v', 100),
+            Build = new string('k', 300),
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseOsVersion(payload, out OsVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.OsName).IsEqualTo(new string('n', 255));
+        await Assert.That(f.OsVersion).IsEqualTo(new string('v', 64));
+        await Assert.That(f.Kernel).IsEqualTo(new string('k', 255));
+    }
+
+    [Test]
+    public async Task TryParseCpuInfo_OverLongProcessorType_IsCutToTheColumnLength()
+    {
+        string payload = Serialize(new CpuInfoRecord { ProcessorType = new string('t', 100) });
+
+        bool ok = TelemetryPayloadParser.TryParseCpuInfo(payload, out CpuInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.CpuType).IsEqualTo(new string('t', 64));
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_OverLongVersion_IsCutToTheColumnLength()
+    {
+        string payload = Serialize(new AgentVersionRecord { Version = new string('a', 100) });
+
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.AgentVersion).IsEqualTo(new string('a', 64));
+    }
+
+    [Test]
     public async Task TryParseSystemInfo_MissingOptionalFields_YieldsNulls()
     {
         bool ok = TelemetryPayloadParser.TryParseSystemInfo("{}", out SystemInfoFragment? f);

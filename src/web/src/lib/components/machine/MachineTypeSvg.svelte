@@ -131,88 +131,124 @@
 	<!-- Machine type silhouette -->
 	<g transform="translate({center - 30}, {center - 30}) scale(0.75)">
 		{#if machineType === MachineType.BareMetalServer}
-			<!-- 2U Rack Server -->
-			<rect x="8" y="16" width="64" height="48" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
-			<!-- Rack ears -->
-			<rect x="2" y="20" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
-			<rect x="72" y="20" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
-			<rect x="2" y="52" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
-			<rect x="72" y="52" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
-			<!-- Ventilation lines -->
-			<line x1="16" y1="28" x2="56" y2="28" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
-			<line x1="16" y1="34" x2="56" y2="34" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
-			<line x1="16" y1="40" x2="56" y2="40" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
-			<!-- LED indicators -->
-			<circle cx="64" cy="28" r="2.5" fill={ledColor} class={ledPulseClass} />
-			<circle cx="64" cy="36" r="2.5" fill={colors.hex} fill-opacity="0.5" />
-			<!-- Drive bays bottom section -->
-			<line x1="8" y1="46" x2="72" y2="46" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
-			<rect x="14" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
-			<rect x="30" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
-			<rect x="46" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
+			<g data-machine-shape="server">
+				<!-- 2U Rack Server -->
+				<rect x="8" y="16" width="64" height="48" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
+				<!-- Rack ears -->
+				<rect x="2" y="20" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
+				<rect x="72" y="20" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
+				<rect x="2" y="52" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
+				<rect x="72" y="52" width="6" height="8" rx="1" fill={colors.hex} fill-opacity="0.3" />
+				<!-- Ventilation lines -->
+				<line x1="16" y1="28" x2="56" y2="28" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
+				<line x1="16" y1="34" x2="56" y2="34" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
+				<line x1="16" y1="40" x2="56" y2="40" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
+				<!-- LED indicators -->
+				<circle cx="64" cy="28" r="2.5" fill={ledColor} class={ledPulseClass} />
+				<circle cx="64" cy="36" r="2.5" fill={colors.hex} fill-opacity="0.5" />
+				<!-- Drive bays bottom section -->
+				<line x1="8" y1="46" x2="72" y2="46" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+				<rect x="14" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
+				<rect x="30" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
+				<rect x="46" y="50" width="12" height="8" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.4" />
+			</g>
 
 		{:else if machineType === MachineType.Desktop}
-			<!-- Tower Case -->
-			<rect x="16" y="8" width="48" height="64" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
-			<!-- Power button -->
-			<circle cx="40" cy="18" r="4" stroke={colors.hex} stroke-width="1.5" fill="none" />
-			<line x1="40" y1="15" x2="40" y2="18" stroke={colors.hex} stroke-width="1.5" />
-			<!-- LED -->
-			<circle cx="32" cy="18" r="2" fill={ledColor} class={ledPulseClass} />
-			<!-- Drive bay -->
-			<rect x="22" y="28" width="36" height="10" rx="2" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.5" />
-			<!-- Ventilation pattern -->
-			<line x1="24" y1="48" x2="56" y2="48" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
-			<line x1="24" y1="52" x2="56" y2="52" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
-			<line x1="24" y1="56" x2="56" y2="56" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
-			<line x1="24" y1="60" x2="56" y2="60" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
-			<line x1="24" y1="64" x2="56" y2="64" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+			<g data-machine-shape="desktop">
+				<!-- Tower Case -->
+				<rect x="16" y="8" width="48" height="64" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
+				<!-- Power button -->
+				<circle cx="40" cy="18" r="4" stroke={colors.hex} stroke-width="1.5" fill="none" />
+				<line x1="40" y1="15" x2="40" y2="18" stroke={colors.hex} stroke-width="1.5" />
+				<!-- LED -->
+				<circle cx="32" cy="18" r="2" fill={ledColor} class={ledPulseClass} />
+				<!-- Drive bay -->
+				<rect x="22" y="28" width="36" height="10" rx="2" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.5" />
+				<!-- Ventilation pattern -->
+				<line x1="24" y1="48" x2="56" y2="48" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+				<line x1="24" y1="52" x2="56" y2="52" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+				<line x1="24" y1="56" x2="56" y2="56" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+				<line x1="24" y1="60" x2="56" y2="60" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+				<line x1="24" y1="64" x2="56" y2="64" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
+			</g>
 
 		{:else if machineType === MachineType.Laptop}
-			<!-- Screen -->
-			<rect x="14" y="8" width="52" height="36" rx="3" stroke={colors.hex} stroke-width="2" fill="none" />
-			<!-- Screen inner -->
-			<rect x="18" y="12" width="44" height="28" rx="1" fill={colors.hex} fill-opacity="0.08" />
-			<!-- Camera dot -->
-			<circle cx="40" cy="10" r="1.5" fill={colors.hex} fill-opacity="0.4" />
-			<!-- Hinge -->
-			<line x1="12" y1="44" x2="68" y2="44" stroke={colors.hex} stroke-width="2" />
-			<!-- Keyboard base -->
-			<path d="M8 44 L12 44 L12 48 Q12 56 16 56 L64 56 Q68 56 68 48 L68 44 L72 44 L72 58 Q72 64 66 64 L14 64 Q8 64 8 58 Z" stroke={colors.hex} stroke-width="1.5" fill="none" />
-			<!-- Keyboard keys (simplified grid) -->
-			<rect x="18" y="48" width="44" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
-			<rect x="18" y="53" width="44" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
-			<rect x="26" y="58" width="28" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
-			<!-- Power LED -->
-			<circle cx="40" cy="62" r="1.5" fill={ledColor} class={ledPulseClass} />
+			<g data-machine-shape="laptop">
+				<!-- Screen -->
+				<rect x="14" y="8" width="52" height="36" rx="3" stroke={colors.hex} stroke-width="2" fill="none" />
+				<!-- Screen inner -->
+				<rect x="18" y="12" width="44" height="28" rx="1" fill={colors.hex} fill-opacity="0.08" />
+				<!-- Camera dot -->
+				<circle cx="40" cy="10" r="1.5" fill={colors.hex} fill-opacity="0.4" />
+				<!-- Hinge -->
+				<line x1="12" y1="44" x2="68" y2="44" stroke={colors.hex} stroke-width="2" />
+				<!-- Keyboard base -->
+				<path d="M8 44 L12 44 L12 48 Q12 56 16 56 L64 56 Q68 56 68 48 L68 44 L72 44 L72 58 Q72 64 66 64 L14 64 Q8 64 8 58 Z" stroke={colors.hex} stroke-width="1.5" fill="none" />
+				<!-- Keyboard keys (simplified grid) -->
+				<rect x="18" y="48" width="44" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
+				<rect x="18" y="53" width="44" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
+				<rect x="26" y="58" width="28" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
+				<!-- Power LED -->
+				<circle cx="40" cy="62" r="1.5" fill={ledColor} class={ledPulseClass} />
+			</g>
 
 		{:else if machineType === MachineType.VirtualMachine}
-			<!-- Cloud outline -->
-			<path
-				d="M24 48 Q12 48 12 38 Q12 28 22 26 Q24 16 36 14 Q48 12 54 20 Q56 18 60 18 Q68 18 68 26 Q76 28 76 36 Q76 46 66 48 Z"
-				stroke={colors.hex}
-				stroke-width="2"
-				fill="none"
-			/>
-			<!-- Circuit traces inside cloud -->
-			<line x1="28" y1="32" x2="52" y2="32" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
-			<line x1="32" y1="38" x2="48" y2="38" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
-			<line x1="40" y1="26" x2="40" y2="44" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
-			<!-- Node dots -->
-			<circle cx="28" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
-			<circle cx="52" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
-			<circle cx="40" cy="38" r="2.5" fill={ledColor} class={ledPulseClass} />
-			<!-- VM indicator bars below cloud -->
-			<rect x="30" y="54" width="20" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.3" />
-			<rect x="34" y="60" width="12" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.2" />
+			<g data-machine-shape="vm">
+				<!-- Cloud outline -->
+				<path
+					d="M24 48 Q12 48 12 38 Q12 28 22 26 Q24 16 36 14 Q48 12 54 20 Q56 18 60 18 Q68 18 68 26 Q76 28 76 36 Q76 46 66 48 Z"
+					stroke={colors.hex}
+					stroke-width="2"
+					fill="none"
+				/>
+				<!-- Circuit traces inside cloud -->
+				<line x1="28" y1="32" x2="52" y2="32" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
+				<line x1="32" y1="38" x2="48" y2="38" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
+				<line x1="40" y1="26" x2="40" y2="44" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" stroke-dasharray="3 3" />
+				<!-- Node dots -->
+				<circle cx="28" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
+				<circle cx="52" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
+				<circle cx="40" cy="38" r="2.5" fill={ledColor} class={ledPulseClass} />
+				<!-- VM indicator bars below cloud -->
+				<rect x="30" y="54" width="20" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.3" />
+				<rect x="34" y="60" width="12" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.2" />
+			</g>
+
+		{:else if machineType === MachineType.SingleBoardComputer}
+			<g data-machine-shape="sbc">
+				<!-- Board outline -->
+				<rect x="10" y="18" width="60" height="44" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
+				<!-- Mounting holes -->
+				<circle cx="15" cy="23" r="1.5" fill={colors.hex} fill-opacity="0.4" />
+				<circle cx="65" cy="23" r="1.5" fill={colors.hex} fill-opacity="0.4" />
+				<circle cx="15" cy="57" r="1.5" fill={colors.hex} fill-opacity="0.4" />
+				<circle cx="65" cy="57" r="1.5" fill={colors.hex} fill-opacity="0.4" />
+				<!-- GPIO header: two rows of pins along the top edge -->
+				<rect x="19" y="21" width="42" height="11" rx="1" stroke={colors.hex} stroke-width="0.75" stroke-opacity="0.5" fill="none" />
+				{#each [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as column}
+					<circle data-gpio-pin cx={23 + column * 4} cy="24.5" r="1" fill={colors.hex} fill-opacity="0.6" />
+					<circle data-gpio-pin cx={23 + column * 4} cy="28.5" r="1" fill={colors.hex} fill-opacity="0.6" />
+				{/each}
+				<!-- SoC -->
+				<rect x="30" y="38" width="16" height="16" rx="1.5" stroke={colors.hex} stroke-width="1.5" fill={colors.hex} fill-opacity="0.12" />
+				<!-- USB and Ethernet housings overhanging the right edge -->
+				<rect x="62" y="35" width="10" height="9" rx="1" stroke={colors.hex} stroke-width="1" fill={colors.hex} fill-opacity="0.3" />
+				<rect x="62" y="47" width="10" height="11" rx="1" stroke={colors.hex} stroke-width="1" fill={colors.hex} fill-opacity="0.3" />
+				<!-- microSD slot on the left edge -->
+				<rect x="6" y="40" width="8" height="10" rx="1" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.5" />
+				<!-- Activity LED -->
+				<circle cx="20" cy="56" r="2" fill={ledColor} class={ledPulseClass} />
+			</g>
 
 		{:else}
-			<!-- Unknown / Generic Box -->
-			<rect x="12" y="16" width="56" height="48" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
-			<!-- Question mark -->
-			<text x="40" y="46" text-anchor="middle" fill={colors.hex} fill-opacity="0.4" font-size="24" font-weight="300">?</text>
-			<!-- LED -->
-			<circle cx="60" cy="24" r="2" fill={ledColor} class={ledPulseClass} />
+			<g data-machine-shape="unknown">
+				<!-- Unknown / Generic Box -->
+				<rect x="12" y="16" width="56" height="48" rx="4" stroke={colors.hex} stroke-width="2" fill="none" />
+				<!-- Question mark -->
+				<text x="40" y="46" text-anchor="middle" fill={colors.hex} fill-opacity="0.4" font-size="24" font-weight="300">?</text>
+				<!-- LED -->
+				<circle cx="60" cy="24" r="2" fill={ledColor} class={ledPulseClass} />
+			</g>
 		{/if}
 	</g>
 

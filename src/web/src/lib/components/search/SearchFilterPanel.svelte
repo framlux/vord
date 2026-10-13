@@ -7,6 +7,7 @@
 	import RangeInput from './RangeInput.svelte';
 	import ThresholdInput from './ThresholdInput.svelte';
 	import type { MachineSearchParams } from '$lib/api/types';
+	import { getTypeFilterOptions } from '$lib/utils/enums';
 
 	let {
 		filters,
@@ -152,13 +153,10 @@
 		{ value: 'RedHat', label: 'RedHat' }
 	];
 
-	const typeOptions = [
-		{ value: '', label: 'All Types' },
-		{ value: 'Desktop', label: 'Desktop' },
-		{ value: 'Laptop', label: 'Laptop' },
-		{ value: 'BareMetalServer', label: 'Bare Metal Server' },
-		{ value: 'VirtualMachine', label: 'Virtual Machine' }
-	];
+	// Derived from the machine type enum so a type added to it cannot be left out of the filter.
+	// Unknown is left out on purpose: it is what an unclassified machine reads, not a kind of machine
+	// anyone searches for.
+	const typeOptions = getTypeFilterOptions().filter((option) => option.value !== 'Unknown');
 </script>
 
 <div class="rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
