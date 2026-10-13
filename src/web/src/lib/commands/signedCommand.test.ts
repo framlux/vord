@@ -12,7 +12,7 @@ vi.mock('$lib/crypto/signing', async (importOriginal) => ({
 	signPayload
 }));
 
-import { findServerKey, sendSignedCommand, usableSigningKeys } from './signedCommand';
+import { buildCommandParams, findServerKey, isValidPid, isValidSessionId, sendSignedCommand, usableSigningKeys } from './signedCommand';
 import type { LocalSigningKey } from './signedCommand';
 
 const NOW = '2026-10-12T09:30:00.123Z';
@@ -126,6 +126,73 @@ describe('signedCommand', () => {
 		});
 	});
 
+	describe('command parameters', () => {
+		it('signs exactly the params it was given, so the signed bytes bind the command to them', async () => {
+			const { api, sent } = makeApi();
+
+			await sendSignedCommand(api, request({ commandType: 'kill_process', params: { pid: '4242', force: 'true' } }));
+
+			const payload = JSON.parse(sent[0].canonicalPayload) as { params: unknown };
+
+			expect(payload.params).toEqual({ pid: '4242', force: 'true' });
+		});
+
+		it('sends the same string map in the request as it signed', async () => {
+			const { api, sent } = makeApi();
+
+			await sendSignedCommand(api, request({ commandType: 'kill_session', params: { session_id: 'c12' } }));
+
+			const payload = JSON.parse(sent[0].canonicalPayload) as { params: unknown };
+
+			expect(typeof sent[0].params).toBe('string');
+			expect(JSON.parse(sent[0].params as string)).toEqual({ session_id: 'c12' });
+			expect(JSON.parse(sent[0].params as string)).toEqual(payload.params);
+		});
+
+		it('keeps the canonical payload sorted at the top level with the params in place', async () => {
+			const { api, sent } = makeApi();
+
+			await sendSignedCommand(api, request({ commandType: 'kill_process', params: { pid: '4242' } }));
+
+			expect(sent[0].canonicalPayload).toBe(
+				`{"command_id":"${sent[0].commandId}","command_type":"kill_process","expires_at":"${EXPIRES}",` +
+					`"machine_id":7,"nonce":"${sent[0].nonce}","params":{"pid":"4242"},"tenant_id":2,"timestamp":"${NOW}","user_id":5}`
+			);
+		});
+
+		it('signs an empty object and sends null when the params are empty', async () => {
+			const { api, sent } = makeApi();
+
+			await sendSignedCommand(api, request({ params: {} }));
+
+			expect(sent[0].canonicalPayload).toContain('"params":{}');
+			expect(sent[0].params).toBeNull();
+		});
+
+		it('signs an empty object and sends null when no params are given, as the reporter commands do', async () => {
+			const { api, sent } = makeApi();
+
+			await sendSignedCommand(api, request({ commandType: 'k8s_reporter_uninstall' }));
+
+			expect(sent[0].canonicalPayload).toContain('"params":{}');
+			expect(sent[0].params).toBeNull();
+		});
+
+		it('is not changed by the caller mutating its params after the call starts', async () => {
+			const { api, sent } = makeApi();
+			const params: Record<string, string> = { pid: '4242' };
+
+			const pending = sendSignedCommand(api, request({ commandType: 'kill_process', params }));
+			params.pid = '1';
+			await pending;
+
+			const payload = JSON.parse(sent[0].canonicalPayload) as { params: unknown };
+
+			expect(payload.params).toEqual({ pid: '4242' });
+			expect(JSON.parse(sent[0].params as string)).toEqual({ pid: '4242' });
+		});
+	});
+
 	describe('the request', () => {
 		it('sends Params as null, never as an empty string, because the server stores it in a jsonb column', async () => {
 			const { api, sent } = makeApi();
@@ -229,6 +296,75 @@ describe('signedCommand', () => {
 
 		it('is empty when the device holds no keys', () => {
 			expect(usableSigningKeys([], [serverKey()])).toEqual([]);
+		});
+	});
+
+	describe('isValidPid', () => {
+		it.each(['101', '102', '4242', '4194304'])('accepts %s', (pid) => {
+			expect(isValidPid(pid)).toBe(true);
+		});
+
+		it.each(['', '0', '1', '99', '100', 'abc', '-5', '12a', ' 4242', '4242 ', '1.5', '0101', '+101', '1e3'])(
+			'refuses %j',
+			(pid) => {
+				expect(isValidPid(pid)).toBe(false);
+			}
+		);
+	});
+
+	describe('isValidSessionId', () => {
+		it.each(['1', 'c12', 'session-42', 'sess_01', 'A', 'a-b_c'])('accepts %s', (id) => {
+			expect(isValidSessionId(id)).toBe(true);
+		});
+
+		it.each(['', '-h', '--help', '-1', '_abc', 'ses id', 'ses;rm', 'ses$(id)', '../x', 'a\nb', 'c1\n', ' c1', 'c1 '])(
+			'refuses %j',
+			(id) => {
+				expect(isValidSessionId(id)).toBe(false);
+			}
+		);
+	});
+
+	describe('buildCommandParams', () => {
+		const blank = { pid: '', force: false, sessionId: '' };
+
+		it('gives Kill Process its pid and leaves force out when it is not ticked', () => {
+			const params = buildCommandParams('kill_process', { ...blank, pid: '4242' });
+
+			expect(params).toEqual({ pid: '4242' });
+			expect(params).not.toHaveProperty('force');
+		});
+
+		it('adds force="true" only when the box is ticked', () => {
+			expect(buildCommandParams('kill_process', { ...blank, pid: '4242', force: true })).toEqual({
+				pid: '4242',
+				force: 'true'
+			});
+		});
+
+		it.each(['', '0', '100', 'abc', '-5'])('is null for the invalid Kill Process pid %j', (pid) => {
+			expect(buildCommandParams('kill_process', { ...blank, pid })).toBeNull();
+		});
+
+		it('gives Kill Session its session_id', () => {
+			expect(buildCommandParams('kill_session', { ...blank, sessionId: 'c12' })).toEqual({ session_id: 'c12' });
+		});
+
+		it.each(['', '-h', 'a b'])('is null for the invalid Kill Session id %j', (sessionId) => {
+			expect(buildCommandParams('kill_session', { ...blank, sessionId })).toBeNull();
+		});
+
+		it('ignores the other commands\' fields', () => {
+			expect(buildCommandParams('kill_session', { pid: '4242', force: true, sessionId: 'c12' })).toEqual({
+				session_id: 'c12'
+			});
+			expect(buildCommandParams('kill_process', { pid: '4242', force: false, sessionId: 'bad id' })).toEqual({
+				pid: '4242'
+			});
+		});
+
+		it.each(['reboot', 'check_updates', 'install_updates'])('is an empty object for %s, whatever the fields hold', (type) => {
+			expect(buildCommandParams(type, { pid: 'junk', force: true, sessionId: '-x' })).toEqual({});
 		});
 	});
 });

@@ -241,6 +241,192 @@ describe('machine page commands', () => {
 	});
 });
 
+async function chooseCommand(type: string) {
+	await fireEvent.change(screen.getByLabelText('Command'), { target: { value: type } });
+}
+
+async function sentParams() {
+	await waitFor(() => expect(api.sendCommand).toHaveBeenCalledTimes(1));
+	const request = api.sendCommand.mock.calls[0][0];
+	const signed = (JSON.parse(request.canonicalPayload) as { params: unknown }).params;
+
+	return { signed, sent: request.params === null ? null : (JSON.parse(request.params) as unknown) };
+}
+
+describe('machine page command parameters', () => {
+	beforeEach(arrangeMocks);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it.each(['reboot', 'check_updates', 'install_updates'])('shows no parameter fields for %s', async (type) => {
+		await openCommandsTab();
+
+		await chooseCommand(type);
+
+		expect(screen.queryByLabelText('PID')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Force (SIGKILL immediately)')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Session ID')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+	});
+
+	it('signs an empty params object and sends null for a command without parameters', async () => {
+		await openCommandsTab();
+
+		await chooseCommand('check_updates');
+		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+		expect(await sentParams()).toEqual({ signed: {}, sent: null });
+	});
+
+	describe('Kill Process', () => {
+		it('shows a PID field and a force checkbox, and keeps Send disabled until a PID is entered', async () => {
+			await openCommandsTab();
+
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).toBeInTheDocument();
+			expect(screen.getByLabelText('Force (SIGKILL immediately)')).not.toBeChecked();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it.each(['0', '100', 'abc', '-5', '4 2', '1e3'])('keeps Send disabled for the PID %j', async (pid) => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: pid } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+			expect(screen.getByLabelText('PID')).toBeInvalid();
+			expect(api.sendCommand).not.toHaveBeenCalled();
+		});
+
+		it('says why a PID is refused, and does not scold before anything is typed', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).not.toBeInvalid();
+			expect(screen.getByLabelText('PID')).not.toHaveAccessibleDescription(/greater than 100/);
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '100' } });
+
+			expect(screen.getByLabelText('PID')).toHaveAccessibleDescription(/greater than 100/);
+		});
+
+		it('signs and sends the pid alone when force is not ticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			const { signed, sent } = await sentParams();
+
+			expect(api.sendCommand.mock.calls[0][0]).toMatchObject({ machineId: 7, commandType: 'kill_process' });
+			expect(signed).toEqual({ pid: '4242' });
+			expect(sent).toEqual({ pid: '4242' });
+			expect(signed).not.toHaveProperty('force');
+		});
+
+		it('adds force="true" to both the signed payload and the request when the box is ticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({
+				signed: { pid: '4242', force: 'true' },
+				sent: { pid: '4242', force: 'true' }
+			});
+		});
+
+		it('leaves force out again once the box is unticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4242' }, sent: { pid: '4242' } });
+		});
+	});
+
+	describe('Kill Session', () => {
+		it('shows a Session ID field with its helper text, and keeps Send disabled until one is entered', async () => {
+			await openCommandsTab();
+
+			await chooseCommand('kill_session');
+
+			const field = screen.getByLabelText('Session ID');
+
+			expect(field).toBeInTheDocument();
+			expect(field).toHaveAccessibleDescription('The loginctl session id; run loginctl list-sessions on the host');
+			expect(screen.queryByLabelText('PID')).not.toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it.each(['-h', '--help', '_x', 'a b', 'a;b', 'a/b'])('keeps Send disabled for the session id %j', async (id) => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: id } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+			expect(screen.getByLabelText('Session ID')).toBeInvalid();
+			expect(api.sendCommand).not.toHaveBeenCalled();
+		});
+
+		it('signs and sends the session id', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: 'c12' } });
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(api.sendCommand.mock.calls[0][0]).toMatchObject({ machineId: 7, commandType: 'kill_session' });
+			expect(await sentParams()).toEqual({ signed: { session_id: 'c12' }, sent: { session_id: 'c12' } });
+		});
+	});
+
+	describe('changing the command', () => {
+		it('clears the fields, so a pid typed for Kill Process is not carried to Kill Session or back', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+
+			await chooseCommand('kill_session');
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: 'c12' } });
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).toHaveValue('');
+			expect(screen.getByLabelText('Force (SIGKILL immediately)')).not.toBeChecked();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+
+			await chooseCommand('kill_session');
+
+			expect(screen.getByLabelText('Session ID')).toHaveValue('');
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it('enables Send again for a command without parameters', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+
+			await chooseCommand('reboot');
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+		});
+	});
+});
+
 describe('machine page tabs by tier', () => {
 	const teamNotice = 'Remote commands require a Team subscription.';
 

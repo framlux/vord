@@ -34,7 +34,7 @@
 	import { hasProFeatures, hasTeamFeatures } from '$lib/utils/tier';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import { getLocalKeys } from '$lib/crypto/signing';
-	import { sendSignedCommand } from '$lib/commands/signedCommand';
+	import { buildCommandParams, isValidPid, isValidSessionId, sendSignedCommand } from '$lib/commands/signedCommand';
 
 	let { data } = $props();
 
@@ -245,6 +245,9 @@
 	let commands = $state<CommandDto[]>([]);
 	let commandsLoading = $state(false);
 	let commandType = $state('reboot');
+	let killPid = $state('');
+	let killForce = $state(false);
+	let killSessionId = $state('');
 	let sendingCommand = $state(false);
 	let commandError = $state('');
 	let commandSuccess = $state('');
@@ -259,6 +262,19 @@
 		{ value: 'check_updates', label: 'Check Updates' },
 		{ value: 'install_updates', label: 'Install Updates' }
 	];
+
+	// Null until the selected command's own fields are valid; an empty object for a command with none.
+	const commandParams = $derived(
+		buildCommandParams(commandType, { pid: killPid, force: killForce, sessionId: killSessionId })
+	);
+	const pidInvalid = $derived(killPid !== '' && isValidPid(killPid) === false);
+	const sessionIdInvalid = $derived(killSessionId !== '' && isValidSessionId(killSessionId) === false);
+
+	function clearCommandFields() {
+		killPid = '';
+		killForce = false;
+		killSessionId = '';
+	}
 
 	async function loadCommands() {
 		commandsLoading = true;
@@ -298,6 +314,10 @@
 	}
 
 	async function sendCommand() {
+		if (commandParams === null) {
+			return;
+		}
+
 		commandError = '';
 		commandSuccess = '';
 		sendingCommand = true;
@@ -310,7 +330,8 @@
 				localKeys,
 				serverKeys: serverSigningKeys,
 				userId: data.user?.id ?? 0,
-				tenantId: data.user?.activeTenantId ?? 0
+				tenantId: data.user?.activeTenantId ?? 0,
+				params: commandParams
 			});
 
 			commandSuccess = `${commandType} command sent successfully.`;
@@ -1366,6 +1387,7 @@
 						<select
 							id="cmd-type"
 							bind:value={commandType}
+							onchange={clearCommandFields}
 							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
 						>
 							{#each commandTypes as ct}
@@ -1387,12 +1409,66 @@
 					</div>
 					<button
 						onclick={sendCommand}
-						disabled={sendingCommand}
+						disabled={sendingCommand || commandParams === null}
 						class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
 					>
 						{sendingCommand ? 'Sending...' : 'Send'}
 					</button>
 				</div>
+				{#if commandType === 'kill_process'}
+					<div class="mt-3 flex flex-wrap items-start gap-x-6 gap-y-3">
+						<div class="w-64">
+							<label for="cmd-pid" class="block text-xs font-medium text-surface-600 dark:text-surface-400">PID</label>
+							<input
+								id="cmd-pid"
+								type="text"
+								inputmode="numeric"
+								autocomplete="off"
+								bind:value={killPid}
+								aria-invalid={pidInvalid}
+								aria-describedby={pidInvalid ? 'cmd-pid-help cmd-pid-error' : 'cmd-pid-help'}
+								class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+							/>
+							<p id="cmd-pid-help" class="mt-1 text-xs text-surface-500 dark:text-surface-400">
+								The process id on the host. Ids of 100 or below are protected and are never killed.
+							</p>
+							{#if pidInvalid}
+								<p id="cmd-pid-error" class="mt-1 text-xs text-red-600 dark:text-red-400">
+									Enter a whole number greater than 100.
+								</p>
+							{/if}
+						</div>
+						<label class="mt-7 flex cursor-pointer items-center gap-2 text-sm text-surface-700 dark:text-surface-300">
+							<input
+								type="checkbox"
+								bind:checked={killForce}
+								class="h-4 w-4 rounded border-surface-300 text-primary-600 focus:ring-primary-500 dark:border-surface-600"
+							/>
+							Force (SIGKILL immediately)
+						</label>
+					</div>
+				{:else if commandType === 'kill_session'}
+					<div class="mt-3 w-64">
+						<label for="cmd-session-id" class="block text-xs font-medium text-surface-600 dark:text-surface-400">Session ID</label>
+						<input
+							id="cmd-session-id"
+							type="text"
+							autocomplete="off"
+							bind:value={killSessionId}
+							aria-invalid={sessionIdInvalid}
+							aria-describedby={sessionIdInvalid ? 'cmd-session-id-help cmd-session-id-error' : 'cmd-session-id-help'}
+							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+						/>
+						<p id="cmd-session-id-help" class="mt-1 text-xs text-surface-500 dark:text-surface-400">
+							The loginctl session id; run <code class="rounded bg-surface-200 px-1 py-0.5 font-mono dark:bg-surface-700">loginctl list-sessions</code> on the host
+						</p>
+						{#if sessionIdInvalid}
+							<p id="cmd-session-id-error" class="mt-1 text-xs text-red-600 dark:text-red-400">
+								Use letters, digits, hyphens and underscores, starting with a letter or digit.
+							</p>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 
 			{#if commandError}

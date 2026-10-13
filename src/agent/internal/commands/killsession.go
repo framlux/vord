@@ -10,7 +10,9 @@ import (
 	"regexp"
 )
 
-var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// validSessionID requires a leading alphanumeric so an id can never be read as an option; the
+// executor also passes "--" before the id.
+var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
 // KillSessionExecutor handles login session termination.
 type KillSessionExecutor struct {
@@ -39,7 +41,7 @@ func (e *KillSessionExecutor) Execute(ctx context.Context, params map[string]str
 	}
 
 	r := e.getRunner()
-	output, err := r.Run(ctx, "loginctl", "terminate-session", sessionID)
+	output, err := r.Run(ctx, "loginctl", "terminate-session", "--", sessionID)
 	if err != nil {
 
 		return Result{

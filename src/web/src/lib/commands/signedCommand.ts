@@ -30,10 +30,59 @@ export interface SignedCommandRequest {
 	serverKeys: SigningKeyDto[];
 	userId: number;
 	tenantId: number;
+	/**
+	 * The command's parameters, a string-to-string map at every hop. They are signed as given and sent
+	 * as the request's Params; leave them out for a command that takes none.
+	 */
+	params?: Record<string, string>;
+}
+
+/** What the machine page collects for the commands that take parameters. */
+export interface CommandParamFields {
+	pid: string;
+	force: boolean;
+	sessionId: string;
 }
 
 // How long an agent accepts a command after it was signed.
 const COMMAND_LIFETIME_MS = 10 * 60 * 1000;
+
+// The agent refuses to kill a process at or below this pid, so the form refuses it too.
+export const PROTECTED_PID_CEILING = 100;
+
+const PID_PATTERN = /^[1-9][0-9]*$/;
+
+// The agent's session id rule: a leading alphanumeric keeps the id from being read as an option.
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+
+export function isValidPid(pid: string): boolean {
+	return PID_PATTERN.test(pid) && Number(pid) > PROTECTED_PID_CEILING;
+}
+
+export function isValidSessionId(sessionId: string): boolean {
+	return SESSION_ID_PATTERN.test(sessionId);
+}
+
+/**
+ * The parameters to sign for a command from what the form holds: an object (empty for a command that
+ * takes none), or null when the command's own fields are not valid yet. Only the selected command's
+ * fields are read, and force is present only when it is ticked.
+ */
+export function buildCommandParams(commandType: string, fields: CommandParamFields): Record<string, string> | null {
+	if (commandType === 'kill_process') {
+		if (isValidPid(fields.pid) === false) {
+			return null;
+		}
+
+		return fields.force ? { pid: fields.pid, force: 'true' } : { pid: fields.pid };
+	}
+
+	if (commandType === 'kill_session') {
+		return isValidSessionId(fields.sessionId) ? { session_id: fields.sessionId } : null;
+	}
+
+	return {};
+}
 
 export function findServerKey(localKey: LocalSigningKey, serverKeys: SigningKeyDto[]): SigningKeyDto | undefined {
 	return serverKeys.find((sk) => sk.publicKey === localKey.publicKeyBase64);
@@ -55,9 +104,10 @@ export function usableSigningKeys(localKeys: LocalSigningKey[], serverKeys: Sign
  * Signs a command for one machine in the browser and submits it. Throws an Error whose message is fit
  * to show when the key cannot be used, and lets the API's error through when the server refuses it.
  *
- * The signed payload always carries an empty params object, whatever the command, because the agent
- * binds the command it runs to the bytes that were signed and reads an absent params as empty. The
- * request's own Params is null: the server stores it in a jsonb column, which refuses an empty string.
+ * The signed payload always carries a params object: the request's params, or an empty one for a command
+ * that takes none, because the agent binds the command it runs to the bytes that were signed and reads
+ * an absent params as empty. The request's own Params is the same map as a JSON string, and null when
+ * the map is empty, because the server stores it in a jsonb column, which refuses an empty string.
  */
 export async function sendSignedCommand(
 	api: Pick<ApiClient, 'sendCommand'>,
@@ -77,6 +127,9 @@ export async function sendSignedCommand(
 		throw new Error('This key is not registered on the server. Re-register it in Settings > Signing Keys.');
 	}
 
+	// One copy feeds both the signed bytes and the request, so the two cannot decode to different maps.
+	const params: Record<string, string> = { ...request.params };
+
 	const commandId = crypto.randomUUID();
 	const nonce = generateNonce();
 	const now = new Date();
@@ -89,7 +142,7 @@ export async function sendSignedCommand(
 		expires_at: expiresAt,
 		machine_id: request.machineId,
 		nonce,
-		params: {},
+		params,
 		tenant_id: request.tenantId,
 		timestamp,
 		user_id: request.userId
@@ -102,7 +155,7 @@ export async function sendSignedCommand(
 		machineId: request.machineId,
 		signingKeyId: serverKey.id,
 		commandType: request.commandType,
-		params: null,
+		params: Object.keys(params).length > 0 ? JSON.stringify(params) : null,
 		nonce,
 		signature,
 		canonicalPayload,

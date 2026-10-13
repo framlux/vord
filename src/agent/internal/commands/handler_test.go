@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -415,6 +416,25 @@ func TestKillSession_Success(t *testing.T) {
 	}
 }
 
+// Intent: The id is passed after "--" so loginctl can never read it as an option.
+func TestKillSession_PassesIDAfterEndOfOptions(t *testing.T) {
+	runner := &mockRunner{}
+	e := &KillSessionExecutor{runner: runner}
+
+	result := e.Execute(context.Background(), map[string]string{"session_id": "abc123"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 run call, got %d", len(runner.calls))
+	}
+	want := []string{"terminate-session", "--", "abc123"}
+	if slices.Equal(runner.calls[0].Args, want) == false {
+		t.Errorf("expected argv %v, got %v", want, runner.calls[0].Args)
+	}
+}
+
 // Intent: loginctl fails -> error result with output.
 func TestKillSession_LoginctlFails(t *testing.T) {
 	runner := &mockRunner{
@@ -477,10 +497,35 @@ func TestKillSession_InvalidSessionID(t *testing.T) {
 	}
 }
 
+// Intent: An id that starts with "-" (or any non-alphanumeric) must be refused before loginctl runs,
+// so it can never be parsed as an option.
+func TestKillSession_LeadingNonAlphanumericRefused(t *testing.T) {
+	badIDs := []string{"-h", "--help", "-1", "-", "--", "-abc", "_abc", "-_"}
+
+	for _, id := range badIDs {
+		t.Run(id, func(t *testing.T) {
+			runner := &mockRunner{}
+			e := &KillSessionExecutor{runner: runner}
+
+			result := e.Execute(context.Background(), map[string]string{"session_id": id})
+
+			if result.Success {
+				t.Errorf("expected Success=false for session_id %q", id)
+			}
+			if result.Error == nil || (strings.Contains(result.Error.Error(), "invalid session_id format") == false) {
+				t.Errorf("expected 'invalid session_id format' for %q, got %v", id, result.Error)
+			}
+			if len(runner.calls) != 0 {
+				t.Errorf("loginctl must not run for %q, got %d call(s)", id, len(runner.calls))
+			}
+		})
+	}
+}
+
 // Intent: Alphanumeric session IDs pass validation.
 func TestKillSession_ValidSessionID(t *testing.T) {
 	runner := &mockRunner{}
-	validIDs := []string{"abc123", "session-42", "sess_01"}
+	validIDs := []string{"abc123", "session-42", "sess_01", "7", "c1"}
 	for _, id := range validIDs {
 		t.Run(id, func(t *testing.T) {
 			e := &KillSessionExecutor{runner: runner}
