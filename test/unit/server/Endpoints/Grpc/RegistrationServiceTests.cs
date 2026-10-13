@@ -377,8 +377,8 @@ public sealed class RegistrationServiceTests
 
         await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
 
-        // An agent that predates the type recognises exactly this wording when a newer server's
-        // successor type reaches an older server, so it is part of the contract.
+        // A newer agent that sends a type this server does not know recognises exactly this wording
+        // and registers again as Unknown, so the wording is part of the contract.
         await Assert.That(ex.Status.Detail).IsEqualTo("Invalid machine type");
         await _machineService.DidNotReceive().RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>());
     }

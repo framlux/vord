@@ -99,8 +99,8 @@ public sealed class RegistrationService : Registration.RegistrationBase
         }
         else if (Enum.IsDefined(request.MachineType) == false)
         {
-            // An agent whose type this server does not know recognises this exact message and
-            // registers again as unknown, so the wording is part of the contract.
+            // A newer agent that sends a type this server does not know recognises this exact
+            // message and registers again as unknown, so the wording is part of the contract.
             throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid machine type"));
         }
         else if ((request.Os < FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs) || (request.Os > FleetManagement.Grpc.AgentRegistration.OperatingSystemType.DebianOs))
