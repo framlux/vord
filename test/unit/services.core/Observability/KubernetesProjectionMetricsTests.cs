@@ -28,6 +28,12 @@ public sealed class KubernetesProjectionMetricsTests
 
     private static readonly DateTimeOffset Now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
 
+    /// <summary>
+    /// Only a hung test can wait this long; it bounds the wait for the read to start, never the
+    /// timeout under test.
+    /// </summary>
+    private static readonly TimeSpan Failsafe = TimeSpan.FromMinutes(1);
+
     private static (KubernetesProjectionMetrics Metrics, IMeterFactory Factory, FakeTimeProvider Clock) Build(
         IKubernetesInventoryRepository repository, int visibilityLagSeconds = 5)
     {
@@ -211,25 +217,99 @@ public sealed class KubernetesProjectionMetricsTests
     }
 
     [Test]
-    public async Task Gauge_ReadIsBoundedByACancellableToken_AndItsCancellationYieldsNoMeasurement()
+    public async Task Gauge_ReadStillPendingWhenTheClockPassesTheTimeout_YieldsNoMeasurement()
     {
-        // The callback runs on the exporter's collection thread, so a query that hangs must be
-        // abandoned by a timeout rather than stall every instrument in the process. The wait itself is
-        // the database driver's cancellation, so what is pinned here is that a token which can be
-        // cancelled reaches the query and that its cancellation is swallowed like any other failure.
-        CancellationToken observed = default;
-        IKubernetesInventoryRepository repository = Substitute.For<IKubernetesInventoryRepository>();
-        repository.GetProjectionCursorAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<long?>(100));
-        repository.GetOldestUnprojectedKubernetesReceiptAsync(
-                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Do<CancellationToken>(token => observed = token))
-            .Returns<Task<DateTimeOffset?>>(_ => throw new OperationCanceledException());
-        (KubernetesProjectionMetrics _, IMeterFactory factory, FakeTimeProvider _) = Build(repository);
+        // The callback runs on the exporter's collection thread, so a query that hangs must be abandoned
+        // rather than stall every instrument in the process. The timeout runs on the injected clock: the
+        // clock is advanced to the limit while the read is pending, with no real waiting, and the read
+        // must have been cancelled by that advance alone.
+        PendingOldestRead read = new();
+        (KubernetesProjectionMetrics _, IMeterFactory factory, FakeTimeProvider clock) = Build(read.Repository);
         using MetricCollector<double> collector = new(factory, VordMeter.Name, Instrument);
+        bool cancelledByTheClock = false;
+        Task advancer = Task.Run(async () =>
+        {
+            await read.Started.WaitAsync(Failsafe);
+            clock.Advance(TimeSpan.FromSeconds(3));
+            cancelledByTheClock = read.IsCompleted;
+            read.Release();
+        });
 
         collector.RecordObservableInstruments();
+        await advancer;
 
-        await Assert.That(observed.CanBeCanceled).IsTrue();
+        await Assert.That(cancelledByTheClock).IsTrue();
         await Assert.That(collector.GetMeasurementSnapshot().Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Gauge_ReadFinishingBeforeTheTimeout_ReportsTheLag()
+    {
+        // The clock stops one tick short of the limit, so the read must still be pending and the
+        // answer that then arrives is reported: the timeout is not shorter than it says.
+        PendingOldestRead read = new();
+        (KubernetesProjectionMetrics _, IMeterFactory factory, FakeTimeProvider clock) = Build(read.Repository);
+        using MetricCollector<double> collector = new(factory, VordMeter.Name, Instrument);
+        bool pendingBeforeTheLimit = false;
+        Task advancer = Task.Run(async () =>
+        {
+            await read.Started.WaitAsync(Failsafe);
+            clock.Advance(TimeSpan.FromSeconds(3) - TimeSpan.FromTicks(1));
+            pendingBeforeTheLimit = read.IsCompleted == false;
+            read.Complete(Now.AddSeconds(-45));
+        });
+
+        collector.RecordObservableInstruments();
+        await advancer;
+
+        await Assert.That(pendingBeforeTheLimit).IsTrue();
+        await Assert.That(collector.GetMeasurementSnapshot().Count).IsEqualTo(1);
+        await Assert.That(collector.LastMeasurement!.Value).IsEqualTo(45d);
+    }
+
+    /// <summary>
+    /// A repository whose oldest-receipt read stays pending until the test completes it or the token it
+    /// was handed is cancelled, so the timeout can be driven from the fake clock.
+    /// </summary>
+    private sealed class PendingOldestRead
+    {
+        private readonly TaskCompletionSource<DateTimeOffset?> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PendingOldestRead()
+        {
+            Repository = Substitute.For<IKubernetesInventoryRepository>();
+            Repository.GetProjectionCursorAsync(Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<long?>(100));
+            Repository.GetOldestUnprojectedKubernetesReceiptAsync(
+                    Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    CancellationToken token = call.Arg<CancellationToken>();
+                    token.Register(() => _result.TrySetCanceled(token));
+                    _started.TrySetResult();
+
+                    return _result.Task;
+                });
+        }
+
+        public IKubernetesInventoryRepository Repository { get; }
+
+        /// <summary>Completes once the gauge has started the oldest-receipt read.</summary>
+        public Task Started => _started.Task;
+
+        /// <summary>True once the read has finished, whether answered or cancelled.</summary>
+        public bool IsCompleted => _result.Task.IsCompleted;
+
+        public void Complete(DateTimeOffset? oldest)
+        {
+            _result.TrySetResult(oldest);
+        }
+
+        /// <summary>Frees a read nobody cancelled, so a broken timeout fails the test instead of hanging it.</summary>
+        public void Release()
+        {
+            _result.TrySetCanceled();
+        }
     }
 }

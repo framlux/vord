@@ -21,14 +21,15 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 /// handled. The cursor itself is a row id and cannot answer this, which is why a dedicated query exists,
 /// and why that query repeats the projector's read exactly: a row the projector will never read is not
 /// lag. The projector is one stream under one lock, so the gauge has no tags. Its cursor is shared by
-/// every replica, which means every worker reports the same figure.
+/// every replica, which means every worker reports the same figure: aggregate with the maximum, never
+/// the sum.
 /// </remarks>
 public sealed class KubernetesProjectionMetrics : IObservableMetrics
 {
     /// <summary>
-    /// How long a measurement may take before it is abandoned. The callback runs on the exporter's
-    /// collection thread, so a hung query without this would stall every instrument in the process, not
-    /// just this one.
+    /// How long a measurement may take before it is abandoned, counted on the injected clock so a test
+    /// can pass it without waiting. The callback runs on the exporter's collection thread, so a hung
+    /// query without this would stall every instrument in the process, not just this one.
     /// </summary>
     private static readonly TimeSpan MeasurementTimeout = TimeSpan.FromSeconds(3);
 
@@ -90,7 +91,7 @@ public sealed class KubernetesProjectionMetrics : IObservableMetrics
     {
         try
         {
-            using CancellationTokenSource timeout = new(MeasurementTimeout);
+            using CancellationTokenSource timeout = new(MeasurementTimeout, _timeProvider);
             using IServiceScope scope = _scopeFactory.CreateScope();
             IKubernetesInventoryRepository repository = scope.ServiceProvider.GetRequiredService<IKubernetesInventoryRepository>();
 
