@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/framlux/vord/internal/board"
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
 	"github.com/framlux/vord/internal/machineid"
@@ -32,11 +33,15 @@ type SlowTick struct {
 	rs      *state.RuntimeState
 	pause   *pause.Coordinator
 	tickNum int
+
+	// root is the filesystem root the hardware identity is read from: "/" on a real host, a fixture
+	// directory in tests.
+	root string
 }
 
 // NewSlowTick creates a new SlowTick. It collects nothing while the pause coordinator reports the host paused.
 func NewSlowTick(store *db.Store, rs *state.RuntimeState, pc *pause.Coordinator) *SlowTick {
-	return &SlowTick{store: store, rs: rs, pause: pc}
+	return &SlowTick{store: store, rs: rs, pause: pc, root: "/"}
 }
 
 // Run starts the slow tick loop. It blocks until ctx is cancelled.
@@ -232,6 +237,17 @@ func (st *SlowTick) collectSystemInfo(ctx context.Context, cpuinfoData string, c
 		uptime = uptimeSecondsFromData(uptimeData)
 	}
 
+	dmi := func(field string) string { return readDMIAt(st.root, field) }
+
+	// The cpuinfo text was read for the other collectors, so it is handed over rather than read
+	// again; when that read failed the board detection tries the file itself.
+	var boardInfo board.Info
+	if cpuinfoErr == nil {
+		boardInfo = board.DetectFromCPUInfo(st.root, cpuinfoData)
+	} else {
+		boardInfo = board.Detect(st.root)
+	}
+
 	payload := systemInfoPayload{
 		Hostname:         hostname,
 		UUID:             machineid.Read("/"),
@@ -240,18 +256,18 @@ func (st *SlowTick) collectSystemInfo(ctx context.Context, cpuinfoData string, c
 		CPUPhysicalCores: physicalCores,
 		CPULogicalCores:  runtime.NumCPU(),
 		PhysicalMemory:   memTotal,
-		HardwareVendor:   readDMI("sys_vendor"),
-		HardwareModel:    readDMI("product_name"),
-		HardwareVersion:  readDMI("product_version"),
+		HardwareVendor:   dmi("sys_vendor"),
+		HardwareModel:    pickHardwareModel(dmi("product_name"), boardInfo.Model),
+		HardwareVersion:  dmi("product_version"),
 		HardwareSerial:   hardwareSerial(ctx),
-		BoardVendor:      readDMI("board_vendor"),
-		BoardModel:       readDMI("board_name"),
-		BoardVersion:     readDMI("board_version"),
-		BoardSerial:      readDMI("board_serial"),
+		BoardVendor:      dmi("board_vendor"),
+		BoardModel:       dmi("board_name"),
+		BoardVersion:     dmi("board_version"),
+		BoardSerial:      dmi("board_serial"),
 		ComputerName:     hostname,
 		LocalHostname:    hostname,
 		UptimeSeconds:    uptime,
-		BiosVersion:      readDMI("bios_version"),
+		BiosVersion:      dmi("bios_version"),
 		IpAddresses:      globalIPAddresses(ctx),
 	}
 

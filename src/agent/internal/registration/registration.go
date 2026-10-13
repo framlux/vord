@@ -19,7 +19,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/framlux/vord/internal/board"
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/hwid"
 	"github.com/framlux/vord/internal/machineid"
@@ -34,6 +37,10 @@ type Manager struct {
 	store             *db.Store
 	state             *state.RuntimeState
 	registrationToken string
+
+	// machineTypeDetector classifies the host. It is a field so tests never depend on the host's
+	// /sys, /proc or systemd-detect-virt.
+	machineTypeDetector func(ctx context.Context) pb.MachineType
 }
 
 // NewManager creates a new registration manager. It accepts the specific gRPC
@@ -46,6 +53,9 @@ func NewManager(registration pb.RegistrationClient, configuration pb.Configurati
 		store:             store,
 		state:             runtimeState,
 		registrationToken: registrationToken,
+		machineTypeDetector: func(ctx context.Context) pb.MachineType {
+			return detectMachineType(ctx, "/")
+		},
 	}
 }
 
@@ -128,7 +138,7 @@ func (m *Manager) register(ctx context.Context) error {
 
 	m.state.SetSerialNumber(serialNumber)
 
-	machineType := detectMachineType(ctx)
+	machineType := m.machineTypeDetector(ctx)
 	osType := detectOSType()
 	osVersion := detectOSVersion()
 	systemID := readMachineID()
@@ -179,16 +189,33 @@ func (m *Manager) register(ctx context.Context) error {
 		}
 	}
 
-	resp, err := m.registration.RegisterSystem(ctx, &pb.RegisterSystemRequest{
-		Hostname:          hostname,
-		SerialNumber:      serialNumber,
-		SystemId:          systemID,
-		AssetTag:          readDMIField("chassis_asset_tag"),
-		MachineType:       machineType,
-		Os:                osType,
-		OsVersion:         osVersion,
-		RegistrationToken: m.registrationToken,
-	})
+	newRequest := func(machineType pb.MachineType) *pb.RegisterSystemRequest {
+		return &pb.RegisterSystemRequest{
+			Hostname:          hostname,
+			SerialNumber:      serialNumber,
+			SystemId:          systemID,
+			AssetTag:          readDMIField("chassis_asset_tag"),
+			MachineType:       machineType,
+			Os:                osType,
+			OsVersion:         osVersion,
+			RegistrationToken: m.registrationToken,
+		}
+	}
+
+	resp, err := m.registration.RegisterSystem(ctx, newRequest(machineType))
+	if (err != nil) && refusedNewerMachineType(err, machineType) {
+		// A server that predates the type refuses the whole registration, so the agent would
+		// exhaust its start-up attempts and exit without ever registering. Register as unknown
+		// instead; every configuration fetch reports the real type, which an older server
+		// ignores and a newer one stores.
+		slog.Info("server does not know this machine type, registering as unknown", "machine_type", machineType)
+
+		retried, retryErr := m.registration.RegisterSystem(ctx, newRequest(pb.MachineType_UNKNOWN_TYPE))
+		if retryErr == nil {
+			resp, err = retried, nil
+		}
+		// When the retry fails too, the refusal that started it stays the error to report.
+	}
 	if err != nil {
 		return fmt.Errorf("RegisterSystem RPC: %w", err)
 	}
@@ -264,7 +291,7 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 	resp, err := m.configuration.GetConfiguration(ctx, &pb.GetConfigurationRequest{
 		MachineId:         machineID,
 		AgentCapabilities: m.state.AgentCapabilities(),
-		MachineType:       detectMachineType(ctx),
+		MachineType:       m.machineTypeDetector(ctx),
 	})
 	if err != nil {
 		return fmt.Errorf("GetConfiguration RPC: %w", err)
@@ -392,7 +419,12 @@ func (m *Manager) Ping(ctx context.Context) (pb.IngestRejectionReason, error) {
 }
 
 func readDMIField(field string) string {
-	data, err := os.ReadFile("/sys/class/dmi/id/" + filepath.Base(field))
+	return readDMIFieldAt("/", field)
+}
+
+// readDMIFieldAt reads a DMI field under root, which is "/" for the real host and a directory in tests.
+func readDMIFieldAt(root string, field string) string {
+	data, err := os.ReadFile(filepath.Join(root, "sys/class/dmi/id", filepath.Base(field)))
 	if err != nil {
 		return ""
 	}
@@ -539,9 +571,14 @@ func detectVirtualization(ctx context.Context) string {
 	return result
 }
 
-// classifyMachineType maps a virtualization verdict and the DMI fields to a machine type. Kept free
-// of I/O so every platform can be covered by a table test.
-func classifyMachineType(virt string, productName string, sysVendor string, chassisType string) pb.MachineType {
+// classifyMachineType maps a virtualization verdict, the DMI fields and the recognised board family
+// ("" when the host is not a recognised single-board computer) to a machine type. Kept free of I/O so
+// every platform can be covered by a table test.
+//
+// Virtualization is decided first. A recognised board then outranks the chassis code and the
+// cloud-vendor guess, because a board's firmware, when it publishes SMBIOS at all, reports a chassis
+// of its own that says nothing about being a single-board computer.
+func classifyMachineType(virt string, productName string, sysVendor string, chassisType string, boardFamily string) pb.MachineType {
 	productName = strings.ToLower(productName)
 	sysVendor = strings.ToLower(sysVendor)
 
@@ -558,6 +595,11 @@ func classifyMachineType(virt string, productName string, sysVendor string, chas
 			if strings.Contains(sysVendor, vendor) {
 				return pb.MachineType_VIRTUAL_MACHINE_TYPE
 			}
+		}
+
+		// A recognised board, as on a host without systemd such as Alpine on a Raspberry Pi.
+		if boardFamily != "" {
+			return pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE
 		}
 
 		// Nothing conclusive. Let the chassis speak before guessing: a real Chromebook, Surface, or
@@ -581,7 +623,11 @@ func classifyMachineType(virt string, productName string, sysVendor string, chas
 		return pb.MachineType_UNKNOWN_TYPE
 	case "none":
 		// Definitively not virtualized. Skip the DMI heuristics entirely — they exist only to guess
-		// what systemd already answered, and a vendor string must never override it.
+		// what systemd already answered, and a vendor string must never override it. The board is not
+		// a DMI guess, so it still counts ahead of the chassis lookup.
+		if boardFamily != "" {
+			return pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE
+		}
 	default:
 		return pb.MachineType_VIRTUAL_MACHINE_TYPE
 	}
@@ -589,13 +635,33 @@ func classifyMachineType(virt string, productName string, sysVendor string, chas
 	return classifyChassis(chassisType)
 }
 
-func detectMachineType(ctx context.Context) pb.MachineType {
+// detectMachineType classifies the host whose files live under root, which is "/" for the real host
+// and a directory in tests.
+func detectMachineType(ctx context.Context, root string) pb.MachineType {
 	return classifyMachineType(
 		detectVirtualization(ctx),
-		readDMIField("product_name"),
-		readDMIField("sys_vendor"),
-		readDMIField("chassis_type"),
+		readDMIFieldAt(root, "product_name"),
+		readDMIFieldAt(root, "sys_vendor"),
+		readDMIFieldAt(root, "chassis_type"),
+		board.Detect(root).Family,
 	)
+}
+
+// invalidMachineTypeMessage is what the server answers, as InvalidArgument, to a machine type it
+// does not know. Registration of a newer type against an older server is recognised by it.
+const invalidMachineTypeMessage = "Invalid machine type"
+
+// refusedNewerMachineType reports whether err is a server refusing a machine type it predates: the
+// one InvalidArgument reason that names the type, for a type newer than the last one every server
+// has always known. Any other failure, or a type an old server accepts, is not that.
+func refusedNewerMachineType(err error, sent pb.MachineType) bool {
+	if sent <= pb.MachineType_VIRTUAL_MACHINE_TYPE {
+		return false
+	}
+
+	refusal, ok := status.FromError(err)
+
+	return ok && (refusal.Code() == codes.InvalidArgument) && (refusal.Message() == invalidMachineTypeMessage)
 }
 
 func detectOSType() pb.OperatingSystemType {

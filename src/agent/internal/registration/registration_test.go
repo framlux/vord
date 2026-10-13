@@ -9,10 +9,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/framlux/vord/internal/db"
 	pb "github.com/framlux/vord/internal/proto/agent"
@@ -91,7 +95,17 @@ func newTestStore(t *testing.T) *db.Store {
 
 // newTestManager creates a Manager wired to mock gRPC clients for testing.
 func newTestManager(reg pb.RegistrationClient, cfg pb.ConfigurationClient, store *db.Store, rs *state.RuntimeState, token string) *Manager {
-	return NewManager(reg, cfg, store, rs, token)
+	mgr := NewManager(reg, cfg, store, rs, token)
+
+	// The host the tests run on says nothing about what they assert, so classification is fixed
+	// here and a test that cares about it supplies its own detector.
+	mgr.machineTypeDetector = fixedMachineType(pb.MachineType_UNKNOWN_TYPE)
+
+	return mgr
+}
+
+func fixedMachineType(machineType pb.MachineType) func(context.Context) pb.MachineType {
+	return func(context.Context) pb.MachineType { return machineType }
 }
 
 // --- EnsureRegistered tests ---
@@ -1719,87 +1733,103 @@ func TestClassifyMachineType(t *testing.T) {
 		productName string
 		sysVendor   string
 		chassisType string
+		boardFamily string
 		want        pb.MachineType
 	}{
 		// systemd answered: the verdict wins regardless of what DMI says.
-		{"detect-virt kvm", "kvm", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"detect-virt microsoft", "microsoft", "Virtual Machine", "Microsoft Corporation", "3", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"detect-virt amazon", "amazon", "m5.large", "Amazon EC2", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"detect-virt vmware", "vmware", "VMware Virtual Platform", "VMware, Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt kvm", "kvm", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt microsoft", "microsoft", "Virtual Machine", "Microsoft Corporation", "3", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt amazon", "amazon", "m5.large", "Amazon EC2", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt vmware", "vmware", "VMware Virtual Platform", "VMware, Inc.", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
 
 		// systemd said none: hardware, even where a vendor string looks like a hypervisor's.
-		{"bare metal server", "none", "PowerEdge R640", "Dell Inc.", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"ec2 metal instance", "none", "c5.metal", "Amazon EC2", "1", pb.MachineType_UNKNOWN_TYPE},
-		{"gcp bare metal", "none", "Google Compute Engine", "Google", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"oracle bare metal", "none", "ORACLE SERVER X8-2", "Oracle Corporation", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"nutanix appliance", "none", "NX-3060-G7", "Nutanix", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"chromebook", "none", "Eve", "GOOGLE", "9", pb.MachineType_LAPTOP_TYPE},
-		{"none beats hypervisor product string", "none", "VMware Virtual Platform", "VMware, Inc.", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"none beats qemu vendor string", "none", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"desktop", "none", "OptiPlex 7070", "Dell Inc.", "3", pb.MachineType_DESKTOP_TYPE},
-		{"laptop", "none", "ThinkPad X1", "LENOVO", "10", pb.MachineType_LAPTOP_TYPE},
+		{"bare metal server", "none", "PowerEdge R640", "Dell Inc.", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"ec2 metal instance", "none", "c5.metal", "Amazon EC2", "1", "", pb.MachineType_UNKNOWN_TYPE},
+		{"gcp bare metal", "none", "Google Compute Engine", "Google", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"oracle bare metal", "none", "ORACLE SERVER X8-2", "Oracle Corporation", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"nutanix appliance", "none", "NX-3060-G7", "Nutanix", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"chromebook", "none", "Eve", "GOOGLE", "9", "", pb.MachineType_LAPTOP_TYPE},
+		{"none beats hypervisor product string", "none", "VMware Virtual Platform", "VMware, Inc.", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"none beats qemu vendor string", "none", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"desktop", "none", "OptiPlex 7070", "Dell Inc.", "3", "", pb.MachineType_DESKTOP_TYPE},
+		{"laptop", "none", "ThinkPad X1", "LENOVO", "10", "", pb.MachineType_LAPTOP_TYPE},
 
 		// No systemd answer: DMI fallback by product_name.
-		{"dmi azure", "", "Virtual Machine", "Microsoft Corporation", "3", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi gce", "", "Google Compute Engine", "Google", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi digitalocean", "", "Droplet", "DigitalOcean", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi openstack", "", "OpenStack Nova", "OpenStack Foundation", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi xen hvm", "", "HVM domU", "Xen", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi virtualbox", "", "VirtualBox", "innotek GmbH", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi libvirt default product", "", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi parallels", "", "Parallels Virtual Platform", "Parallels Software International Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi azure", "", "Virtual Machine", "Microsoft Corporation", "3", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi gce", "", "Google Compute Engine", "Google", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi digitalocean", "", "Droplet", "DigitalOcean", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi openstack", "", "OpenStack Nova", "OpenStack Foundation", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi xen hvm", "", "HVM domU", "Xen", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi virtualbox", "", "VirtualBox", "innotek GmbH", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi libvirt default product", "", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi parallels", "", "Parallels Virtual Platform", "Parallels Software International Inc.", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
 
 		// No systemd answer: DMI fallback by sys_vendor, where product_name gives nothing away.
-		{"dmi vendor qemu", "", "", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi vendor vmware", "", "", "VMware, Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi vendor qemu", "", "", "QEMU", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi vendor vmware", "", "", "VMware, Inc.", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
 
 		// Cloud vendors with nothing else to go on: guess virtual. These brands sell far more
 		// guests than bare-metal instances, and a wrong guess is cheap to correct once the agent
 		// reports its type on the next configuration fetch.
-		{"dmi ec2 nitro", "", "m5.large", "Amazon EC2", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi alibaba guest", "", "", "Alibaba Cloud", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"dmi nutanix ahv guest", "", "AHV", "Nutanix", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi ec2 nitro", "", "m5.large", "Amazon EC2", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi alibaba guest", "", "", "Alibaba Cloud", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi nutanix ahv guest", "", "AHV", "Nutanix", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
 
 		// Vendors kept OFF the guess list, because their guests are already matched by product name
 		// and the vendor string alone would only ever fire on that vendor's physical hardware.
-		{"google vendor alone is not a guess", "", "", "Google", "1", pb.MachineType_UNKNOWN_TYPE},
-		{"microsoft vendor alone is not a guess", "", "", "Microsoft Corporation", "1", pb.MachineType_UNKNOWN_TYPE},
-		{"oracle vendor alone is not a guess", "", "", "Oracle Corporation", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"google vendor alone is not a guess", "", "", "Google", "1", "", pb.MachineType_UNKNOWN_TYPE},
+		{"microsoft vendor alone is not a guess", "", "", "Microsoft Corporation", "1", "", pb.MachineType_UNKNOWN_TYPE},
+		{"oracle vendor alone is not a guess", "", "", "Oracle Corporation", "1", "", pb.MachineType_UNKNOWN_TYPE},
 
 		// Form factors the chassis map previously omitted. Without them a physical device fell
 		// through with no answer and was handed to the cloud-vendor guess.
-		{"surface tablet chassis", "", "Surface Pro", "Microsoft Corporation", "30", pb.MachineType_LAPTOP_TYPE},
-		{"all-in-one chassis", "", "iMac", "Apple Inc.", "13", pb.MachineType_DESKTOP_TYPE},
-		{"mini pc chassis", "", "NUC", "Intel", "35", pb.MachineType_DESKTOP_TYPE},
+		{"surface tablet chassis", "", "Surface Pro", "Microsoft Corporation", "30", "", pb.MachineType_LAPTOP_TYPE},
+		{"all-in-one chassis", "", "iMac", "Apple Inc.", "13", "", pb.MachineType_DESKTOP_TYPE},
+		{"mini pc chassis", "", "NUC", "Intel", "35", "", pb.MachineType_DESKTOP_TYPE},
 
 		// ... but a product name saying "metal" is how AWS and GCP label bare-metal shapes, so the
 		// guess is withheld rather than mislabelling real hardware.
-		{"dmi ec2 metal shape", "", "c5.metal", "Amazon EC2", "1", pb.MachineType_UNKNOWN_TYPE},
-		{"dmi gcp metal shape", "", "c3-highmem-192-metal", "Google", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"dmi ec2 metal shape", "", "c5.metal", "Amazon EC2", "1", "", pb.MachineType_UNKNOWN_TYPE},
+		{"dmi gcp metal shape", "", "c3-highmem-192-metal", "Google", "1", "", pb.MachineType_UNKNOWN_TYPE},
 
 		// ... and a physical chassis outranks the vendor brand, so hardware sold by a cloud vendor
 		// is not swept up by the guess.
-		{"dmi ec2 vendor on a server chassis", "", "m5.large", "Amazon EC2", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"dmi oracle bare metal server", "", "ORACLE SERVER X8-2", "Oracle Corporation", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"dmi nutanix appliance", "", "NX-3060-G7", "Nutanix", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
-		{"dmi surface is a laptop", "", "Surface Laptop", "Microsoft Corporation", "10", pb.MachineType_LAPTOP_TYPE},
-		{"dmi chromebook is a laptop", "", "Eve", "GOOGLE", "9", pb.MachineType_LAPTOP_TYPE},
+		{"dmi ec2 vendor on a server chassis", "", "m5.large", "Amazon EC2", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi oracle bare metal server", "", "ORACLE SERVER X8-2", "Oracle Corporation", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi nutanix appliance", "", "NX-3060-G7", "Nutanix", "17", "", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi surface is a laptop", "", "Surface Laptop", "Microsoft Corporation", "10", "", pb.MachineType_LAPTOP_TYPE},
+		{"dmi chromebook is a laptop", "", "Eve", "GOOGLE", "9", "", pb.MachineType_LAPTOP_TYPE},
 
 		// Nothing readable at all.
-		{"no dmi no virt", "", "", "", "", pb.MachineType_UNKNOWN_TYPE},
-		{"virt none no dmi", "none", "", "", "", pb.MachineType_UNKNOWN_TYPE},
+		{"no dmi no virt", "", "", "", "", "", pb.MachineType_UNKNOWN_TYPE},
+		{"virt none no dmi", "none", "", "", "", "", pb.MachineType_UNKNOWN_TYPE},
 
 		// Matching is case-insensitive on both DMI fields.
-		{"uppercase product", "", "QEMU Standard PC", "", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
-		{"uppercase vendor", "", "", "XEN", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"uppercase product", "", "QEMU Standard PC", "", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"uppercase vendor", "", "", "XEN", "1", "", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+
+		// A recognised board is a single-board computer. Virtualisation is still decided first, and
+		// the board outranks every chassis code and cloud-vendor guess that firmware can supply, since
+		// a board's SMBIOS (when it has any) reports a chassis of its own.
+		{"board, systemd says none", "none", "", "", "", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"board, no systemd and no dmi", "", "", "", "", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"board under a hypervisor is a vm", "kvm", "", "", "", "raspberrypi", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"board, dmi hypervisor vendor wins without systemd", "", "", "QEMU", "1", "raspberrypi", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"board, dmi hypervisor product wins without systemd", "", "Standard PC (i440FX + PIIX, 1996)", "", "1", "raspberrypi", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"board outranks a desktop chassis", "none", "", "", "3", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"board outranks a server chassis", "none", "", "", "17", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"board outranks a desktop chassis without systemd", "", "", "", "3", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"board outranks the cloud vendor guess", "", "m5.large", "Amazon EC2", "1", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"uefi pi: embedded pc chassis with the board's own dmi", "none", "Raspberry Pi 4 Model B", "Raspberry Pi Foundation", "34", "raspberrypi", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"embedded pc chassis alone says nothing", "none", "Raspberry Pi 4 Model B", "Raspberry Pi Foundation", "34", "", pb.MachineType_UNKNOWN_TYPE},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyMachineType(tt.virt, tt.productName, tt.sysVendor, tt.chassisType)
+			got := classifyMachineType(tt.virt, tt.productName, tt.sysVendor, tt.chassisType, tt.boardFamily)
 			if got != tt.want {
-				t.Errorf("classifyMachineType(%q, %q, %q, %q) = %v, want %v",
-					tt.virt, tt.productName, tt.sysVendor, tt.chassisType, got, tt.want)
+				t.Errorf("classifyMachineType(%q, %q, %q, %q, %q) = %v, want %v",
+					tt.virt, tt.productName, tt.sysVendor, tt.chassisType, tt.boardFamily, got, tt.want)
 			}
 		})
 	}
@@ -1874,5 +1904,336 @@ func TestDetectVirtualizationEmptyOutputIsNotAVerdict(t *testing.T) {
 
 	if got := detectVirtualization(context.Background()); got != "" {
 		t.Errorf("detectVirtualization = %q, want empty", got)
+	}
+}
+
+// writeRoot lays out files, keyed by their path under the root, in a fresh temporary root. A path
+// that is absent from the map is absent from the filesystem.
+func writeRoot(t *testing.T, files map[string]string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	for path, content := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", full, err)
+		}
+	}
+
+	return root
+}
+
+// A Raspberry Pi 4 on Raspberry Pi OS: no DMI, a device tree naming the board.
+var piDeviceTree = map[string]string{
+	"sys/firmware/devicetree/base/compatible": "raspberrypi,4-model-b\x00brcm,bcm2711\x00",
+	"sys/firmware/devicetree/base/model":      "Raspberry Pi 4 Model B Rev 1.4\x00",
+}
+
+// Intent: The whole chain, from the files and the virtualisation verdict to the machine type, reads
+// the root it is given, so one fixture drives every input and no test depends on the host.
+func TestDetectMachineType_ReadsTheGivenRoot(t *testing.T) {
+	tests := []struct {
+		name       string
+		virtStdout string
+		virtExit   int
+		noSystemd  bool
+		files      map[string]string
+		want       pb.MachineType
+	}{
+		{"Pi 4, systemd says none", "none", 1, false, piDeviceTree, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{"the same Pi as a KVM guest", "kvm", 0, false, piDeviceTree, pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"Pi without systemd", "", 0, true, piDeviceTree, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE},
+		{
+			"Pi in Docker: device tree masked, cpuinfo names the board", "none", 1, false,
+			map[string]string{"proc/cpuinfo": "Revision\t: d03114\nModel\t\t: Raspberry Pi 4 Model B Rev 1.4\n"},
+			pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		},
+		{
+			"Pi booted through UEFI: SMBIOS only, embedded PC chassis", "none", 1, false,
+			map[string]string{
+				"sys/class/dmi/id/sys_vendor":   "Raspberry Pi Foundation\n",
+				"sys/class/dmi/id/product_name": "Raspberry Pi 4 Model B\n",
+				"sys/class/dmi/id/chassis_type": "34\n",
+			},
+			pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		},
+		{
+			"x86 server: DMI is read from the root too", "none", 1, false,
+			map[string]string{
+				"sys/class/dmi/id/sys_vendor":   "Dell Inc.\n",
+				"sys/class/dmi/id/product_name": "PowerEdge R640\n",
+				"sys/class/dmi/id/chassis_type": "17\n",
+			},
+			pb.MachineType_BARE_METAL_SERVER_TYPE,
+		},
+		{
+			"QEMU guest without systemd", "", 0, true,
+			map[string]string{"sys/class/dmi/id/sys_vendor": "QEMU\n"},
+			pb.MachineType_VIRTUAL_MACHINE_TYPE,
+		},
+		{"nothing readable", "none", 1, false, map[string]string{}, pb.MachineType_UNKNOWN_TYPE},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.noSystemd {
+				t.Setenv("PATH", "")
+			} else {
+				writeFakeDetectVirt(t, tt.virtStdout, tt.virtExit)
+			}
+
+			if got := detectMachineType(context.Background(), writeRoot(t, tt.files)); got != tt.want {
+				t.Errorf("detectMachineType = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Intent: The numeric values are the wire contract with the server, so each one is pinned by number
+// and name; a renumbering or a renamed value fails here instead of reaching a deployed server.
+func TestMachineTypeValuesArePinned(t *testing.T) {
+	pinned := []struct {
+		value pb.MachineType
+		code  int32
+		name  string
+	}{
+		{pb.MachineType_UNKNOWN_TYPE, 0, "UNKNOWN_TYPE"},
+		{pb.MachineType_DESKTOP_TYPE, 1, "DESKTOP_TYPE"},
+		{pb.MachineType_LAPTOP_TYPE, 2, "LAPTOP_TYPE"},
+		{pb.MachineType_BARE_METAL_SERVER_TYPE, 3, "BARE_METAL_SERVER_TYPE"},
+		{pb.MachineType_VIRTUAL_MACHINE_TYPE, 4, "VIRTUAL_MACHINE_TYPE"},
+		{pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, 5, "SINGLE_BOARD_COMPUTER_TYPE"},
+	}
+
+	for _, p := range pinned {
+		if int32(p.value) != p.code {
+			t.Errorf("%s = %d, want %d", p.name, int32(p.value), p.code)
+		}
+		if p.value.String() != p.name {
+			t.Errorf("value %d is named %q, want %q", p.code, p.value.String(), p.name)
+		}
+	}
+}
+
+// --- Registration against a server that predates single-board computers ---
+
+func registerOnce(t *testing.T, detected pb.MachineType, serve func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error)) (sent []pb.MachineType, mgr *Manager, rs *state.RuntimeState, err error) {
+	t.Helper()
+
+	store := newTestStore(t)
+	rs = state.New()
+	regClient := &mockRegistrationClient{
+		registerFunc: func(ctx context.Context, in *pb.RegisterSystemRequest, opts ...grpc.CallOption) (*pb.RegisterSystemResponse, error) {
+			sent = append(sent, in.MachineType)
+
+			return serve(len(sent), in)
+		},
+	}
+
+	mgr = newTestManager(regClient, &mockConfigurationClient{}, store, rs, "token")
+	mgr.machineTypeDetector = fixedMachineType(detected)
+	err = mgr.EnsureRegistered(context.Background())
+
+	return sent, mgr, rs, err
+}
+
+// Intent: A server that has not heard of single-board computers refuses the type, and the agent
+// registers again once as Unknown instead of never registering. The configuration fetch reports the
+// real type afterwards, which an older server ignores and a newer one stores.
+func TestRegister_OldServerRefusesSingleBoardComputer_RegistersAsUnknown(t *testing.T) {
+	sent, _, rs, err := registerOnce(t, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error) {
+			if in.MachineType == pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE {
+				return nil, status.Error(codes.InvalidArgument, "Invalid machine type")
+			}
+
+			return &pb.RegisterSystemResponse{MachineId: 7, ApiKey: "key-7"}, nil
+		})
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	want := []pb.MachineType{pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, pb.MachineType_UNKNOWN_TYPE}
+	if !reflect.DeepEqual(sent, want) {
+		t.Errorf("RegisterSystem was sent types %v, want %v", sent, want)
+	}
+	if rs.MachineID() != 7 || rs.ApiKey() != "key-7" || rs.IsRegistered() == false {
+		t.Errorf("registration did not complete from the retry: machine %d, key %q, registered %v", rs.MachineID(), rs.ApiKey(), rs.IsRegistered())
+	}
+}
+
+// Intent: A server that knows the type gets it, in a single call.
+func TestRegister_CurrentServerAcceptsSingleBoardComputer_NoRetry(t *testing.T) {
+	sent, _, rs, err := registerOnce(t, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error) {
+			return &pb.RegisterSystemResponse{MachineId: 8, ApiKey: "key-8"}, nil
+		})
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	if want := []pb.MachineType{pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE}; !reflect.DeepEqual(sent, want) {
+		t.Errorf("RegisterSystem was sent types %v, want %v", sent, want)
+	}
+	if rs.MachineID() != 8 {
+		t.Errorf("MachineID = %d, want 8", rs.MachineID())
+	}
+}
+
+// Intent: The retry is for the one refusal an old server gives for the new type and nothing else. A
+// legacy type, another InvalidArgument reason, another status code or a different wording is
+// reported as the failure it is, after exactly one call.
+func TestRegister_OtherFailuresAreNotRetried(t *testing.T) {
+	tests := []struct {
+		name     string
+		detected pb.MachineType
+		err      error
+	}{
+		{"machine limit exceeded with the new type", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, status.Error(codes.InvalidArgument, "Machine limit exceeded")},
+		{"unavailable with the new type", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, status.Error(codes.Unavailable, "connection refused")},
+		{"internal error with the right words", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, status.Error(codes.Internal, "Invalid machine type")},
+		{"different wording", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, status.Error(codes.InvalidArgument, "invalid machine type")},
+		{"extra words", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, status.Error(codes.InvalidArgument, "Invalid machine type: 5")},
+		{"legacy bare-metal type refused", pb.MachineType_BARE_METAL_SERVER_TYPE, status.Error(codes.InvalidArgument, "Invalid machine type")},
+		{"legacy virtual-machine type refused", pb.MachineType_VIRTUAL_MACHINE_TYPE, status.Error(codes.InvalidArgument, "Invalid machine type")},
+		{"unknown type refused", pb.MachineType_UNKNOWN_TYPE, status.Error(codes.InvalidArgument, "Invalid machine type")},
+		{"not a status error at all", pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE, fmt.Errorf("Invalid machine type")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sent, _, rs, err := registerOnce(t, tt.detected,
+				func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error) {
+					return nil, tt.err
+				})
+
+			if err == nil {
+				t.Fatal("expected the registration to fail")
+			}
+			if len(sent) != 1 {
+				t.Errorf("RegisterSystem was called %d times (%v), want exactly one", len(sent), sent)
+			}
+			if rs.IsRegistered() {
+				t.Error("expected IsRegistered=false")
+			}
+		})
+	}
+}
+
+// Intent: When the retry fails as well, the caller learns about the refusal that started it, not the
+// retry's own error, because that is the failure the operator has to act on.
+func TestRegister_FailedRetry_ReturnsTheOriginalError(t *testing.T) {
+	sent, _, rs, err := registerOnce(t, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error) {
+			if call == 1 {
+				return nil, status.Error(codes.InvalidArgument, "Invalid machine type")
+			}
+
+			return nil, status.Error(codes.Unavailable, "connection refused")
+		})
+
+	if err == nil {
+		t.Fatal("expected the registration to fail")
+	}
+	if len(sent) != 2 {
+		t.Errorf("RegisterSystem was called %d times, want 2", len(sent))
+	}
+	if strings.Contains(err.Error(), "Invalid machine type") == false {
+		t.Errorf("error = %q, want the original refusal", err)
+	}
+	if strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("error = %q, must not report the retry's error", err)
+	}
+	if rs.IsRegistered() {
+		t.Error("expected IsRegistered=false")
+	}
+}
+
+// Intent: A retry that the server answers with a registration error message is reported like any
+// other registration error, rather than as success.
+func TestRegister_RetryRefusedInTheResponse_IsAnError(t *testing.T) {
+	_, _, rs, err := registerOnce(t, pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+		func(call int, in *pb.RegisterSystemRequest) (*pb.RegisterSystemResponse, error) {
+			if call == 1 {
+				return nil, status.Error(codes.InvalidArgument, "Invalid machine type")
+			}
+
+			return &pb.RegisterSystemResponse{ErrorMessage: "token revoked"}, nil
+		})
+
+	if err == nil {
+		t.Fatal("expected the registration to fail")
+	}
+	if rs.IsRegistered() {
+		t.Error("expected IsRegistered=false")
+	}
+}
+
+// --- The configuration fetch reports the detected type ---
+
+// Intent: Every configuration fetch carries the type the agent detects now, so the server can
+// correct a host an older agent could not classify.
+func TestFetchConfiguration_SendsTheDetectedMachineType(t *testing.T) {
+	for _, detected := range []pb.MachineType{
+		pb.MachineType_UNKNOWN_TYPE,
+		pb.MachineType_BARE_METAL_SERVER_TYPE,
+		pb.MachineType_VIRTUAL_MACHINE_TYPE,
+		pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE,
+	} {
+		t.Run(detected.String(), func(t *testing.T) {
+			runtimeState := state.New()
+			runtimeState.SetMachineID(42)
+
+			var reported pb.MachineType
+			cfgClient := &mockConfigurationClient{
+				getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+					reported = in.MachineType
+
+					return &pb.GetConfigurationResponse{}, nil
+				},
+			}
+
+			mgr := newTestManager(&mockRegistrationClient{}, cfgClient, newTestStore(t), runtimeState, "token")
+			mgr.machineTypeDetector = fixedMachineType(detected)
+
+			if err := mgr.FetchConfiguration(context.Background()); err != nil {
+				t.Fatalf("FetchConfiguration: %v", err)
+			}
+			if reported != detected {
+				t.Errorf("GetConfigurationRequest.MachineType = %v, want %v", reported, detected)
+			}
+		})
+	}
+}
+
+// Intent: End to end for the owner's case: a Raspberry Pi's files and a systemd that answers "none"
+// produce a configuration request that says single-board computer.
+func TestFetchConfiguration_RaspberryPiReportsSingleBoardComputer(t *testing.T) {
+	writeFakeDetectVirt(t, "none", 1)
+	root := writeRoot(t, piDeviceTree)
+
+	runtimeState := state.New()
+	runtimeState.SetMachineID(42)
+
+	var reported pb.MachineType
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			reported = in.MachineType
+
+			return &pb.GetConfigurationResponse{}, nil
+		},
+	}
+
+	mgr := newTestManager(&mockRegistrationClient{}, cfgClient, newTestStore(t), runtimeState, "token")
+	mgr.machineTypeDetector = func(ctx context.Context) pb.MachineType { return detectMachineType(ctx, root) }
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+	if reported != pb.MachineType_SINGLE_BOARD_COMPUTER_TYPE {
+		t.Errorf("GetConfigurationRequest.MachineType = %v, want SINGLE_BOARD_COMPUTER_TYPE", reported)
 	}
 }
