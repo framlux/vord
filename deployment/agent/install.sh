@@ -79,6 +79,24 @@ have_systemd() {
     command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
 }
 
+# An operator who masked the unit has said the agent must not run here. Enable and restart both
+# fail on a masked unit, which under set -e would turn that deliberate choice into an installer
+# error, so the callers leave the unit alone instead. `is-enabled` prints the state even when it
+# exits non-zero, and prints nothing at all for a unit it cannot find.
+#
+# Pure enough to be sourced and called directly in tests — see deployment/agent/install_test.sh.
+unit_masked() {
+    case "$(systemctl is-enabled "${PACKAGE_NAME}" 2>/dev/null || true)" in
+        masked | masked-runtime) return 0 ;;
+    esac
+
+    return 1
+}
+
+report_masked_unit() {
+    info "${PACKAGE_NAME} is masked — leaving it alone. Run 'systemctl unmask ${PACKAGE_NAME}' to let it start."
+}
+
 # --- Value Validation ---
 #
 # SERVER_ADDRESS and REGISTRATION_TOKEN are interpolated into double-quoted TOML strings when the
@@ -377,6 +395,12 @@ start_agent() {
         return 0
     fi
 
+    if unit_masked; then
+        report_masked_unit
+
+        return 0
+    fi
+
     info "Enabling and starting ${PACKAGE_NAME}..."
 
     systemctl enable "${PACKAGE_NAME}"
@@ -385,6 +409,24 @@ start_agent() {
     # Restart to make it re-read the file. reset-failed first: repeated registration failures can
     # trip StartLimitBurst, and a rate-limited unit refuses to start at all.
     systemctl reset-failed "${PACKAGE_NAME}" 2>/dev/null || true
+    systemctl restart "${PACKAGE_NAME}"
+}
+
+# The package's own scripts bring the unit back after an upgrade, but the old package's scripts run
+# during an upgrade too, and the releases that disabled the unit there are still out in the field.
+# Enabling here as well makes the outcome independent of which release the host upgraded from.
+enable_and_restart_after_update() {
+    if ! have_systemd; then
+        return 0
+    fi
+
+    if unit_masked; then
+        report_masked_unit
+
+        return 0
+    fi
+
+    systemctl enable "${PACKAGE_NAME}"
     systemctl restart "${PACKAGE_NAME}"
 }
 
@@ -500,9 +542,7 @@ if [ "${UPDATE_ONLY}" -eq 1 ]; then
         "${PKG_MANAGER}" upgrade -y -q "${PACKAGE_NAME}"
     fi
 
-    if have_systemd; then
-        systemctl restart "${PACKAGE_NAME}"
-    fi
+    enable_and_restart_after_update
 
     success "${PACKAGE_NAME} upgraded successfully."
     exit 0
@@ -576,7 +616,7 @@ fi
 start_agent
 
 printf "\n"
-if have_systemd; then
+if have_systemd && ! unit_masked; then
     success "Vord Agent is installed and running!"
     printf "\n"
     # `systemctl status` exits 3 for an inactive unit. It is the last command in the script, so
