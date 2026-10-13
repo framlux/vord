@@ -171,8 +171,8 @@ function emptyPlan(): ReportingPlan {
 	return { commands: [], skipped: [] };
 }
 
-function holderId(context: ReportingContext): number | null {
-	return context.candidates.find((c) => c.isHolder)?.machineId ?? context.activeReporterMachineId;
+function activeReporterId(context: ReportingContext): number | null {
+	return context.candidates.find((c) => c.isActiveReporter)?.machineId ?? context.activeReporterMachineId;
 }
 
 function eligibleById(context: ReportingContext): Map<number, KubernetesEligibleMachineDto> {
@@ -252,14 +252,14 @@ export function disableBlock(context: ReportingContext, keys: UsableSigningKey[]
 }
 
 /**
- * Uninstalls through one online eligible machine, preferring the holder, then a machine known to be
+ * Uninstalls through one online eligible machine, preferring the active reporter, then a machine known to be
  * enrolled, and unenrols every other online candidate. A machine with remote commands off is only a
  * target once it has enrolled. Without a machine to uninstall through nothing is sent: an unenrol
  * alone would drop the hosts' tokens and leave the cluster objects behind.
  */
 export function planDisable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
-	const holder = holderId(context);
+	const activeReporter = activeReporterId(context);
 
 	const viable = context.eligibleMachines
 		.filter((m) => m.online)
@@ -271,7 +271,7 @@ export function planDisable(context: ReportingContext, keys: UsableSigningKey[])
 			'key' in entry.assessment
 		);
 	const rank = (machine: KubernetesEligibleMachineDto): number =>
-		machine.machineId === holder ? 0 : isEnrolled(context, machine) ? 1 : 2;
+		machine.machineId === activeReporter ? 0 : isEnrolled(context, machine) ? 1 : 2;
 	viable.sort((a, b) => rank(a.machine) - rank(b.machine));
 	const target = viable.at(0);
 
@@ -360,12 +360,12 @@ export function planReenrol(context: ReportingContext, keys: UsableSigningKey[])
 }
 
 /**
- * Enrols once, through an online candidate if one can be sent the command, preferring the holder among
- * those, and otherwise through an offline one, again preferring the holder.
+ * Enrols once, through an online candidate if one can be sent the command, preferring the active reporter among
+ * those, and otherwise through an offline one, again preferring the active reporter.
  */
 export function planUpdatePermissions(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
-	const holder = holderId(context);
+	const activeReporter = activeReporterId(context);
 	const described = eligibleById(context);
 
 	const considered = context.candidates
@@ -374,7 +374,7 @@ export function planUpdatePermissions(context: ReportingContext, keys: UsableSig
 			entry.machine !== undefined
 		);
 	const rank = (candidate: KubernetesCandidateDto): number =>
-		(candidate.online ? 0 : 2) + (candidate.machineId === holder ? 0 : 1);
+		(candidate.online ? 0 : 2) + (candidate.machineId === activeReporter ? 0 : 1);
 	considered.sort((a, b) => rank(a.candidate) - rank(b.candidate));
 
 	for (const { candidate, machine } of considered) {

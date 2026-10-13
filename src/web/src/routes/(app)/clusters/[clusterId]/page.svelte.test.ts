@@ -82,7 +82,7 @@ function makeCandidate(overrides: Partial<KubernetesCandidateDto> = {}): Kuberne
 	return {
 		machineId: 7,
 		machineName: 'web-01',
-		isHolder: false,
+		isActiveReporter: false,
 		reporterError: null,
 		lastReportAt: '2026-10-11T11:45:00Z',
 		online: true,
@@ -579,12 +579,12 @@ describe('cluster detail', () => {
 			return within(within(screen.getByTestId('reporters-table')).getByRole('row', { name }));
 		}
 
-		it('lists each enrolled machine, marking the holder', () => {
+		it('lists each enrolled machine, marking the active reporter', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'active',
 					candidates: [
-						makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true }),
+						makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true }),
 						makeCandidate({ machineId: 8, machineName: 'web-02' })
 					],
 					eligibleMachines: [
@@ -596,8 +596,8 @@ describe('cluster detail', () => {
 
 			const table = within(screen.getByTestId('reporters-table'));
 
-			expect(within(table.getByRole('row', { name: /web-01/ })).getByText('Holder')).toBeInTheDocument();
-			expect(within(table.getByRole('row', { name: /web-02/ })).queryByText('Holder')).not.toBeInTheDocument();
+			expect(within(table.getByRole('row', { name: /web-01/ })).getByText('Reporting')).toBeInTheDocument();
+			expect(within(table.getByRole('row', { name: /web-02/ })).queryByText('Reporting')).not.toBeInTheDocument();
 			expect(table.getByRole('link', { name: 'web-01' })).toHaveAttribute('href', '/machines/7');
 		});
 
@@ -977,7 +977,7 @@ describe('cluster detail', () => {
 				activeReporterMachineName: 'web-02',
 				candidates: [
 					makeCandidate({ machineId: 7, machineName: 'web-01' }),
-					makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true }),
+					makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true }),
 					makeCandidate({ machineId: 9, machineName: 'web-03' })
 				],
 				eligibleMachines: [
@@ -1070,7 +1070,7 @@ describe('cluster detail', () => {
 			renderPage(
 				activeCluster({
 					activeReporterMachineId: 7,
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true })],
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
 					eligibleMachines: [makeEligible({ machineId: 7, remoteCommandsEnabled: false })]
 				})
 			);
@@ -1120,7 +1120,7 @@ describe('cluster detail', () => {
 			expect(screen.queryByTestId('disable-blocked-machines')).not.toBeInTheDocument();
 		});
 
-		it('uninstalls through the holder and unenrols every other online candidate', async () => {
+		it('uninstalls through the active reporter and unenrols every other online candidate', async () => {
 			renderPage(activeCluster());
 
 			const dialog = await openDisableDialog();
@@ -1144,12 +1144,12 @@ describe('cluster detail', () => {
 			expect(sentCommands().filter((c) => c.commandType === 'k8s_reporter_uninstall')).toHaveLength(1);
 		});
 
-		it('uninstalls through another online machine when the holder is offline, and skips the offline one with a reason', async () => {
+		it('uninstalls through another online machine when the active reporter is offline, and skips the offline one with a reason', async () => {
 			renderPage(
 				activeCluster({
 					candidates: [
 						makeCandidate({ machineId: 7, machineName: 'web-01' }),
-						makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true, online: false })
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true, online: false })
 					],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
@@ -1172,7 +1172,7 @@ describe('cluster detail', () => {
 		it('sends nothing, and says why, when the only online machines cannot be sent a command', async () => {
 			renderPage(
 				activeCluster({
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true })],
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
 					eligibleMachines: [makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, isPaused: true })]
 				})
 			);
@@ -1184,12 +1184,12 @@ describe('cluster detail', () => {
 			expect(api.sendCommand).not.toHaveBeenCalled();
 		});
 
-		it('uninstalls through a holder whose remote commands are disabled, and unenrols a candidate in the same state', async () => {
+		it('uninstalls through an active reporter whose remote commands are disabled, and unenrols a candidate in the same state', async () => {
 			renderPage(
 				activeCluster({
 					candidates: [
 						makeCandidate({ machineId: 7, machineName: 'web-01' }),
-						makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true })
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true })
 					],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, remoteCommandsEnabled: false }),
@@ -1214,7 +1214,7 @@ describe('cluster detail', () => {
 		it('does not uninstall through a machine with remote commands disabled that never enrolled', async () => {
 			renderPage(
 				activeCluster({
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true, online: false })],
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true, online: false })],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, online: false }),
 						makeEligible({ machineId: 9, machineName: 'web-03', remoteCommandsEnabled: false })
@@ -1592,7 +1592,7 @@ describe('cluster detail', () => {
 			]);
 		});
 
-		it('signs one enrol, through the holder, when Update permissions is pressed', async () => {
+		it('signs one enrol, through the active reporter, when Update permissions is pressed', async () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'role_outdated',
@@ -1600,7 +1600,7 @@ describe('cluster detail', () => {
 					activeReporterMachineName: 'web-02',
 					candidates: [
 						makeCandidate({ machineId: 7, machineName: 'web-01' }),
-						makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true })
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true })
 					],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
@@ -1619,7 +1619,7 @@ describe('cluster detail', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'role_outdated',
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true })],
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
 					eligibleMachines: [makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, isPaused: true })]
 				})
 			);

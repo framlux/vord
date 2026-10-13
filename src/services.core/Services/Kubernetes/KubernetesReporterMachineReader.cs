@@ -120,13 +120,14 @@ public sealed class KubernetesReporterMachineReader
 
         List<long> everyMachineId = candidates.Select(c => c.MachineId).Concat(eligibleReports.Keys).Distinct().ToList();
         HashSet<long> online = await GetOnlineAsync(everyMachineId, ct);
+        DateTimeOffset now = _timeProvider.GetUtcNow();
 
         List<KubernetesCandidateDto> candidateDtos = candidates
             .Select(c => new KubernetesCandidateDto
             {
                 MachineId = c.MachineId,
                 MachineName = names.GetValueOrDefault(c.MachineId) ?? string.Empty,
-                IsHolder = c.MachineId == cluster.ActiveReporterMachineId,
+                IsActiveReporter = KubernetesReporting.IsActiveReporter(cluster, c.MachineId, now),
                 ReporterError = c.ReporterError,
                 LastReportAt = c.LastReportAt,
                 Online = online.Contains(c.MachineId),

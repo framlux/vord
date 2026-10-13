@@ -113,7 +113,7 @@
 					data-testid="kubernetes-reporter"
 					class="text-sm text-surface-900 dark:text-surface-100"
 				>
-					{candidate.isHolder ? 'Holder' : 'Candidate'}
+					{candidate.isActiveReporter ? 'Reporting' : 'Candidate'}
 				</span>
 			</div>
 			<div class="flex justify-between">

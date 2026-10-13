@@ -30,6 +30,7 @@ internal static class MachineKubernetesBuilder
     /// The machine's latest local report from the past seven days, if any. It is normalised the same way
     /// the projection normalises it, and a report the projection would refuse is treated as absent.
     /// </param>
+    /// <param name="now">The time a snapshot's age is measured from, to tell whether the machine is the active reporter.</param>
     /// <param name="ct">A cancellation token.</param>
     public static async Task<MachineKubernetesDto?> BuildAsync(
         IKubernetesInventoryRepository repo,
@@ -37,6 +38,7 @@ internal static class MachineKubernetesBuilder
         long machineId,
         string machineName,
         KubernetesNodePayload? rawPayload,
+        DateTimeOffset now,
         CancellationToken ct)
     {
         KubernetesNodePayload? payload = rawPayload == null ? null : KubernetesNodePayloadNormaliser.Normalise(rawPayload);
@@ -63,7 +65,7 @@ internal static class MachineKubernetesBuilder
         MachineKubernetesDto block = new()
         {
             Local = payload == null ? null : ToLocalDto(payload),
-            Candidate = candidate == null ? null : ToCandidateDto(candidate.Value.Row, candidate.Value.Cluster, machineId),
+            Candidate = candidate == null ? null : ToCandidateDto(candidate.Value.Row, candidate.Value.Cluster, machineId, now),
         };
 
         if ((node != null) && (cluster != null))
@@ -129,12 +131,12 @@ internal static class MachineKubernetesBuilder
         return cluster == null ? null : (row, cluster);
     }
 
-    private static MachineKubernetesCandidateDto ToCandidateDto(KubernetesReporterCandidate row, KubernetesCluster cluster, long machineId)
+    private static MachineKubernetesCandidateDto ToCandidateDto(KubernetesReporterCandidate row, KubernetesCluster cluster, long machineId, DateTimeOffset now)
     {
         return new MachineKubernetesCandidateDto
         {
             ClusterId = row.ClusterId,
-            IsHolder = cluster.ActiveReporterMachineId == machineId,
+            IsActiveReporter = KubernetesReporting.IsActiveReporter(cluster, machineId, now),
             ReporterError = row.ReporterError,
             LastReportAt = row.LastReportAt,
         };

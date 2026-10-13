@@ -900,8 +900,11 @@ export interface KubernetesNodeDto {
 export interface KubernetesCandidateDto {
 	machineId: number;
 	machineName: string;
-	/** True while the machine holds the cluster's reporter Lease. */
-	isHolder: boolean;
+	/**
+	 * True when this machine sent the cluster's most recent accepted snapshot and that snapshot is not stale.
+	 * The server cannot see the Lease, so this is not proof the machine holds it now.
+	 */
+	isActiveReporter: boolean;
 	/**
 	 * The error the machine's own reporter last reported, as a bare code (credentials_rejected,
 	 * tls_ca_changed or state_copied), or null when it reported none.
@@ -953,7 +956,11 @@ export interface MachineKubernetesLocalDto {
 /** A machine's state as a reporter candidate. */
 export interface MachineKubernetesCandidateDto {
 	clusterId: number;
-	isHolder: boolean;
+	/**
+	 * True when this machine sent the cluster's most recent accepted snapshot and that snapshot is not stale.
+	 * The server cannot see the Lease, so this is not proof the machine holds it now.
+	 */
+	isActiveReporter: boolean;
 	reporterError: string | null;
 	lastReportAt: string;
 }

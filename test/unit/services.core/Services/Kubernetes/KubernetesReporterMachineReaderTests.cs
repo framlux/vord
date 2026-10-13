@@ -111,7 +111,7 @@ public sealed class KubernetesReporterMachineReaderTests
             NullLogger<KubernetesReporterMachineReader>.Instance);
     }
 
-    private static KubernetesCluster Cluster(long? holder = null)
+    private static KubernetesCluster Cluster(long? activeReporter = null, DateTimeOffset? lastSnapshotReceivedAt = null)
     {
         return new KubernetesCluster
         {
@@ -121,7 +121,8 @@ public sealed class KubernetesReporterMachineReaderTests
             Distro = "k3s",
             FirstSeenAt = Now.AddDays(-2),
             LastSeenAt = Now,
-            ActiveReporterMachineId = holder,
+            ActiveReporterMachineId = activeReporter,
+            LastSnapshotReceivedAt = lastSnapshotReceivedAt,
         };
     }
 
@@ -641,7 +642,7 @@ public sealed class KubernetesReporterMachineReaderTests
     // ========== Candidates ==========
 
     [Test]
-    public async Task LoadAsync_Candidates_CarryHolderErrorReportTimeAndOnline()
+    public async Task LoadAsync_Candidates_CarryActiveReporterErrorReportTimeAndOnline()
     {
         Summary(21, 0);
         Summary(22, 3);
@@ -651,25 +652,100 @@ public sealed class KubernetesReporterMachineReaderTests
 
         KubernetesReporterMachines result = await reader.LoadAsync(
             TenantId,
-            Cluster(holder: 21),
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-5)),
             [],
             [CandidateOf(22, "credentials_rejected", reported), CandidateOf(21)],
             names,
             CancellationToken.None);
 
         await Assert.That(result.Candidates.Count).IsEqualTo(2);
-        KubernetesCandidateDto holder = result.Candidates[0];
-        await Assert.That(holder.MachineId).IsEqualTo(21L);
-        await Assert.That(holder.MachineName).IsEqualTo("cp-one");
-        await Assert.That(holder.IsHolder).IsTrue();
-        await Assert.That(holder.ReporterError).IsNull();
-        await Assert.That(holder.Online).IsTrue();
+        KubernetesCandidateDto activeReporter = result.Candidates[0];
+        await Assert.That(activeReporter.MachineId).IsEqualTo(21L);
+        await Assert.That(activeReporter.MachineName).IsEqualTo("cp-one");
+        await Assert.That(activeReporter.IsActiveReporter).IsTrue();
+        await Assert.That(activeReporter.ReporterError).IsNull();
+        await Assert.That(activeReporter.Online).IsTrue();
         KubernetesCandidateDto other = result.Candidates[1];
         await Assert.That(other.MachineId).IsEqualTo(22L);
-        await Assert.That(other.IsHolder).IsFalse();
+        await Assert.That(other.IsActiveReporter).IsFalse();
         await Assert.That(other.ReporterError).IsEqualTo("credentials_rejected");
         await Assert.That(other.LastReportAt).IsEqualTo(reported);
         await Assert.That(other.Online).IsFalse();
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(30)]
+    [Arguments(90)]
+    public async Task LoadAsync_SenderOfASnapshotNoOlderThanTheStaleThreshold_IsTheActiveReporter(int snapshotAgeMinutes)
+    {
+        // Intent: the flag claims the machine is reporting now, which the server can only judge from the
+        // snapshot's age. A snapshot exactly at the threshold is not stale, the same boundary the
+        // cluster's reporting state uses.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-snapshotAgeMinutes)),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsTrue();
+    }
+
+    [Test]
+    public async Task LoadAsync_SenderWhoseSnapshotIsOlderThanTheStaleThreshold_IsNoLongerTheActiveReporter()
+    {
+        // Intent: a snapshot 91 minutes old is stale, so the machine that sent it is not shown as
+        // reporting even though the cluster still names it as the last sender.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-91)),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task LoadAsync_SenderOfNoAcceptedSnapshot_IsNotTheActiveReporter()
+    {
+        // Intent: a cluster that has never accepted a snapshot has nothing to call fresh.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: null),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task LoadAsync_CandidateThatDidNotSendTheLatestSnapshot_IsNotTheActiveReporterWhileTheSnapshotIsFresh()
+    {
+        // Intent: a fresh snapshot makes only the machine that sent it the active reporter.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-1)),
+            [],
+            [CandidateOf(21), CandidateOf(22)],
+            new Dictionary<long, string> { [21] = "cp-one", [22] = "cp-two" },
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single(c => c.MachineId == 22).IsActiveReporter).IsFalse();
+        await Assert.That(result.Candidates.Single(c => c.MachineId == 21).IsActiveReporter).IsTrue();
     }
 
     [Test]
@@ -695,7 +771,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(holder: 21), [], [CandidateOf(21)], new Dictionary<long, string> { [21] = "cp-one" }, CancellationToken.None);
+            TenantId, Cluster(activeReporter: 21), [], [CandidateOf(21)], new Dictionary<long, string> { [21] = "cp-one" }, CancellationToken.None);
 
         await Assert.That(result.Candidates.Single().Online).IsTrue();
         await Assert.That(result.EligibleMachines.Single().Online).IsTrue();

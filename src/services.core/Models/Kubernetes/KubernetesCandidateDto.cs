@@ -15,8 +15,11 @@ public sealed class KubernetesCandidateDto
     /// <summary>The machine's name.</summary>
     public string MachineName { get; set; } = "";
 
-    /// <summary>True while the machine holds the cluster's reporter Lease.</summary>
-    public bool IsHolder { get; set; }
+    /// <summary>
+    /// True when this machine sent the cluster's most recent accepted snapshot and that snapshot is not stale.
+    /// The server cannot see the Lease, so this is not proof the machine holds it now.
+    /// </summary>
+    public bool IsActiveReporter { get; set; }
 
     /// <summary>The error the machine's own reporter last reported, or null when it reported none.</summary>
     public string? ReporterError { get; set; }

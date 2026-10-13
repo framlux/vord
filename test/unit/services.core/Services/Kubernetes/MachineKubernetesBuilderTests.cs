@@ -20,6 +20,7 @@ public class MachineKubernetesBuilderTests
     private const string Fingerprint = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
 
     private static readonly DateTimeOffset T0 = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = T0.AddHours(1);
 
     private static KubernetesCluster Cluster(long id, string? displayName)
     {
@@ -82,7 +83,7 @@ public class MachineKubernetesBuilderTests
         KubernetesCluster cluster = Cluster(11, "Production");
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.ClusterName).IsEqualTo("Production");
         await Assert.That(block.ClusterId).IsEqualTo(11L);
@@ -100,7 +101,7 @@ public class MachineKubernetesBuilderTests
         repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([cluster]);
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(hasKubelet: false), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false), Now, CancellationToken.None);
 
         await Assert.That(block!.Grouping).IsEqualTo("grouped");
         await Assert.That(block.ClusterName).IsEqualTo("Production");
@@ -120,7 +121,7 @@ public class MachineKubernetesBuilderTests
         IKubernetesInventoryRepository repo = LinkedNodeRepo(
             cluster, Node(1, 11, "cp-1", 9, controlPlane: true), Node(2, 11, "worker-1", null));
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.ClusterName).IsEqualTo("k3s cp-1");
         await repo.Received(1).ListNodesAsync(5, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>());
@@ -136,7 +137,7 @@ public class MachineKubernetesBuilderTests
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9));
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(nodeName: "Not_A_Node"), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(nodeName: "Not_A_Node"), Now, CancellationToken.None);
 
         await Assert.That(block).IsNotNull();
         await Assert.That(block!.Local).IsNull();
@@ -150,7 +151,7 @@ public class MachineKubernetesBuilderTests
         IKubernetesInventoryRepository repo = Substitute.For<IKubernetesInventoryRepository>();
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(nodeName: "Not_A_Node"), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(nodeName: "Not_A_Node"), Now, CancellationToken.None);
 
         await Assert.That(block).IsNull();
         await repo.DidNotReceive().ListClustersByFingerprintAsync(
@@ -166,7 +167,7 @@ public class MachineKubernetesBuilderTests
         repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([]);
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(hasKubelet: false, nodeName: "cp-1"), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false, nodeName: "cp-1"), Now, CancellationToken.None);
 
         await Assert.That(block!.Local).IsNotNull();
         await Assert.That(block.Local!.NodeName).IsNull();
@@ -183,7 +184,7 @@ public class MachineKubernetesBuilderTests
         repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([]);
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(hasKubelet: true, nodeName: "cp-1"), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(hasKubelet: true, nodeName: "cp-1"), Now, CancellationToken.None);
 
         await Assert.That(block!.Local!.NodeName).IsEqualTo("cp-1");
         await Assert.That(block.Local.NodeNameSource).IsEqualTo("certificate");
@@ -200,7 +201,7 @@ public class MachineKubernetesBuilderTests
         payload.Distro = "docker-desktop";
         payload.KubeletVersion = "v" + new string('1', 200);
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", payload, CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", payload, Now, CancellationToken.None);
 
         await Assert.That(block!.Local!.Distro).IsEqualTo("unknown");
         await Assert.That(block.Local.KubeletVersion).IsEqualTo(payload.KubeletVersion[..64]);
@@ -215,7 +216,7 @@ public class MachineKubernetesBuilderTests
         KubernetesNodePayload payload = Payload();
         payload.CaFingerprint = Fingerprint.ToUpperInvariant();
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", payload, CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", payload, Now, CancellationToken.None);
 
         await Assert.That(block!.Grouping).IsEqualTo("unknown");
         await repo.DidNotReceive().ListClustersByFingerprintAsync(
@@ -237,34 +238,84 @@ public class MachineKubernetesBuilderTests
     }
 
     [Test]
-    public async Task BuildAsync_CandidateWhoHoldsTheLease_IsMarkedAsTheHolderOnItsNode()
+    public async Task BuildAsync_CandidateWhoSentTheLatestFreshSnapshot_IsMarkedAsTheActiveReporterOnItsNode()
     {
         KubernetesCluster cluster = Cluster(11, "Production");
         cluster.ActiveReporterMachineId = 9;
+        cluster.LastSnapshotReceivedAt = Now.AddMinutes(-5);
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
         repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11, "credentials_rejected"));
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.Candidate).IsNotNull();
         await Assert.That(block.Candidate!.ClusterId).IsEqualTo(11L);
-        await Assert.That(block.Candidate.IsHolder).IsTrue();
+        await Assert.That(block.Candidate.IsActiveReporter).IsTrue();
         await Assert.That(block.Candidate.ReporterError).IsEqualTo("credentials_rejected");
         await Assert.That(block.Candidate.LastReportAt).IsEqualTo(T0.AddMinutes(7));
         await Assert.That(block.Node).IsNotNull();
     }
 
     [Test]
-    public async Task BuildAsync_CandidateWhileAnotherMachineHoldsTheLease_IsNotTheHolder()
+    [Arguments(0)]
+    [Arguments(90)]
+    public async Task BuildAsync_SnapshotNoOlderThanTheStaleThreshold_KeepsTheSenderActive(int snapshotAgeMinutes)
     {
+        // Intent: a snapshot exactly at the threshold is not stale, the same boundary the cluster's
+        // reporting state uses.
         KubernetesCluster cluster = Cluster(11, "Production");
-        cluster.ActiveReporterMachineId = 77;
+        cluster.ActiveReporterMachineId = 9;
+        cluster.LastSnapshotReceivedAt = Now.AddMinutes(-snapshotAgeMinutes);
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
         repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
-        await Assert.That(block!.Candidate!.IsHolder).IsFalse();
+        await Assert.That(block!.Candidate!.IsActiveReporter).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildAsync_SenderWhoseSnapshotIsOlderThanTheStaleThreshold_IsNoLongerTheActiveReporter()
+    {
+        // Intent: the cluster still names the machine as the last sender, but its snapshot is 91 minutes
+        // old, so the page must not claim the machine is reporting.
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 9;
+        cluster.LastSnapshotReceivedAt = Now.AddMinutes(-91);
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
+
+        await Assert.That(block!.Candidate!.IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildAsync_SenderOfNoAcceptedSnapshot_IsNotTheActiveReporter()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 9;
+        cluster.LastSnapshotReceivedAt = null;
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
+
+        await Assert.That(block!.Candidate!.IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildAsync_CandidateWhileAnotherMachineSentTheLatestSnapshot_IsNotTheActiveReporter()
+    {
+        KubernetesCluster cluster = Cluster(11, "Production");
+        cluster.ActiveReporterMachineId = 77;
+        cluster.LastSnapshotReceivedAt = Now.AddMinutes(-5);
+        IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
+        repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
+
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
+
+        await Assert.That(block!.Candidate!.IsActiveReporter).IsFalse();
         await Assert.That(block.Candidate.ReporterError).IsNull();
     }
 
@@ -274,7 +325,7 @@ public class MachineKubernetesBuilderTests
         KubernetesCluster cluster = Cluster(11, "Production");
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, Node(1, 11, "cp-1", 9, controlPlane: true));
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.Candidate).IsNull();
     }
@@ -293,7 +344,7 @@ public class MachineKubernetesBuilderTests
         repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([cluster, sibling]);
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(hasKubelet: false), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false), Now, CancellationToken.None);
 
         await Assert.That(block!.Grouping).IsEqualTo("grouped");
         await Assert.That(block.ClusterId).IsEqualTo(11L);
@@ -311,17 +362,18 @@ public class MachineKubernetesBuilderTests
         // last local report has aged out of the seven-day window.
         KubernetesCluster cluster = Cluster(11, "Production");
         cluster.ActiveReporterMachineId = 9;
+        cluster.LastSnapshotReceivedAt = Now.AddMinutes(-5);
         IKubernetesInventoryRepository repo = Substitute.For<IKubernetesInventoryRepository>();
         repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(11));
         repo.GetClusterAsync(5, 11, Arg.Any<CancellationToken>()).Returns(cluster);
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", null, CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", null, Now, CancellationToken.None);
 
         await Assert.That(block).IsNotNull();
         await Assert.That(block!.Local).IsNull();
         await Assert.That(block.Grouping).IsEqualTo("grouped");
         await Assert.That(block.ClusterId).IsEqualTo(11L);
-        await Assert.That(block.Candidate!.IsHolder).IsTrue();
+        await Assert.That(block.Candidate!.IsActiveReporter).IsTrue();
     }
 
     [Test]
@@ -332,15 +384,16 @@ public class MachineKubernetesBuilderTests
         KubernetesCluster nodeCluster = Cluster(11, "Production");
         KubernetesCluster candidateCluster = Cluster(12, "Staging");
         candidateCluster.ActiveReporterMachineId = 9;
+        candidateCluster.LastSnapshotReceivedAt = Now.AddMinutes(-5);
         IKubernetesInventoryRepository repo = LinkedNodeRepo(nodeCluster, Node(1, 11, "cp-1", 9, controlPlane: true));
         repo.GetCandidateForMachineAsync(5, 9, Arg.Any<CancellationToken>()).Returns(CandidateRow(12));
         repo.GetClusterAsync(5, 12, Arg.Any<CancellationToken>()).Returns(candidateCluster);
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.ClusterId).IsEqualTo(11L);
         await Assert.That(block.Candidate!.ClusterId).IsEqualTo(12L);
-        await Assert.That(block.Candidate.IsHolder).IsTrue();
+        await Assert.That(block.Candidate.IsActiveReporter).IsTrue();
     }
 
     [Test]
@@ -351,7 +404,7 @@ public class MachineKubernetesBuilderTests
         repo.ListClustersByFingerprintAsync(5, Fingerprint, Arg.Any<CancellationToken>()).Returns([]);
 
         MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(
-            repo, 5, 9, "cp-host", Payload(hasKubelet: false), CancellationToken.None);
+            repo, 5, 9, "cp-host", Payload(hasKubelet: false), Now, CancellationToken.None);
 
         await Assert.That(block!.Candidate).IsNull();
         await Assert.That(block.Grouping).IsEqualTo("ungrouped");
@@ -366,7 +419,7 @@ public class MachineKubernetesBuilderTests
         node.KubeletVersion = "v1.30.4+k3s1";
         IKubernetesInventoryRepository repo = LinkedNodeRepo(cluster, node);
 
-        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), CancellationToken.None);
+        MachineKubernetesDto? block = await MachineKubernetesBuilder.BuildAsync(repo, 5, 9, "cp-host", Payload(), Now, CancellationToken.None);
 
         await Assert.That(block!.Node!.KubeletSkew).IsTrue();
     }

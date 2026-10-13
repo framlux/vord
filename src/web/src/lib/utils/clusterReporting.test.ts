@@ -49,7 +49,7 @@ function candidate(overrides: Partial<KubernetesCandidateDto> = {}): KubernetesC
 	return {
 		machineId: 1,
 		machineName: 'cp-1',
-		isHolder: false,
+		isActiveReporter: false,
 		reporterError: null,
 		lastReportAt: '2026-10-12T09:00:00Z',
 		online: true,
@@ -296,7 +296,7 @@ describe('planEnrolOne and remote commands', () => {
 });
 
 describe('planDisable', () => {
-	it('uninstalls through the holder and unenrols every other online candidate', () => {
+	it('uninstalls through the active reporter and unenrols every other online candidate', () => {
 		const plan = planDisable(
 			context({
 				eligibleMachines: [
@@ -306,7 +306,7 @@ describe('planDisable', () => {
 				],
 				candidates: [
 					candidate({ machineId: 1, machineName: 'cp-1' }),
-					candidate({ machineId: 2, machineName: 'cp-2', isHolder: true }),
+					candidate({ machineId: 2, machineName: 'cp-2', isActiveReporter: true }),
 					candidate({ machineId: 3, machineName: 'cp-3' })
 				]
 			}),
@@ -321,7 +321,7 @@ describe('planDisable', () => {
 		expect(plan.skipped).toEqual([]);
 	});
 
-	it('reads the holder from the cluster when the candidate rows do not mark one', () => {
+	it('reads the active reporter from the cluster when the candidate rows do not mark one', () => {
 		const plan = planDisable(
 			context({
 				activeReporterMachineId: 3,
@@ -334,7 +334,7 @@ describe('planDisable', () => {
 		expect(plan.commands[0]).toMatchObject({ machineId: 3, commandType: AGENT_UNINSTALL });
 	});
 
-	it('falls back to another online eligible machine when the holder is offline', () => {
+	it('falls back to another online eligible machine when the active reporter is offline', () => {
 		const plan = planDisable(
 			context({
 				eligibleMachines: [
@@ -342,7 +342,7 @@ describe('planDisable', () => {
 					machine({ machineId: 2, machineName: 'cp-2' })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true, online: false }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true, online: false }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -376,7 +376,7 @@ describe('planDisable', () => {
 					machine({ machineId: 2, machineName: 'cp-2', remoteCommandsEnabled: false })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -390,7 +390,7 @@ describe('planDisable', () => {
 		expect(plan.skipped).toEqual([]);
 	});
 
-	it('uninstalls through the holder although its remote commands are disabled', () => {
+	it('uninstalls through the active reporter although its remote commands are disabled', () => {
 		const plan = planDisable(
 			context({
 				eligibleMachines: [
@@ -398,7 +398,7 @@ describe('planDisable', () => {
 					machine({ machineId: 2, machineName: 'cp-2' })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -449,16 +449,16 @@ describe('planDisable', () => {
 		expect(plan.commands).toEqual([]);
 	});
 
-	it('ranks the holder, then an enrolled machine, then the rest, whatever the capability says', () => {
+	it('ranks the active reporter, then an enrolled machine, then the rest, whatever the capability says', () => {
 		const eligibleMachines = [
 			machine({ machineId: 7, machineName: 'plain' }),
 			machine({ machineId: 8, machineName: 'enrolled-disabled', remoteCommandsEnabled: false, enrolled: true }),
-			machine({ machineId: 9, machineName: 'holder-disabled', remoteCommandsEnabled: false })
+			machine({ machineId: 9, machineName: 'reporter-disabled', remoteCommandsEnabled: false })
 		];
 		const ranked = (candidates: KubernetesCandidateDto[]) =>
 			planDisable(context({ eligibleMachines, candidates }), [KEY]).commands[0].machineId;
 
-		expect(ranked([candidate({ machineId: 9, machineName: 'holder-disabled', isHolder: true })])).toBe(9);
+		expect(ranked([candidate({ machineId: 9, machineName: 'reporter-disabled', isActiveReporter: true })])).toBe(9);
 		expect(ranked([])).toBe(8);
 	});
 
@@ -470,7 +470,7 @@ describe('planDisable', () => {
 					machine({ machineId: 2, machineName: 'cp-2', authorizedSigningKeyIds: [] })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -489,7 +489,7 @@ describe('planDisable', () => {
 			context({
 				eligibleMachines: [machine({ machineId: 1, machineName: 'cp-1' })],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
 					candidate({ machineId: 8, machineName: 'old-cp' })
 				]
 			}),
@@ -811,11 +811,11 @@ describe('planReenrol and remote commands', () => {
 });
 
 describe('planUpdatePermissions', () => {
-	it('enrols once, through the holder', () => {
+	it('enrols once, through the active reporter', () => {
 		const plan = planUpdatePermissions(
 			context({
 				eligibleMachines: [machine({ machineId: 1 }), machine({ machineId: 2, machineName: 'cp-2' })],
-				candidates: [candidate({ machineId: 1 }), candidate({ machineId: 2, machineName: 'cp-2', isHolder: true })]
+				candidates: [candidate({ machineId: 1 }), candidate({ machineId: 2, machineName: 'cp-2', isActiveReporter: true })]
 			}),
 			[KEY]
 		);
@@ -823,7 +823,7 @@ describe('planUpdatePermissions', () => {
 		expect(plan.commands.map((c) => [c.machineId, c.commandType])).toEqual([[2, AGENT_ENROL]]);
 	});
 
-	it('uses another eligible candidate when the holder cannot be sent a command', () => {
+	it('uses another eligible candidate when the active reporter cannot be sent a command', () => {
 		const plan = planUpdatePermissions(
 			context({
 				eligibleMachines: [
@@ -831,7 +831,7 @@ describe('planUpdatePermissions', () => {
 					machine({ machineId: 2, machineName: 'cp-2' })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -859,7 +859,7 @@ describe('planUpdatePermissions', () => {
 		expect(plan.commands.map((c) => c.machineId)).toEqual([2]);
 	});
 
-	it('prefers an online candidate to an offline holder', () => {
+	it('prefers an online candidate to an offline active reporter', () => {
 		const plan = planUpdatePermissions(
 			context({
 				eligibleMachines: [
@@ -867,7 +867,7 @@ describe('planUpdatePermissions', () => {
 					machine({ machineId: 2, machineName: 'cp-2' })
 				],
 				candidates: [
-					candidate({ machineId: 1, machineName: 'cp-1', isHolder: true, online: false }),
+					candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true, online: false }),
 					candidate({ machineId: 2, machineName: 'cp-2' })
 				]
 			}),
@@ -877,7 +877,7 @@ describe('planUpdatePermissions', () => {
 		expect(plan.commands.map((c) => [c.machineId, c.online])).toEqual([[2, true]]);
 	});
 
-	it('still prefers the holder among online candidates, and among offline ones when none is online', () => {
+	it('still prefers the active reporter among online candidates, and among offline ones when none is online', () => {
 		const eligibleMachines = [
 			machine({ machineId: 1, machineName: 'cp-1', online: false }),
 			machine({ machineId: 2, machineName: 'cp-2', online: false })
@@ -887,7 +887,7 @@ describe('planUpdatePermissions', () => {
 				eligibleMachines,
 				candidates: [
 					candidate({ machineId: 1, machineName: 'cp-1', online: false }),
-					candidate({ machineId: 2, machineName: 'cp-2', isHolder: true, online: false })
+					candidate({ machineId: 2, machineName: 'cp-2', isActiveReporter: true, online: false })
 				]
 			}),
 			[KEY]
@@ -896,11 +896,11 @@ describe('planUpdatePermissions', () => {
 		expect(plan.commands.map((c) => [c.machineId, c.online])).toEqual([[2, false]]);
 	});
 
-	it('plans nothing, and says why, when no holder or candidate can be sent a command', () => {
+	it('plans nothing, and says why, when no active reporter or candidate can be sent a command', () => {
 		const plan = planUpdatePermissions(
 			context({
 				eligibleMachines: [machine({ machineId: 1, machineName: 'cp-1', remoteCommandsEnabled: false })],
-				candidates: [candidate({ machineId: 1, machineName: 'cp-1', isHolder: true })]
+				candidates: [candidate({ machineId: 1, machineName: 'cp-1', isActiveReporter: true })]
 			}),
 			[KEY]
 		);
@@ -909,7 +909,7 @@ describe('planUpdatePermissions', () => {
 		expect(plan.skipped).toEqual([{ machineId: 1, machineName: 'cp-1', reason: 'remote_commands_disabled' }]);
 	});
 
-	it('does not send to an eligible machine that is neither the holder nor a candidate', () => {
+	it('does not send to an eligible machine that is neither the active reporter nor a candidate', () => {
 		const plan = planUpdatePermissions(
 			context({ eligibleMachines: [machine({ machineId: 9 })], candidates: [candidate({ machineId: 1 })] }),
 			[KEY]

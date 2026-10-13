@@ -72,7 +72,29 @@ public static class KubernetesReporting
             return false;
         }
 
-        return (cluster.LastSnapshotReceivedAt is null) || ((now - cluster.LastSnapshotReceivedAt.Value) > KubernetesReportingPolicy.StaleThreshold);
+        return IsSnapshotStale(cluster.LastSnapshotReceivedAt, now);
+    }
+
+    /// <summary>
+    /// Whether a machine is the cluster's active reporter: it sent the cluster's most recent accepted snapshot
+    /// and that snapshot is not stale. The server cannot see the Lease, so this is the closest it can come to
+    /// saying the machine holds it now. A snapshot exactly <see cref="KubernetesReportingPolicy.StaleThreshold"/>
+    /// old is not stale, the same boundary <see cref="IsStale"/> uses.
+    /// </summary>
+    /// <param name="cluster">The cluster.</param>
+    /// <param name="machineId">The machine.</param>
+    /// <param name="now">The time staleness is measured from.</param>
+    /// <returns>True when the machine sent the latest snapshot and it is not stale.</returns>
+    public static bool IsActiveReporter(KubernetesCluster cluster, long machineId, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(cluster);
+
+        return (cluster.ActiveReporterMachineId == machineId) && (IsSnapshotStale(cluster.LastSnapshotReceivedAt, now) == false);
+    }
+
+    private static bool IsSnapshotStale(DateTimeOffset? lastSnapshotReceivedAt, DateTimeOffset now)
+    {
+        return (lastSnapshotReceivedAt is null) || ((now - lastSnapshotReceivedAt.Value) > KubernetesReportingPolicy.StaleThreshold);
     }
 
     /// <summary>

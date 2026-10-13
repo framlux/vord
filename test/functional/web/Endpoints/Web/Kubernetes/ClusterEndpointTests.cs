@@ -361,7 +361,7 @@ public sealed class ClusterEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         int tenantId = await SeedTenantAsync(db, "Tenant 1");
         int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
-        long holderId = await SeedMachineAsync(db, tenantId, "cp-host");
+        long activeReporterId = await SeedMachineAsync(db, tenantId, "cp-host");
         long standbyId = await SeedMachineAsync(db, tenantId, "cp-standby");
         DateTimeOffset snapshot = DateTimeOffset.UtcNow.AddMinutes(-5);
         long activeId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
@@ -373,7 +373,7 @@ public sealed class ClusterEndpointTests
             LastSeenAt = T0,
             ClusterVersion = "v1.34.1+k3s1",
             Truncated = true,
-            ActiveReporterMachineId = holderId,
+            ActiveReporterMachineId = activeReporterId,
             LastSnapshotReceivedAt = snapshot,
         });
         DateTimeOffset staleSnapshot = DateTimeOffset.UtcNow.AddHours(-5);
@@ -388,7 +388,7 @@ public sealed class ClusterEndpointTests
             LastSnapshotReceivedAt = staleSnapshot,
             ReporterError = "credentials_rejected",
         });
-        await SeedCandidateAsync(db, tenantId, activeId, holderId);
+        await SeedCandidateAsync(db, tenantId, activeId, activeReporterId);
         await SeedCandidateAsync(db, tenantId, staleId, standbyId);
         foreach ((string name, string status) in new[] { ("n1", "True"), ("n2", "True"), ("n3", "False"), ("n4", "Unknown") })
         {
@@ -408,7 +408,7 @@ public sealed class ClusterEndpointTests
         JsonElement data = doc.RootElement.GetProperty("data");
         JsonElement active = data.EnumerateArray().Single(c => c.GetProperty("id").GetInt64() == activeId);
         await Assert.That(active.GetProperty("reportingState").GetString()).IsEqualTo("active");
-        await Assert.That(active.GetProperty("activeReporterMachineId").GetInt64()).IsEqualTo(holderId);
+        await Assert.That(active.GetProperty("activeReporterMachineId").GetInt64()).IsEqualTo(activeReporterId);
         await Assert.That(active.GetProperty("activeReporterMachineName").GetString()).IsEqualTo("cp-host");
         await Assert.That(active.GetProperty("clusterVersion").GetString()).IsEqualTo("v1.34.1+k3s1");
         await Assert.That(active.GetProperty("truncated").GetBoolean()).IsTrue();
@@ -468,7 +468,7 @@ public sealed class ClusterEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         int tenantId = await SeedTenantAsync(db, "Tenant 1");
         int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
-        long holderId = await SeedMachineAsync(db, tenantId, "cp-host");
+        long activeReporterId = await SeedMachineAsync(db, tenantId, "cp-host");
         long standbyId = await SeedMachineAsync(db, tenantId, "cp-standby");
         long controllerId = await SeedMachineAsync(db, tenantId, "k0s-controller");
         long workerId = await SeedMachineAsync(db, tenantId, "worker-host");
@@ -482,7 +482,7 @@ public sealed class ClusterEndpointTests
             LastSeenAt = T0,
             KubeSystemUid = "3f0c2d9e-aaaa-4bbb-8ccc-0123456789ab",
             ClusterVersion = "v1.34.1+k3s1",
-            ActiveReporterMachineId = holderId,
+            ActiveReporterMachineId = activeReporterId,
             LastSnapshotReceivedAt = snapshot,
         });
         await db.InsertWithInt64IdentityAsync(new KubernetesNode
@@ -490,7 +490,7 @@ public sealed class ClusterEndpointTests
             TenantId = tenantId,
             ClusterId = clusterId,
             NodeName = "cp-1",
-            MachineId = holderId,
+            MachineId = activeReporterId,
             LocalControlPlane = true,
             KubeletVersion = "v1.34.1+k3s1",
             Roles = "[\"control-plane\",\"etcd\"]",
@@ -515,14 +515,14 @@ public sealed class ClusterEndpointTests
             Unschedulable = true,
             UnschedulableSince = T0.AddDays(1),
         });
-        await SeedCandidateAsync(db, tenantId, clusterId, holderId, lastReportAt: snapshot);
+        await SeedCandidateAsync(db, tenantId, clusterId, activeReporterId, lastReportAt: snapshot);
         await SeedCandidateAsync(db, tenantId, clusterId, standbyId, error: "tls_ca_changed");
-        await SeedLocalReportAsync(db, tenantId, holderId, FingerprintA, enrolled: true);
+        await SeedLocalReportAsync(db, tenantId, activeReporterId, FingerprintA, enrolled: true);
         await SeedLocalReportAsync(db, tenantId, standbyId, FingerprintA, enrolled: true);
         await SeedLocalReportAsync(db, tenantId, controllerId, FingerprintA);
         await SeedLocalReportAsync(db, tenantId, workerId, FingerprintA, controlPlane: false, adminCredential: false);
-        int keyId = await SeedSigningKeyForAsync(db, tenantId, userId, holderId);
-        await factory.Services.GetRequiredService<IMachinePingService>().SetAgentCapabilitiesAsync(holderId, 1);
+        int keyId = await SeedSigningKeyForAsync(db, tenantId, userId, activeReporterId);
+        await factory.Services.GetRequiredService<IMachinePingService>().SetAgentCapabilitiesAsync(activeReporterId, 1);
         HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync($"/api/v1/clusters/{clusterId}");
@@ -557,26 +557,26 @@ public sealed class ClusterEndpointTests
 
         JsonElement candidates = data.GetProperty("candidates");
         await Assert.That(candidates.GetArrayLength()).IsEqualTo(2);
-        JsonElement holder = candidates.EnumerateArray().Single(c => c.GetProperty("machineId").GetInt64() == holderId);
-        await Assert.That(holder.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
-        await Assert.That(holder.GetProperty("isHolder").GetBoolean()).IsTrue();
-        await Assert.That(holder.GetProperty("reporterError").ValueKind).IsEqualTo(JsonValueKind.Null);
-        await Assert.That(holder.GetProperty("lastReportAt").GetDateTimeOffset()).IsEqualTo(snapshot);
-        await Assert.That(holder.GetProperty("online").ValueKind).IsEqualTo(JsonValueKind.False);
+        JsonElement activeReporter = candidates.EnumerateArray().Single(c => c.GetProperty("machineId").GetInt64() == activeReporterId);
+        await Assert.That(activeReporter.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
+        await Assert.That(activeReporter.GetProperty("isActiveReporter").GetBoolean()).IsTrue();
+        await Assert.That(activeReporter.GetProperty("reporterError").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(activeReporter.GetProperty("lastReportAt").GetDateTimeOffset()).IsEqualTo(snapshot);
+        await Assert.That(activeReporter.GetProperty("online").ValueKind).IsEqualTo(JsonValueKind.False);
         JsonElement standby = candidates.EnumerateArray().Single(c => c.GetProperty("machineId").GetInt64() == standbyId);
-        await Assert.That(standby.GetProperty("isHolder").GetBoolean()).IsFalse();
+        await Assert.That(standby.GetProperty("isActiveReporter").GetBoolean()).IsFalse();
         await Assert.That(standby.GetProperty("reporterError").GetString()).IsEqualTo("tls_ca_changed");
 
         JsonElement eligible = data.GetProperty("eligibleMachines");
         await Assert.That(eligible.EnumerateArray().Select(m => m.GetProperty("machineId").GetInt64()).ToArray())
-            .IsEquivalentTo(new[] { holderId, standbyId, controllerId });
-        JsonElement holderEligible = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == holderId);
-        await Assert.That(holderEligible.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
-        await Assert.That(holderEligible.GetProperty("online").GetBoolean()).IsFalse();
-        await Assert.That(holderEligible.GetProperty("isPaused").GetBoolean()).IsFalse();
-        await Assert.That(holderEligible.GetProperty("remoteCommandsEnabled").GetBoolean()).IsTrue();
-        await Assert.That(holderEligible.GetProperty("enrolled").GetBoolean()).IsTrue();
-        await Assert.That(holderEligible.GetProperty("authorizedSigningKeyIds")[0].GetInt32()).IsEqualTo(keyId);
+            .IsEquivalentTo(new[] { activeReporterId, standbyId, controllerId });
+        JsonElement activeReporterEligible = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == activeReporterId);
+        await Assert.That(activeReporterEligible.GetProperty("machineName").GetString()).IsEqualTo("cp-host");
+        await Assert.That(activeReporterEligible.GetProperty("online").GetBoolean()).IsFalse();
+        await Assert.That(activeReporterEligible.GetProperty("isPaused").GetBoolean()).IsFalse();
+        await Assert.That(activeReporterEligible.GetProperty("remoteCommandsEnabled").GetBoolean()).IsTrue();
+        await Assert.That(activeReporterEligible.GetProperty("enrolled").GetBoolean()).IsTrue();
+        await Assert.That(activeReporterEligible.GetProperty("authorizedSigningKeyIds")[0].GetInt32()).IsEqualTo(keyId);
         JsonElement controllerEligible = eligible.EnumerateArray().Single(m => m.GetProperty("machineId").GetInt64() == controllerId);
         await Assert.That(controllerEligible.GetProperty("enrolled").GetBoolean()).IsFalse();
         await Assert.That(controllerEligible.GetProperty("remoteCommandsEnabled").GetBoolean()).IsFalse();
@@ -885,7 +885,7 @@ public sealed class ClusterEndpointTests
     }
 
     [Test]
-    public async Task MachineDetail_CandidateHolderWithoutANode_ReturnsCandidateStateInItsCluster()
+    public async Task MachineDetail_ActiveReporterCandidateWithoutANode_ReturnsCandidateStateInItsCluster()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -902,6 +902,7 @@ public sealed class ClusterEndpointTests
             FirstSeenAt = T0,
             LastSeenAt = T0,
             ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = reported,
         });
         await SeedClusterAsync(db, tenantId, FingerprintA);
         await SeedCandidateAsync(db, tenantId, clusterId, machineId, error: "credentials_rejected", lastReportAt: reported);
@@ -919,9 +920,76 @@ public sealed class ClusterEndpointTests
         await Assert.That(kubernetes.GetProperty("node").ValueKind).IsEqualTo(JsonValueKind.Null);
         JsonElement candidate = kubernetes.GetProperty("candidate");
         await Assert.That(candidate.GetProperty("clusterId").GetInt64()).IsEqualTo(clusterId);
-        await Assert.That(candidate.GetProperty("isHolder").GetBoolean()).IsTrue();
+        await Assert.That(candidate.GetProperty("isActiveReporter").GetBoolean()).IsTrue();
         await Assert.That(candidate.GetProperty("reporterError").GetString()).IsEqualTo("credentials_rejected");
         await Assert.That(candidate.GetProperty("lastReportAt").GetDateTimeOffset()).IsEqualTo(reported);
+    }
+
+    [Test]
+    public async Task MachineDetail_ActiveReporterWhoseSnapshotIsStale_IsNotReportedAsActive()
+    {
+        // Intent: the cluster still names the machine as the last sender, but its snapshot is hours old,
+        // so the page must not claim the machine is reporting.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, "Tenant 1");
+        int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
+        long machineId = await SeedMachineAsync(db, tenantId, "k0s-controller");
+        DateTimeOffset snapshot = DateTimeOffset.UtcNow.AddHours(-5);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = FingerprintA,
+            DisplayName = "Production",
+            Distro = "k0s",
+            FirstSeenAt = T0,
+            LastSeenAt = T0,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = snapshot,
+        });
+        await SeedCandidateAsync(db, tenantId, clusterId, machineId, lastReportAt: snapshot);
+        await SeedLocalReportAsync(db, tenantId, machineId, FingerprintA, enrolled: true);
+        HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        JsonElement candidate = doc.RootElement.GetProperty("data").GetProperty("kubernetes").GetProperty("candidate");
+        await Assert.That(candidate.GetProperty("isActiveReporter").GetBoolean()).IsFalse();
+    }
+
+    [Test]
+    public async Task ClusterDetail_ActiveReporterWhoseSnapshotIsStale_IsNotReportedAsActiveWhileTheStateSaysStale()
+    {
+        // Intent: the candidate flag and the cluster's derived reporting state judge the same snapshot, so
+        // they cannot disagree: a stale cluster has no machine marked as reporting.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, "Tenant 1");
+        int userId = await SeedUserAsync(db, tenantId, UserAccountRoles.Viewer);
+        long machineId = await SeedMachineAsync(db, tenantId, "cp-host");
+        DateTimeOffset snapshot = DateTimeOffset.UtcNow.AddHours(-5);
+        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+        {
+            TenantId = tenantId,
+            CaFingerprint = FingerprintA,
+            Distro = "k3s",
+            FirstSeenAt = T0,
+            LastSeenAt = T0,
+            ActiveReporterMachineId = machineId,
+            LastSnapshotReceivedAt = snapshot,
+        });
+        await SeedCandidateAsync(db, tenantId, clusterId, machineId, lastReportAt: snapshot);
+        HttpClient client = ClientFor(factory, userId, tenantId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/clusters/{clusterId}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("reportingState").GetString()).IsEqualTo("stale");
+        await Assert.That(data.GetProperty("candidates")[0].GetProperty("isActiveReporter").GetBoolean()).IsFalse();
     }
 
     [Test]

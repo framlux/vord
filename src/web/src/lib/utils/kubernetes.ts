@@ -93,8 +93,8 @@ const reportingWording: Record<KubernetesReportingState, Badge> = {
 
 // The badge for a cluster's reporting state. A state this build has no wording for is shown as the
 // server sent it rather than hidden.
-export function reportingBadge(state: KubernetesReportingState, holderName: string | null): Badge {
+export function reportingBadge(state: KubernetesReportingState, activeReporterName: string | null): Badge {
 	const badge = reportingWording[state] ?? { label: state, tone: 'neutral' };
 
-	return state === 'active' && holderName !== null ? { ...badge, label: `${badge.label} (${holderName})` } : badge;
+	return state === 'active' && activeReporterName !== null ? { ...badge, label: `${badge.label} (${activeReporterName})` } : badge;
 }

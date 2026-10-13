@@ -591,7 +591,7 @@ describe('machine detail removal of a cluster reporter', () => {
 	}
 
 	it('warns in the removal confirmation when the machine is a candidate of a cluster', async () => {
-		renderWithCandidate({ clusterId: 12, isHolder: false, reporterError: null, lastReportAt: '2026-08-28T09:00:00Z' });
+		renderWithCandidate({ clusterId: 12, isActiveReporter: false, reporterError: null, lastReportAt: '2026-08-28T09:00:00Z' });
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
 

@@ -560,8 +560,8 @@
 									>
 										{candidate.machineName}
 									</a>
-									{#if candidate.isHolder}
-										<span class="{chipClass} ml-2 {toneClasses.ok}">Holder</span>
+									{#if candidate.isActiveReporter}
+										<span class="{chipClass} ml-2 {toneClasses.ok}">Reporting</span>
 									{/if}
 								</td>
 								<td class="px-6 py-4 text-surface-700 dark:text-surface-300">
