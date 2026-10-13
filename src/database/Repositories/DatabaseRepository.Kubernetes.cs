@@ -212,21 +212,13 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
 
     /// <inheritdoc/>
     public async Task<IReadOnlyCollection<long>> GetMachineIdsLinkedToOtherClustersAsync(
-        int tenantId, long clusterId, IReadOnlyCollection<long> machineIds, CancellationToken ct)
+        int tenantId, long clusterId, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(machineIds);
-
-        if (machineIds.Count == 0)
-        {
-            return [];
-        }
-
-        List<long> ids = machineIds.Distinct().ToList();
         IQueryable<long> nodeMachines = _db.KubernetesNodes
-            .Where(n => (n.TenantId == tenantId) && (n.ClusterId != clusterId) && (n.MachineId != null) && ids.Contains(n.MachineId.Value))
+            .Where(n => (n.TenantId == tenantId) && (n.ClusterId != clusterId) && (n.MachineId != null))
             .Select(n => n.MachineId!.Value);
         IQueryable<long> candidateMachines = _db.KubernetesReporterCandidates
-            .Where(c => (c.TenantId == tenantId) && (c.ClusterId != clusterId) && ids.Contains(c.MachineId))
+            .Where(c => (c.TenantId == tenantId) && (c.ClusterId != clusterId))
             .Select(c => c.MachineId);
         List<long> linked = await nodeMachines.Union(candidateMachines).ToListAsync(ct);
 
@@ -274,16 +266,23 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
 
         if (_db.DataProvider.Name.Contains("PostgreSQL"))
         {
-            // One statement for every machine asked about, however many: DISTINCT ON keeps the first row
-            // of each machine in the requested order, which is the newest by server receipt time, with the
-            // row id breaking a tie. The type is a SQL literal for the same reason as in the projector's
-            // batch read.
+            // One statement for every machine asked about, however many. Each machine is looked up on its
+            // own: its rows newest first by server receipt time, with the row id breaking a tie, stopping
+            // at the first. Read through the machine, type and server-time index, that costs about one row
+            // per partition plus the rows tied with the newest, where grouping the whole window would read
+            // and sort every report each machine sent in it. The type is a SQL literal for the same reason
+            // as in the projector's batch read.
             rows = await _db.QueryToListAsync<MachineTelemetry>(
                 """
-                SELECT DISTINCT ON ("MachineId") "MachineId", "Payload" FROM "MachineTelemetry"
-                WHERE "TenantId" = @tenantId AND "TelemetryType" = 14 AND "MachineId" = ANY(@machineIds)
-                  AND "ServerReceivedAt" > @serverReceivedAfter AND "ReceivedAt" > @partitionLowerBound
-                ORDER BY "MachineId", "ServerReceivedAt" DESC, "Id" DESC
+                SELECT latest."MachineId", latest."Payload"
+                FROM unnest(@machineIds) AS asked("MachineId")
+                CROSS JOIN LATERAL (
+                    SELECT t."MachineId", t."Payload" FROM "MachineTelemetry" t
+                    WHERE t."TenantId" = @tenantId AND t."TelemetryType" = 14 AND t."MachineId" = asked."MachineId"
+                      AND t."ServerReceivedAt" > @serverReceivedAfter AND t."ReceivedAt" > @partitionLowerBound
+                    ORDER BY t."ServerReceivedAt" DESC, t."Id" DESC
+                    LIMIT 1
+                ) AS latest
                 """,
                 ct,
                 new DataParameter("@tenantId", tenantId),
@@ -293,7 +292,7 @@ public partial class DatabaseRepository : IKubernetesInventoryRepository
         }
         else
         {
-            // SQLite test path, which has no DISTINCT ON: the same newest-row-per-machine rule as a group-by.
+            // SQLite test path, which has no LATERAL join: the same newest-row-per-machine rule as a group-by.
             rows = await _db.MachineTelemetry
                 .Where(t => (t.TenantId == tenantId)
                     && (t.TelemetryType == KubernetesNodeTelemetryType)

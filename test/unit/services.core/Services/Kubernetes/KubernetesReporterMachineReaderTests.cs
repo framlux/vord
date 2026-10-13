@@ -88,14 +88,8 @@ public sealed class KubernetesReporterMachineReaderTests
 
                 return Task.FromResult(asked.ToDictionary(id => id, id => _capabilities.GetValueOrDefault(id)));
             });
-        _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
-                TenantId, ClusterId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                IReadOnlyCollection<long> asked = call.ArgAt<IReadOnlyCollection<long>>(2);
-
-                return (IReadOnlyCollection<long>)_linkedToOtherClusters.Where(asked.Contains).ToList();
-            });
+        _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>())
+            .Returns(_ => (IReadOnlyCollection<long>)_linkedToOtherClusters.ToList());
         _signingKeyRepo.GetActiveSigningKeyIdsForMachinesAsync(TenantId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
@@ -339,11 +333,35 @@ public sealed class KubernetesReporterMachineReaderTests
     }
 
     [Test]
+    public async Task LoadAsync_MachineLinkedOnlyToAnotherCluster_IsNeverInThePayloadRequest()
+    {
+        // Intent: the report read costs a lookup per machine asked about, so a machine that cannot be
+        // listed is left out of the request instead of being read and discarded afterwards. That covers a
+        // machine linked elsewhere that reports this cluster's CA and one that reports another CA.
+        Machine(21, "member", PayloadJson());
+        Machine(24, "elsewhere-same-ca", PayloadJson());
+        Machine(25, "free", PayloadJson());
+        Machine(26, "elsewhere-other-ca", PayloadJson(fingerprint: OtherFingerprint));
+        _linkedToOtherClusters.AddRange([24, 26]);
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 21L, 25L });
+        await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
+            TenantId,
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 21, 25 })),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task LoadAsync_MemberOfThisClusterAlsoLinkedElsewhere_StaysEligible()
     {
         // Intent: only a match by fingerprint alone is refused. A machine that is a node or candidate of
         // this cluster is a member whatever else its rows say, because the projection repairs a transient
-        // disagreement in favour of the node.
+        // disagreement in favour of the node. It is still asked about, so its report can be read.
         Machine(26, "node-here", PayloadJson());
         Machine(27, "candidate-here", PayloadJson());
         _linkedToOtherClusters.AddRange([26, 27]);
@@ -353,37 +371,62 @@ public sealed class KubernetesReporterMachineReaderTests
             TenantId, Cluster(), [NodeOf(26)], [CandidateOf(27)], new Dictionary<long, string>(), CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 26L, 27L });
+        await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
+            TenantId,
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 26, 27 })),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task LoadAsync_FingerprintOnlyMachines_AreCheckedForOtherClustersInOneBatch()
+    public async Task LoadAsync_OtherClusterLinks_AreReadOnceBeforeTheReportsAndWithoutAListOfMachines()
     {
+        // Intent: the links to other clusters are one query for the tenant that carries no machine ids, and
+        // it runs before the report read, because its answer is what narrows that read.
         Machine(21, "member", PayloadJson());
         Machine(22, "a", PayloadJson());
         Machine(23, "b", PayloadJson());
-        Machine(24, "c", PayloadJson());
         Machine(25, "elsewhere-fingerprint", PayloadJson(fingerprint: OtherFingerprint));
         KubernetesReporterMachineReader reader = CreateReader();
 
         await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
 
-        await _kubernetesRepo.Received(1).GetMachineIdsLinkedToOtherClustersAsync(
-            TenantId,
-            ClusterId,
-            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 22, 23, 24 })),
-            Arg.Any<CancellationToken>());
+        Received.InOrder(() =>
+        {
+            _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>());
+            _kubernetesRepo.GetLatestKubernetesNodePayloadsAsync(
+                TenantId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        });
+        await _kubernetesRepo.Received(1).GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task LoadAsync_NoFingerprintOnlyMachines_SkipsTheOtherClusterLookup()
+    public async Task LoadAsync_EveryActiveMachineLinkedToAnotherCluster_ReadsNoReports()
     {
-        Machine(21, "member", PayloadJson());
+        Machine(24, "elsewhere-a", PayloadJson());
+        Machine(25, "elsewhere-b", PayloadJson());
+        _linkedToOtherClusters.AddRange([24, 25]);
         KubernetesReporterMachineReader reader = CreateReader();
 
-        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
+        await _kubernetesRepo.DidNotReceive().GetLatestKubernetesNodePayloadsAsync(
+            Arg.Any<int>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task LoadAsync_TenantWithNoActiveMachines_LooksUpNeitherLinksNorReports()
+    {
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        await reader.LoadAsync(TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
 
         await _kubernetesRepo.DidNotReceive().GetMachineIdsLinkedToOtherClustersAsync(
-            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
+        await _kubernetesRepo.DidNotReceive().GetLatestKubernetesNodePayloadsAsync(
+            Arg.Any<int>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

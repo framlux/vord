@@ -26,7 +26,7 @@ namespace Framlux.FleetManagement.Services.Core.Kubernetes;
 /// to be a node or candidate of a different cluster.
 /// </para>
 /// <para>
-/// Every read is one query for however many machines there are: the reports, the other-cluster links, the
+/// Every read is one query for however many machines there are: the other-cluster links, the reports, the
 /// online state, the capabilities and the authorized keys are each fetched for the whole set at once. The
 /// capabilities live in Redis, which nothing else on the page needs, so a failed read costs only that one
 /// field: it is reported as unknown (null) and counted.
@@ -142,9 +142,10 @@ public sealed class KubernetesReporterMachineReader
     }
 
     /// <summary>
-    /// Reads the latest local report of every active machine of the tenant in one query and keeps those of
-    /// machines that can enrol and belong to the cluster. Only active machines are asked about, which is
-    /// what keeps a deleted machine out whatever rows still name it.
+    /// Reads the latest local report of the tenant's active machines that could belong to the cluster, in one
+    /// query, and keeps those of machines that can enrol and belong to it. Only active machines are asked
+    /// about, which is what keeps a deleted machine out whatever rows still name it, and a machine that is a
+    /// node or candidate only of other clusters is not asked about either, so the read never fetches its rows.
     /// </summary>
     private async Task<Dictionary<long, KubernetesNodePayload>> FindEligibleReportsAsync(
         int tenantId,
@@ -165,11 +166,23 @@ public sealed class KubernetesReporterMachineReader
             .Select(n => n.Node.MachineId!.Value)
             .Concat(candidates.Select(c => c.MachineId))
             .ToHashSet();
+
+        // Clusters of one tenant can share a CA, so a fingerprint says only that a machine might belong
+        // here. One already known to be a node or candidate of a different cluster does not, unless it is
+        // a member of this cluster too: a node or candidate of this cluster is always listed.
+        IReadOnlyCollection<long> linkedElsewhere = await _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
+            tenantId, cluster.Id, ct);
+        HashSet<long> otherClustersOnly = linkedElsewhere.Where(id => members.Contains(id) == false).ToHashSet();
+        List<long> candidateMachineIds = activeMachineIds.Where(id => otherClustersOnly.Contains(id) == false).ToList();
+        if (candidateMachineIds.Count == 0)
+        {
+            return eligible;
+        }
+
         DateTimeOffset serverReceivedAfter = _timeProvider.GetUtcNow() - KubernetesCommandEligibility.ReportWindow;
         IReadOnlyDictionary<long, string> payloads = await _kubernetesRepo.GetLatestKubernetesNodePayloadsAsync(
-            tenantId, activeMachineIds, serverReceivedAfter, ct);
+            tenantId, candidateMachineIds, serverReceivedAfter, ct);
 
-        List<long> matchedByCaOnly = [];
         foreach (KeyValuePair<long, string> stored in payloads)
         {
             KubernetesNodePayload? report = KubernetesNodePayloadNormaliser.NormaliseJson(stored.Value);
@@ -178,28 +191,12 @@ public sealed class KubernetesReporterMachineReader
                 continue;
             }
 
-            if (members.Contains(stored.Key))
+            // An unusable fingerprint is normalised to empty, and the cluster's own is never empty, so
+            // only a report that really carries this cluster's CA matches by fingerprint.
+            bool belongsToCluster = members.Contains(stored.Key) || string.Equals(report!.CaFingerprint, cluster.CaFingerprint, StringComparison.Ordinal);
+            if (belongsToCluster)
             {
                 eligible[stored.Key] = report!;
-            }
-            else if (string.Equals(report!.CaFingerprint, cluster.CaFingerprint, StringComparison.Ordinal))
-            {
-                // An unusable fingerprint is normalised to empty, and the cluster's own is never empty, so
-                // only a report that really carries this cluster's CA gets here.
-                matchedByCaOnly.Add(stored.Key);
-                eligible[stored.Key] = report;
-            }
-        }
-
-        if (matchedByCaOnly.Count > 0)
-        {
-            // Clusters of one tenant can share a CA, so a fingerprint says only that the machine might
-            // belong here. One already known to be a node or candidate of another cluster does not.
-            IReadOnlyCollection<long> linkedElsewhere = await _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
-                tenantId, cluster.Id, matchedByCaOnly, ct);
-            foreach (long machineId in linkedElsewhere)
-            {
-                eligible.Remove(machineId);
             }
         }
 

@@ -442,10 +442,10 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     [Test]
     public async Task Live_LatestNodePayloads_AnswersForSeveralMachinesInOneQueryAndScopesToTheTenant()
     {
-        // Intent: the latest-report read runs on the production database as one DISTINCT ON statement
-        // over an array of machine ids. It returns each asked-for machine's newest type-14 payload by
-        // server receipt time, and ignores other types, machines nobody asked for, rows outside the
-        // window, and another tenant's rows that carry an asked-for machine id.
+        // Intent: the latest-report read runs on the production database as one statement with a
+        // per-machine lookup over an array of machine ids. It returns each asked-for machine's newest
+        // type-14 payload by server receipt time, and ignores other types, machines nobody asked for,
+        // rows outside the window, and another tenant's rows that carry an asked-for machine id.
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
         int tenantId = await SeedTenantAsync(db);
@@ -540,6 +540,67 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LatestNodePayloads_MachineWithManyReports_ReturnsTheNewestRowAndBreaksTheTieByRowId()
+    {
+        // Intent: a machine that has reported for days has hundreds of type-14 rows. The read must still
+        // answer with the one the server accepted last, and when several were accepted at that same
+        // instant the row stored last wins, whatever the agent's own clock says about them.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long other = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        SeededReports seeded = await SeedManyReportsAsync(db, tenantId, now);
+        await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+        {
+            MachineId = other,
+            TenantId = tenantId,
+            TelemetryType = 14,
+            Payload = "other-machine-report",
+            ReceivedAt = now.AddMinutes(-3),
+            ServerReceivedAt = now.AddMinutes(-3),
+            SourceEventId = Guid.NewGuid().ToString("N"),
+        });
+
+        IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+            tenantId, [seeded.MachineId, other], now.AddDays(-7), CancellationToken.None);
+
+        await Assert.That(payloads.Count).IsEqualTo(2);
+        await Assert.That(payloads[seeded.MachineId]).IsEqualTo(seeded.NewestPayload);
+        await Assert.That(payloads[other]).IsEqualTo("other-machine-report");
+    }
+
+    [Test]
+    public async Task Live_LatestNodePayloads_PlanReadsAboutOneRowPerPartitionInsteadOfEveryReport()
+    {
+        // Intent: the cluster detail asks for every active machine of the tenant on every view, so the
+        // statement must cost about one row per machine and partition, not one per report the machine has
+        // ever sent in the window. Two hundred reports sit in the machine's partitions; the leaf scans
+        // may produce only the newest row of each partition, the rows tied with it and the one row that
+        // shows the tie has ended. The plan is the one the production statement gets, read back with
+        // EXPLAIN ANALYZE, and the rows are what the scans really produced.
+        await using DatabaseContext db = CreateContext();
+        int tenantId = await SeedTenantAsync(db);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        SeededReports seeded = await SeedManyReportsAsync(db, tenantId, now);
+
+        await using NpgsqlConnection connection = new(_migratedConnectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "ANALYZE \"MachineTelemetry\"");
+
+        string statement = await CaptureLatestNodePayloadsStatementAsync(tenantId, [seeded.MachineId], now.AddDays(-7));
+        string explain = await ScalarAsync(connection, $"EXPLAIN (ANALYZE, FORMAT JSON) {statement}");
+        JsonElement plan = JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan");
+
+        double rowsProduced = SumLeafScanRows(plan);
+
+        await Assert.That(seeded.RowCount).IsEqualTo(200);
+        await Assert.That(rowsProduced).IsGreaterThan(0);
+        await Assert.That(rowsProduced).IsLessThan(50);
+        await Assert.That(ContainsNodeType(plan, "Incremental Sort")).IsTrue();
+    }
+
+    [Test]
     public async Task Live_CandidateForMachine_ScopesToTheTenant()
     {
         await using DatabaseContext db = CreateContext();
@@ -612,10 +673,12 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await SeedLiveCandidateAsync(db, tenantId, own, candidateHere, DateTimeOffset.UtcNow);
         await SeedLiveCandidateAsync(db, otherTenantId, foreignCluster, foreignLinked, DateTimeOffset.UtcNow);
 
-        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(
-            tenantId, own, [nodeElsewhere, candidateElsewhere, candidateHere, foreignLinked], CancellationToken.None);
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
 
         await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere }.Order().ToArray());
+
+        await CleanUpKubernetesRowsAsync(db, tenantId);
+        await CleanUpKubernetesRowsAsync(db, otherTenantId);
     }
 
     [Test]
@@ -1516,6 +1579,125 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     /// <summary>
+    /// The machine seeded by <see cref="SeedManyReportsAsync"/>, the payload of the report the server
+    /// accepted last and how many reports the machine has.
+    /// </summary>
+    private sealed record SeededReports(long MachineId, string NewestPayload, int RowCount);
+
+    /// <summary>
+    /// Gives a new machine 200 type-14 reports accepted over the last five and a half days. The three newest
+    /// were accepted at the same instant, with the agent's own clock ordering them the other way round, and
+    /// four in the middle share an instant too, so only the row id can say which of a tie was stored last.
+    /// </summary>
+    private static async Task<SeededReports> SeedManyReportsAsync(DatabaseContext db, int tenantId, DateTimeOffset now)
+    {
+        const int reportCount = 200;
+        long machineId = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset newest = now.AddMinutes(-1);
+        TimeSpan step = TimeSpan.FromMinutes(40);
+
+        for (int index = 0; index < reportCount; index++)
+        {
+            DateTimeOffset serverReceivedAt = newest - ((reportCount - 1 - index) * step);
+            DateTimeOffset receivedAt = serverReceivedAt;
+            if (index >= 197)
+            {
+                serverReceivedAt = newest;
+                receivedAt = newest - TimeSpan.FromHours(index - 197);
+            }
+            else if ((index >= 101) && (index <= 103))
+            {
+                serverReceivedAt = newest - ((reportCount - 1 - 100) * step);
+            }
+
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = machineId,
+                TenantId = tenantId,
+                TelemetryType = 14,
+                Payload = $"report-{index}",
+                ReceivedAt = receivedAt,
+                ServerReceivedAt = serverReceivedAt,
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+        }
+
+        int stored = await db.MachineTelemetry.CountAsync(t => (t.MachineId == machineId) && (t.TelemetryType == 14));
+
+        return new SeededReports(machineId, $"report-{reportCount - 1}", stored);
+    }
+
+    /// <summary>
+    /// Runs the repository's latest-report read and returns the statement it sent with every parameter
+    /// replaced by a literal, because a plain EXPLAIN cannot take parameters.
+    /// </summary>
+    private static async Task<string> CaptureLatestNodePayloadsStatementAsync(
+        int tenantId, long[] machineIds, DateTimeOffset serverReceivedAfter)
+    {
+        string statement = string.Empty;
+        DataOptions<DatabaseContext> options = new(new DataOptions()
+            .UsePostgreSQL(_migratedConnectionString)
+            .UseTracing(TraceLevel.Info, info =>
+            {
+                if ((info.TraceInfoStep == TraceInfoStep.BeforeExecute) && (info.Command != null))
+                {
+                    statement = InlineParameters(info.Command);
+                }
+            }));
+        await using DatabaseContext db = new(options);
+
+        await CreateRepo(db).GetLatestKubernetesNodePayloadsAsync(tenantId, machineIds, serverReceivedAfter, CancellationToken.None);
+
+        return statement;
+    }
+
+    /// <summary>
+    /// Adds up the rows every scan of a telemetry partition produced, counting each loop of a scan that
+    /// ran more than once. Only the scans that read a table are counted: the joins and sorts above them
+    /// pass on rows the scans already produced.
+    /// </summary>
+    private static double SumLeafScanRows(JsonElement node)
+    {
+        double rows = 0;
+        if (node.TryGetProperty("Relation Name", out JsonElement relation)
+            && relation.GetString()!.StartsWith("MachineTelemetry_", StringComparison.Ordinal))
+        {
+            rows += node.GetProperty("Actual Rows").GetDouble() * node.GetProperty("Actual Loops").GetDouble();
+        }
+
+        if (node.TryGetProperty("Plans", out JsonElement children))
+        {
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                rows += SumLeafScanRows(child);
+            }
+        }
+
+        return rows;
+    }
+
+    private static bool ContainsNodeType(JsonElement node, string nodeType)
+    {
+        if (node.GetProperty("Node Type").GetString() == nodeType)
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("Plans", out JsonElement children))
+        {
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                if (ContainsNodeType(child, nodeType))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Runs the repository's batch read and returns the statement it sent with every parameter
     /// replaced by a literal, because a plain EXPLAIN cannot take parameters, along with the rows.
     /// </summary>
@@ -1550,6 +1732,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             {
                 DateTimeOffset timestamp => $"'{timestamp.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}'::timestamptz",
                 IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+                long[] numbers => $"ARRAY[{string.Join(",", numbers.Select(n => n.ToString(CultureInfo.InvariantCulture)))}]::bigint[]",
                 _ => throw new InvalidOperationException($"Unexpected parameter value for {parameter.ParameterName}"),
             };
             text = text.Replace($"@{parameter.ParameterName.TrimStart('@')}", literal, StringComparison.Ordinal);

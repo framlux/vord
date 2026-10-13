@@ -201,17 +201,17 @@ public interface IKubernetesInventoryRepository
         int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct);
 
     /// <summary>
-    /// Returns which of the given machines are already a node or a reporter candidate of a different
-    /// cluster than <paramref name="clusterId"/>, in one query. Only the tenant's own rows are read. It
-    /// tells a machine that merely holds a CA shared by several clusters from one that is known to belong
-    /// to another of them.
+    /// Returns every machine of the tenant that is a node or a reporter candidate of a cluster other than
+    /// <paramref name="clusterId"/>, in one query that carries no list of machines. A machine that is also
+    /// linked to <paramref name="clusterId"/> is still returned, because this reports only its other
+    /// links; the caller sets its own cluster's members aside. Only the tenant's own rows are read, and a
+    /// node that no machine is linked to adds nothing.
     /// </summary>
     /// <param name="tenantId">The tenant the nodes and candidate rows must belong to.</param>
-    /// <param name="clusterId">The cluster the machines are being considered for; its own rows do not count.</param>
-    /// <param name="machineIds">The machines to look up.</param>
+    /// <param name="clusterId">The cluster being considered; its own rows do not count.</param>
     /// <param name="ct">A cancellation token.</param>
     Task<IReadOnlyCollection<long>> GetMachineIdsLinkedToOtherClustersAsync(
-        int tenantId, long clusterId, IReadOnlyCollection<long> machineIds, CancellationToken ct);
+        int tenantId, long clusterId, CancellationToken ct);
 
     /// <summary>
     /// Returns the names of the given machines in one query. Only machines of the tenant are
