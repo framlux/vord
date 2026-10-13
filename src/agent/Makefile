@@ -8,7 +8,7 @@ VERSION ?= $(patsubst agent-v%,%,$(shell git describe --tags --match 'agent-v*' 
 BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
 
-.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-armv7 build-linux-386 build-all clean test test-k3s proto fmt vet
+.PHONY: build build-linux-amd64 build-linux-arm64 build-linux-armv7 build-linux-386 build-all clean test test-k3s test-packages proto fmt vet
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY_NAME) ./cmd/agent/
@@ -37,6 +37,11 @@ test:
 # `make test` and a plain go test never start it; it needs Podman running and takes a few minutes.
 test-k3s:
 	go test -tags k3s_integration -run TestK3sIntegration -count=1 -v -timeout 20m ./internal/kubereporter/
+
+# The deb and rpm maintainer scripts under the real package managers (apt-get on Debian, dnf on Rocky Linux) in
+# containers. It needs Docker or Podman (CONTAINER_CLI picks one), Go, and the agent-v3.3.0 tag, and takes a few minutes.
+test-packages:
+	sh packaging/test_packages.sh
 
 proto:
 	protoc \
