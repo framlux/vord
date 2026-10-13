@@ -95,10 +95,12 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         dto.ActiveTenantId = _tenantContext.TenantId;
 
         // Issue the double-submit antiforgery pair on this authenticated GET: GetAndStoreTokens
-        // writes the antiforgery cookie onto the response and returns the matching request token.
-        // The client echoes the request token in the X-CSRF-TOKEN header on state-changing
-        // requests, which the server validates against the cookie. This is the single issuance
-        // path for the cookie-authenticated web flow.
+        // returns a request token for the antiforgery cookie the request presented and only writes a
+        // new cookie onto the response when the request carried none, or one it cannot read. The
+        // client echoes the request token in the X-CSRF-TOKEN header on state-changing requests,
+        // which the server validates against the cookie. This is the single issuance path for the
+        // cookie-authenticated web flow, and callers that already hold the cookie must send it here
+        // so the pair they hold is kept instead of replaced.
         AntiforgeryTokenSet tokens = _antiforgery.GetAndStoreTokens(HttpContext);
         dto.CsrfToken = tokens.RequestToken;
 

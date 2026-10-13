@@ -26,6 +26,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Authorization;
 /// The functional factory relaxes the antiforgery cookie SecurePolicy to SameAsRequest, so the
 /// pair is mintable over the test host's HTTP transport.
 /// </para>
+/// <para>
+/// A page keeps the request token it captured at load, so the antiforgery cookie must stay stable
+/// for a browser: the tests also pin the framework behaviour the web relies on to achieve that. A
+/// bootstrap that forwards the cookie it holds is answered with a token for that same cookie and no
+/// replacement, an unreadable cookie is replaced, and a token never validates for another user.
+/// </para>
 /// </summary>
 public sealed class JsonCsrfEnforcementTests
 {
@@ -62,22 +68,8 @@ public sealed class JsonCsrfEnforcementTests
     public async Task JsonPost_WithAuthCookie_WithValidCsrfToken_PassesCsrfGate()
     {
         using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        string externalId = $"ext-csrf-{Guid.NewGuid():N}";
-
-        UserAccount user = new()
-        {
-            ExternalId = externalId,
-            Username = $"csrf-{Guid.NewGuid():N}@example.com",
-            AuthProvider = AuthProviderType.Unknown,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = 1,
-            IsActive = true,
-            IsSystem = false,
-            IsGlobalAdmin = false,
-        };
-        user.Id = await db.InsertWithInt32IdentityAsync(user);
+        UserAccount user = await InsertUserAsync(factory);
+        string externalId = user.ExternalId;
 
         // AllowAutoRedirect=false, HandleCookies=false — the same client is reused for both the
         // token-issuing GET and the mutation POST, so we forward cookies manually.
@@ -119,6 +111,291 @@ public sealed class JsonCsrfEnforcementTests
         await Assert.That(body).DoesNotContain("Antiforgery validation failed.");
     }
 
+    [Test]
+    public async Task AuthMe_WithValidAntiforgeryCookie_ReusesItAndIssuesNoNewCookie()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        HttpResponseMessage first = await GetAuthMeAsync(client, antiforgeryCookie: null);
+        string cookie = ExtractAntiforgeryCookieValue(first);
+
+        // The browser now holds the cookie and presents it on the next bootstrap. The framework must
+        // recognise it as its own and answer with a token for it, without minting a replacement.
+        HttpResponseMessage second = await GetAuthMeAsync(client, cookie);
+
+        await Assert.That(second.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(FindAntiforgeryCookieValue(second)).IsNull();
+    }
+
+    [Test]
+    public async Task AuthMe_WithValidAntiforgeryCookie_ReturnsTokenThatPassesTheJsonGate()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        HttpResponseMessage first = await GetAuthMeAsync(client, antiforgeryCookie: null);
+        string cookie = ExtractAntiforgeryCookieValue(first);
+
+        HttpResponseMessage second = await GetAuthMeAsync(client, cookie);
+        string reusedToken = await ExtractCsrfTokenFromBody(second);
+
+        HttpResponseMessage post = await PostContactAsync(client, cookie, reusedToken);
+
+        await Assert.That(post.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task JsonPost_WithTokenMintedEarlier_StillPasses_AfterLaterAuthMeForwardedTheSameCookie()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        // The page captured this token at load time.
+        HttpResponseMessage first = await GetAuthMeAsync(client, antiforgeryCookie: null);
+        string cookie = ExtractAntiforgeryCookieValue(first);
+        string tokenCapturedByThePage = await ExtractCsrfTokenFromBody(first);
+
+        // A background poll bootstraps again with the cookie the browser holds, as the web does.
+        await GetAuthMeAsync(client, cookie);
+        await GetAuthMeAsync(client, cookie);
+
+        HttpResponseMessage post = await PostContactAsync(client, cookie, tokenCapturedByThePage);
+
+        await Assert.That(post.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task JsonPost_WithTokenMintedEarlier_Returns400_WhenLaterAuthMeDidNotForwardTheCookie()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        HttpResponseMessage first = await GetAuthMeAsync(client, antiforgeryCookie: null);
+        string tokenCapturedByThePage = await ExtractCsrfTokenFromBody(first);
+
+        // A bootstrap that leaves the browser's cookie out gets a different cookie minted for it,
+        // and the browser ends up holding that one. This is the defect the web must never cause:
+        // the token the page captured no longer pairs with the cookie the browser sends.
+        HttpResponseMessage second = await GetAuthMeAsync(client, antiforgeryCookie: null);
+        string replacementCookie = ExtractAntiforgeryCookieValue(second);
+
+        HttpResponseMessage post = await PostContactAsync(client, replacementCookie, tokenCapturedByThePage);
+
+        await Assert.That(post.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(await post.Content.ReadAsStringAsync()).Contains("Antiforgery validation failed.");
+    }
+
+    [Test]
+    public async Task AuthMe_IssuedAntiforgeryCookie_UsesOnlyTheBase64UrlAlphabet()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+
+        // The web only forwards a vord_csrf value made of these characters and treats anything else as
+        // a cookie the backend never issued, so the cookie the framework writes must never leave the
+        // alphabet: no percent-escapes, no base64 padding, no '+' or '/'.
+        for (int i = 0; i < 25; i++)
+        {
+            HttpResponseMessage response = await GetAuthMeAsync(client, antiforgeryCookie: null);
+            string cookie = ExtractAntiforgeryCookieValue(response);
+
+            await Assert.That(cookie).IsNotEmpty();
+            await Assert.That(cookie.All(c => char.IsAsciiLetterOrDigit(c) || (c == '-') || (c == '_'))).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task AuthMe_WithBogusAntiforgeryCookie_IssuesAFreshPairThatPassesTheJsonGate()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        HttpClient client = BuildClient(factory, user);
+        const string bogusCookie = "not-a-real-antiforgery-cookie";
+
+        HttpResponseMessage response = await GetAuthMeAsync(client, bogusCookie);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // A cookie the framework cannot read is replaced, so a stale or tampered cookie heals itself
+        // on the next page load.
+        string? replacement = FindAntiforgeryCookieValue(response);
+        await Assert.That(replacement).IsNotNull();
+        await Assert.That(replacement).IsNotEqualTo(bogusCookie);
+
+        string token = await ExtractCsrfTokenFromBody(response);
+
+        HttpResponseMessage withNewCookie = await PostContactAsync(client, replacement!, token);
+        HttpResponseMessage withBogusCookie = await PostContactAsync(client, bogusCookie, token);
+
+        await Assert.That(withNewCookie.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(withBogusCookie.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task JsonPost_WithTokenOfAnotherUser_Returns400_EvenWhenTheCookieIsShared()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount userA = await InsertUserAsync(factory);
+        UserAccount userB = await InsertUserAsync(factory);
+        HttpClient clientA = BuildClient(factory, userA);
+        HttpClient clientB = BuildClient(factory, userB);
+
+        HttpResponseMessage meA = await GetAuthMeAsync(clientA, antiforgeryCookie: null);
+        string sharedCookie = ExtractAntiforgeryCookieValue(meA);
+        string tokenOfA = await ExtractCsrfTokenFromBody(meA);
+
+        // The same browser signs in as someone else and keeps its cookie: it is reused, and the
+        // token issued with it names the new user.
+        HttpResponseMessage meB = await GetAuthMeAsync(clientB, sharedCookie);
+        string tokenOfB = await ExtractCsrfTokenFromBody(meB);
+
+        HttpResponseMessage withOwnToken = await PostContactAsync(clientB, sharedCookie, tokenOfB);
+        HttpResponseMessage withForeignToken = await PostContactAsync(clientB, sharedCookie, tokenOfA);
+
+        await Assert.That(FindAntiforgeryCookieValue(meB)).IsNull();
+        await Assert.That(withOwnToken.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(withForeignToken.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task JsonPost_WithTokenMintedEarlier_StillPasses_AfterTenantSwitchAndRoleChange()
+    {
+        using FunctionalTestFactory factory = new();
+        UserAccount user = await InsertUserAsync(factory);
+        int firstTenantId = await InsertTenantAsync(factory);
+        int secondTenantId = await InsertTenantAsync(factory);
+
+        HttpClient beforeSwitch = new AuthenticatedClientBuilder(factory)
+            .WithUserId(user.Id)
+            .WithExternalId(user.ExternalId)
+            .WithActiveTenant(firstTenantId)
+            .WithRole(firstTenantId, (int)UserAccountRoles.Viewer)
+            .Build();
+
+        HttpResponseMessage first = await GetAuthMeAsync(beforeSwitch, antiforgeryCookie: null);
+        string cookie = ExtractAntiforgeryCookieValue(first);
+        string tokenCapturedByThePage = await ExtractCsrfTokenFromBody(first);
+
+        // The same session after the user switched tenant and was promoted: the principal's claims
+        // changed, but the identity the token names (the subject) did not.
+        HttpClient afterSwitch = new AuthenticatedClientBuilder(factory)
+            .WithUserId(user.Id)
+            .WithExternalId(user.ExternalId)
+            .WithActiveTenant(secondTenantId)
+            .WithRole(firstTenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithRole(secondTenantId, (int)UserAccountRoles.TenantAdmin)
+            .Build();
+
+        HttpResponseMessage post = await PostContactAsync(afterSwitch, cookie, tokenCapturedByThePage);
+
+        await Assert.That(post.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    private static HttpClient BuildClient(FunctionalTestFactory factory, UserAccount user)
+    {
+        return new AuthenticatedClientBuilder(factory)
+            .WithUserId(user.Id)
+            .WithExternalId(user.ExternalId)
+            .Build();
+    }
+
+    /// <summary>
+    /// Inserts a distinct active user so each caller gets its own antiforgery identity.
+    /// </summary>
+    private static async Task<UserAccount> InsertUserAsync(FunctionalTestFactory factory)
+    {
+        using DatabaseContext db = factory.CreateDbContext();
+
+        UserAccount user = new()
+        {
+            ExternalId = $"ext-csrf-{Guid.NewGuid():N}",
+            Username = $"csrf-{Guid.NewGuid():N}@example.com",
+            AuthProvider = AuthProviderType.Unknown,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        user.Id = await db.InsertWithInt32IdentityAsync(user);
+
+        return user;
+    }
+
+    /// <summary>
+    /// Inserts an active tenant with an active subscription so a request carrying it as the active
+    /// tenant is not refused.
+    /// </summary>
+    private static async Task<int> InsertTenantAsync(FunctionalTestFactory factory)
+    {
+        using DatabaseContext db = factory.CreateDbContext();
+
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"csrf-tenant-{Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            LogoUrl = string.Empty,
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription subscription = new()
+        {
+            TenantId = tenant.Id,
+            Tier = SubscriptionTier.Pro,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt32IdentityAsync(subscription);
+
+        return tenant.Id;
+    }
+
+    /// <summary>
+    /// Calls <c>/api/v1/auth/me</c> the way the web bootstrap does: with the auth cookie and, when
+    /// the browser holds one, the antiforgery cookie.
+    /// </summary>
+    private static async Task<HttpResponseMessage> GetAuthMeAsync(HttpClient client, string? antiforgeryCookie)
+    {
+        HttpRequestMessage request = new(HttpMethod.Get, "/api/v1/auth/me");
+        request.Headers.Add(
+            "Cookie",
+            antiforgeryCookie is null
+                ? "vord_auth=session-token"
+                : $"vord_auth=session-token; vord_csrf={antiforgeryCookie}");
+
+        return await client.SendAsync(request);
+    }
+
+    /// <summary>
+    /// Sends a cookie-authenticated JSON POST that carries the given double-submit pair.
+    /// </summary>
+    private static async Task<HttpResponseMessage> PostContactAsync(HttpClient client, string antiforgeryCookie, string requestToken)
+    {
+        HttpRequestMessage request = new(HttpMethod.Post, "/api/v1/contact");
+        request.Headers.Add("Cookie", $"vord_auth=session-token; vord_csrf={antiforgeryCookie}");
+        request.Headers.Add("X-CSRF-TOKEN", requestToken);
+        request.Content = JsonContent.Create(new
+        {
+            Name = "Legit User",
+            Email = "legit@example.com",
+            Company = "",
+            FleetSize = "",
+            Message = "Same-origin JSON POST carrying a double-submit pair.",
+        });
+
+        return await client.SendAsync(request);
+    }
+
     /// <summary>
     /// Reads the <c>csrfToken</c> request token that the auth-me endpoint surfaces in its
     /// JSON body so the client can echo it in the X-CSRF-TOKEN header.
@@ -142,11 +419,26 @@ public sealed class JsonCsrfEnforcementTests
 
     /// <summary>
     /// Reads the antiforgery cookie value that the auth-me endpoint wrote onto the response via
-    /// <c>IAntiforgery.GetAndStoreTokens</c>.
+    /// <c>IAntiforgery.GetAndStoreTokens</c>, failing when the response issued none.
     /// </summary>
     private static string ExtractAntiforgeryCookieValue(HttpResponseMessage response)
     {
-        foreach (string setCookie in response.Headers.GetValues("Set-Cookie"))
+        return FindAntiforgeryCookieValue(response)
+            ?? throw new InvalidOperationException("Antiforgery cookie was not set by auth/me.");
+    }
+
+    /// <summary>
+    /// Returns the antiforgery cookie value the response set, or null when it set none. Reuse of an
+    /// existing cookie is asserted through this absence, since the extractor above throws instead.
+    /// </summary>
+    private static string? FindAntiforgeryCookieValue(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("Set-Cookie", out IEnumerable<string>? setCookies) == false)
+        {
+            return null;
+        }
+
+        foreach (string setCookie in setCookies)
         {
             if (setCookie.StartsWith("vord_csrf=", StringComparison.Ordinal))
             {
@@ -157,6 +449,6 @@ public sealed class JsonCsrfEnforcementTests
             }
         }
 
-        throw new InvalidOperationException("Antiforgery cookie was not set by auth/me.");
+        return null;
     }
 }

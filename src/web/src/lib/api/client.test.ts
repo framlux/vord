@@ -1131,6 +1131,199 @@ describe('ApiClient', () => {
         });
     });
 
+    // The antiforgery cookie can still be replaced behind the page's back (cleared cookies, a
+    // cross-site arrival that did not carry the Strict cookie, a lost key ring). The gate rejects
+    // before the endpoint runs, so repeating the request once with a freshly issued token is safe.
+    describe('antiforgery rejection recovery', () => {
+        const antiforgeryBody = { error: 'Antiforgery validation failed.' };
+
+        function reply(status: number, body: unknown) {
+            return {
+                ok: status >= 200 && status < 300,
+                status,
+                statusText: status === 200 ? 'OK' : 'Error',
+                json: () => Promise.resolve(body)
+            };
+        }
+
+        function meReply(csrfToken: string | null) {
+            return reply(200, {
+                success: true,
+                data: {
+                    id: 1, name: 'Test', email: 'test@example.com', avatar: '', isGlobalAdmin: false,
+                    uniqueId: 'abc', needsOnboarding: false, tenants: [], activeTenantId: 1, csrfToken
+                },
+                message: null,
+                errors: null
+            });
+        }
+
+        const okBody = { success: true, data: {}, message: null, errors: null };
+
+        function headersOf(call: number): Record<string, string> {
+            return (fetchFn.mock.calls[call][1] as RequestInit).headers as Record<string, string>;
+        }
+
+        it('should fetch a fresh token and retry a POST once, returning the retried response', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(meReply('fresh-token'))
+                .mockResolvedValueOnce(reply(200, { success: true, data: { id: 9 }, message: null, errors: null }));
+
+            const result = await csrfClient.authorizeMachineKey(5, 9);
+
+            expect(result).toEqual({ id: 9 });
+            expect(fetchFn).toHaveBeenCalledTimes(3);
+
+            // The token is refreshed through the same base URL and fetch the client was built with,
+            // which in the browser is the SvelteKit proxy.
+            expect(fetchFn.mock.calls[1][0]).toBe('/api/v1/auth/me');
+            expect((fetchFn.mock.calls[1][1] as RequestInit).method).toBe('GET');
+
+            expect(fetchFn.mock.calls[2][0]).toBe(fetchFn.mock.calls[0][0]);
+            expect((fetchFn.mock.calls[2][1] as RequestInit).method).toBe('POST');
+            expect((fetchFn.mock.calls[2][1] as RequestInit).body).toBe((fetchFn.mock.calls[0][1] as RequestInit).body);
+            expect(headersOf(0)['X-CSRF-TOKEN']).toBe('stale-token');
+            expect(headersOf(2)['X-CSRF-TOKEN']).toBe('fresh-token');
+        });
+
+        it('should keep the refreshed token for later requests on the same client', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(meReply('fresh-token'))
+                .mockResolvedValueOnce(reply(200, okBody))
+                .mockResolvedValueOnce(reply(200, okBody));
+
+            await csrfClient.switchTenant(1);
+            await csrfClient.switchTenant(2);
+
+            expect(fetchFn).toHaveBeenCalledTimes(4);
+            expect(headersOf(3)['X-CSRF-TOKEN']).toBe('fresh-token');
+        });
+
+        it.each([
+            ['POST', (c: ApiClient) => c.switchTenant(1)],
+            ['PATCH', (c: ApiClient) => c.updateMachine(1, { name: 'web-01' })],
+            ['DELETE', (c: ApiClient) => c.deleteMachine(1)],
+            ['PUT', (c: ApiClient) => c.updateMachineAlertRules(1, [2])]
+        ])('should retry a %s once with the fresh token', async (method, send) => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(meReply('fresh-token'))
+                .mockResolvedValueOnce(reply(200, okBody));
+
+            await send(csrfClient);
+
+            expect(fetchFn).toHaveBeenCalledTimes(3);
+            expect((fetchFn.mock.calls[0][1] as RequestInit).method).toBe(method);
+            expect((fetchFn.mock.calls[2][1] as RequestInit).method).toBe(method);
+            expect(headersOf(2)['X-CSRF-TOKEN']).toBe('fresh-token');
+        });
+
+        it('should surface a second antiforgery rejection without retrying again', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(meReply('fresh-token'))
+                .mockResolvedValueOnce(reply(400, antiforgeryBody));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect(failure).toBeInstanceOf(ApiError);
+            expect((failure as ApiError).status).toBe(400);
+            expect((failure as ApiError).message).toBe('Antiforgery validation failed.');
+            expect(fetchFn).toHaveBeenCalledTimes(3);
+        });
+
+        it('should not retry a 400 whose body is a different error', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(
+                reply(400, { success: false, data: null, message: 'Name is required', errors: null })
+            );
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect((failure as ApiError).status).toBe(400);
+            expect((failure as ApiError).message).toBe('Name is required');
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it('should not retry a 400 whose error text only resembles the antiforgery one', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(reply(400, { error: 'Validation failed.' }));
+
+            await expect(csrfClient.switchTenant(1)).rejects.toBeInstanceOf(ApiError);
+
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            [401, 'Unauthorized'],
+            [403, 'Forbidden'],
+            [404, 'Not found']
+        ])('should not retry a %i response', async (status, message) => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(reply(status, antiforgeryBody));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect((failure as ApiError).status).toBe(status);
+            expect((failure as ApiError).message).toBe(message);
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        // Only the gate's own status is a rejection to recover from. The same body on any other 4xx
+        // is some other refusal, and repeating the request could do real work twice.
+        it.each([409, 422, 429])('should not retry a %i that carries the antiforgery body', async (status) => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(reply(status, antiforgeryBody));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect(failure).toBeInstanceOf(ApiError);
+            expect((failure as ApiError).status).toBe(status);
+            expect((failure as ApiError).message).toBe('Request failed');
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it('should never retry a GET, even for an antiforgery-shaped 400', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'token');
+            fetchFn.mockResolvedValue(reply(400, antiforgeryBody));
+
+            await expect(csrfClient.getTenants()).rejects.toBeInstanceOf(ApiError);
+
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it('should surface the original rejection when the refreshed session carries no token', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(meReply(null));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect((failure as ApiError).status).toBe(400);
+            expect((failure as ApiError).message).toBe('Antiforgery validation failed.');
+            expect(fetchFn).toHaveBeenCalledTimes(2);
+        });
+
+        it('should surface the refresh failure when the session can no longer be read', async () => {
+            const csrfClient = new ApiClient('', fetchFn as unknown as typeof fetch, 'stale-token');
+            fetchFn
+                .mockResolvedValueOnce(reply(400, antiforgeryBody))
+                .mockResolvedValueOnce(reply(401, null));
+
+            const failure = await csrfClient.switchTenant(1).catch((e: unknown) => e);
+
+            expect((failure as ApiError).status).toBe(401);
+            expect(fetchFn).toHaveBeenCalledTimes(2);
+        });
+    });
+
     describe('retry behavior', () => {
         it('should succeed on second attempt after transient 500', async () => {
             const userData = {

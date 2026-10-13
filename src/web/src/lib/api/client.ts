@@ -72,6 +72,16 @@ export class ApiError extends Error {
 	}
 }
 
+// The exact body the api-server's JSON antiforgery gate answers with. A 400 carrying it means the
+// request never reached its endpoint, which is what makes repeating it safe.
+const ANTIFORGERY_REJECTION_MESSAGE = 'Antiforgery validation failed.';
+
+class AntiforgeryRejectionError extends ApiError {
+	constructor() {
+		super(400, ANTIFORGERY_REJECTION_MESSAGE);
+	}
+}
+
 export class ApiClient {
 	private baseUrl: string;
 	private fetchFn: typeof fetch;
@@ -94,7 +104,39 @@ export class ApiClient {
 	private static readonly MAX_RETRIES = 3;
 	private static readonly RETRY_BASE_DELAY_MS = 500;
 
+	// The antiforgery cookie can still be replaced behind a page's back (cleared cookies, a cross-site
+	// arrival that did not carry the Strict cookie, a lost key ring), leaving the token the page captured
+	// at load unpaired. The gate rejects before the endpoint runs, so a state-changing request it turned
+	// away is repeated exactly once with a freshly issued token; a second rejection is the caller's.
 	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+		try {
+			return await this.send<T>(method, path, body);
+		} catch (e) {
+			if (
+				e instanceof AntiforgeryRejectionError &&
+				method !== 'GET' &&
+				method !== 'HEAD' &&
+				(await this.refreshCsrfToken())
+			) {
+				return await this.send<T>(method, path, body);
+			}
+			throw e;
+		}
+	}
+
+	// Asks the session for a new request token through the same base URL and fetch as every other call,
+	// which in the browser is the SvelteKit proxy. False when the session carries no token to adopt.
+	private async refreshCsrfToken(): Promise<boolean> {
+		const user = await this.getMe();
+		if (typeof user.csrfToken !== 'string' || user.csrfToken.length === 0) {
+			return false;
+		}
+		this.csrfToken = user.csrfToken;
+
+		return true;
+	}
+
+	private async send<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const url = `${this.baseUrl}${path}`;
 		const headers: Record<string, string> = {
 			Accept: 'application/json'
@@ -162,6 +204,9 @@ export class ApiClient {
 			}
 
 			if (response.ok === false) {
+				if (response.status === 400 && ApiClient.isAntiforgeryRejection(json)) {
+					throw new AntiforgeryRejectionError();
+				}
 				const apiResp = json as ApiResponse<unknown>;
 				throw new ApiError(response.status, apiResp?.message ?? 'Request failed', apiResp?.data);
 			}
@@ -170,6 +215,14 @@ export class ApiClient {
 		}
 
 		throw lastError ?? new ApiError(0, 'Request failed after retries');
+	}
+
+	private static isAntiforgeryRejection(json: unknown): boolean {
+		return (
+			typeof json === 'object' &&
+			json !== null &&
+			(json as { error?: unknown }).error === ANTIFORGERY_REJECTION_MESSAGE
+		);
 	}
 
 	// A 403 can say why: a subscription gate answers with the tier it needs, and the page shows that
@@ -226,8 +279,11 @@ export class ApiClient {
 	// Auth bootstrap variant of getMe used by the SSR layer. Alongside the user it surfaces the
 	// raw vord_csrf antiforgery cookie value that GET /auth/me issues via Set-Cookie. A server-side
 	// fetch to the backend does not propagate that Set-Cookie to the browser, so hooks.server.ts
-	// captures it here and re-sets it on the browser. The cookie and user.csrfToken are minted by
-	// the same call, so they form a valid double-submit pair for later state-changing requests.
+	// captures it here and re-sets it on the browser. The backend only issues a cookie when the
+	// request carried none it could read: when the caller forwards the browser's valid cookie there is
+	// no Set-Cookie, csrfCookie is undefined, and user.csrfToken pairs with the cookie that was sent.
+	// Either way the cookie and user.csrfToken form a valid double-submit pair for later
+	// state-changing requests.
 	async getMeBootstrap(): Promise<{ user: UserDto; csrfCookie: string | undefined }> {
 		const url = `${this.baseUrl}/api/v1/auth/me`;
 		const response = await this.fetchFn(url, {
