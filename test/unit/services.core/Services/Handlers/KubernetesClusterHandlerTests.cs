@@ -39,7 +39,8 @@ public class KubernetesClusterHandlerTests
         TestDatabaseFactory dbFactory,
         IAuditLogRepository? auditLog = null,
         IMachinePingService? pingService = null,
-        IKubernetesInventoryRepository? kubernetesRepo = null)
+        IKubernetesInventoryRepository? kubernetesRepo = null,
+        TimeProvider? readerClock = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
         FakeTimeProvider clock = new(Now);
@@ -52,7 +53,7 @@ public class KubernetesClusterHandlerTests
             TestQuotaPause.Nothing(),
             TestMetricsFactory.CreateQuotaPauseMetrics(),
             TestMetricsFactory.CreateKubernetesInventoryMetrics(),
-            clock,
+            readerClock ?? clock,
             NullLogger<KubernetesReporterMachineReader>.Instance);
 
         return new KubernetesClusterHandler(kubernetesRepo ?? repo, machines, repo, auditLog ?? repo, clock);
@@ -588,21 +589,21 @@ public class KubernetesClusterHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = await SeedTenantAsync(dbFactory.Context);
-        long holder = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-host");
+        long activeReporter = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-host");
         long standby = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-standby");
         long controller = await SeedMachineAsync(dbFactory.Context, tenantId, "k0s-controller");
         long clusterId = await SeedReportingClusterAsync(
-            dbFactory.Context, tenantId, FingerprintA, holder, Now.AddMinutes(-3), uid: "3f0c2d9e-aaaa-4bbb-8ccc-0123456789ab");
-        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "cp-1", holder, controlPlane: true);
-        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, holder, lastReport: Now.AddMinutes(-2));
+            dbFactory.Context, tenantId, FingerprintA, activeReporter, Now.AddMinutes(-3), uid: "3f0c2d9e-aaaa-4bbb-8ccc-0123456789ab");
+        await SeedNodeAsync(dbFactory.Context, tenantId, clusterId, "cp-1", activeReporter, controlPlane: true);
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, activeReporter, lastReport: Now.AddMinutes(-2));
         await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, standby, error: "tls_ca_changed");
-        await SeedLocalReportAsync(dbFactory.Context, tenantId, holder, LocalReportJson(FingerprintA, enrolled: true));
+        await SeedLocalReportAsync(dbFactory.Context, tenantId, activeReporter, LocalReportJson(FingerprintA, enrolled: true));
         await SeedLocalReportAsync(dbFactory.Context, tenantId, standby, LocalReportJson(FingerprintA, enrolled: true));
         await SeedLocalReportAsync(dbFactory.Context, tenantId, controller, LocalReportJson(FingerprintA));
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(holder, tenantId, healthStatus: 0));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(activeReporter, tenantId, healthStatus: 0));
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(standby, tenantId, healthStatus: 3));
         InMemoryMachinePingService ping = new();
-        await ping.SetAgentCapabilitiesAsync(holder, 1);
+        await ping.SetAgentCapabilitiesAsync(activeReporter, 1);
         KubernetesClusterHandler handler = CreateHandler(dbFactory, pingService: ping);
 
         ServiceResult<KubernetesClusterDetailDto> result = await handler.GetAsync(clusterId, tenantId, CancellationToken.None);
@@ -612,25 +613,48 @@ public class KubernetesClusterHandlerTests
         await Assert.That(detail.ReportingState).IsEqualTo("error");
         await Assert.That(detail.ReporterError).IsEqualTo("tls_ca_changed");
         await Assert.That(detail.Candidates.Count).IsEqualTo(2);
-        KubernetesCandidateDto holderCandidate = detail.Candidates.Single(c => c.MachineId == holder);
-        await Assert.That(holderCandidate.IsHolder).IsTrue();
-        await Assert.That(holderCandidate.MachineName).IsEqualTo("cp-host");
-        await Assert.That(holderCandidate.Online).IsTrue();
-        await Assert.That(holderCandidate.LastReportAt).IsEqualTo(Now.AddMinutes(-2));
+        KubernetesCandidateDto activeReporterCandidate = detail.Candidates.Single(c => c.MachineId == activeReporter);
+        await Assert.That(activeReporterCandidate.IsActiveReporter).IsTrue();
+        await Assert.That(activeReporterCandidate.MachineName).IsEqualTo("cp-host");
+        await Assert.That(activeReporterCandidate.Online).IsTrue();
+        await Assert.That(activeReporterCandidate.LastReportAt).IsEqualTo(Now.AddMinutes(-2));
         KubernetesCandidateDto standbyCandidate = detail.Candidates.Single(c => c.MachineId == standby);
-        await Assert.That(standbyCandidate.IsHolder).IsFalse();
+        await Assert.That(standbyCandidate.IsActiveReporter).IsFalse();
         await Assert.That(standbyCandidate.ReporterError).IsEqualTo("tls_ca_changed");
         await Assert.That(standbyCandidate.Online).IsFalse();
 
-        await Assert.That(detail.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { controller, holder, standby });
-        KubernetesEligibleMachineDto holderEligible = detail.EligibleMachines.Single(m => m.MachineId == holder);
-        await Assert.That(holderEligible.Enrolled).IsTrue();
-        await Assert.That(holderEligible.RemoteCommandsEnabled).IsTrue();
-        await Assert.That(holderEligible.IsPaused).IsFalse();
+        await Assert.That(detail.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { controller, activeReporter, standby });
+        KubernetesEligibleMachineDto activeReporterEligible = detail.EligibleMachines.Single(m => m.MachineId == activeReporter);
+        await Assert.That(activeReporterEligible.Enrolled).IsTrue();
+        await Assert.That(activeReporterEligible.RemoteCommandsEnabled).IsTrue();
+        await Assert.That(activeReporterEligible.IsPaused).IsFalse();
         KubernetesEligibleMachineDto controllerEligible = detail.EligibleMachines.Single(m => m.MachineId == controller);
         await Assert.That(controllerEligible.Enrolled).IsFalse();
         await Assert.That(controllerEligible.RemoteCommandsEnabled).IsFalse();
         await Assert.That(controllerEligible.Online).IsFalse();
+    }
+
+    [Test]
+    [Arguments(90, "active", true)]
+    [Arguments(91, "stale", false)]
+    public async Task GetAsync_ActiveReporterFlagAndReportingState_JudgeTheSnapshotAtTheHandlersOwnReadingOfTheClock(
+        int snapshotAgeMinutes, string expectedState, bool expectedActiveReporter)
+    {
+        // Intent: the page shows the reporting state beside the "Reporting" chip, so both must come from
+        // one reading of the clock. The reader's own clock is set three hours behind the handler's: if the
+        // reader read it for itself, the snapshot would look fresh to it whatever the state says.
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long reporter = await SeedMachineAsync(dbFactory.Context, tenantId, "cp-host");
+        long clusterId = await SeedReportingClusterAsync(
+            dbFactory.Context, tenantId, FingerprintA, reporter, Now.AddMinutes(-snapshotAgeMinutes));
+        await SeedCandidateAsync(dbFactory.Context, tenantId, clusterId, reporter);
+        KubernetesClusterHandler handler = CreateHandler(dbFactory, readerClock: new FakeTimeProvider(Now.AddHours(-3)));
+
+        ServiceResult<KubernetesClusterDetailDto> result = await handler.GetAsync(clusterId, tenantId, CancellationToken.None);
+
+        await Assert.That(result.Data!.ReportingState).IsEqualTo(expectedState);
+        await Assert.That(result.Data.Candidates.Single().IsActiveReporter).IsEqualTo(expectedActiveReporter);
     }
 
     [Test]

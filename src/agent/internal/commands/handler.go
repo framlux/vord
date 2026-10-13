@@ -51,6 +51,13 @@ func (ct CommandType) IsDestructive() bool {
 	return ct == CommandReboot || ct == CommandInstallUpdate
 }
 
+// IsCleanup returns true for the two cluster reporter commands that only remove what the reporter created:
+// unenrol and uninstall. They are the only commands a host with remote commands off still accepts. The match is
+// exact, so a spelling that differs in case is not a cleanup command.
+func (ct CommandType) IsCleanup() bool {
+	return (ct == CommandK8sReporterUnenrol) || (ct == CommandK8sReporterUninstall)
+}
+
 // Command represents a command to be executed.
 type Command struct {
 	Type   CommandType

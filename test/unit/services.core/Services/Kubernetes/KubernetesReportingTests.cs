@@ -19,7 +19,8 @@ public class KubernetesReportingTests
     private static KubernetesCluster Cluster(
         string? reporterError = null,
         bool roleOutdated = false,
-        DateTimeOffset? lastSnapshotReceivedAt = null)
+        DateTimeOffset? lastSnapshotReceivedAt = null,
+        long? activeReporterMachineId = null)
     {
         return new KubernetesCluster
         {
@@ -32,6 +33,7 @@ public class KubernetesReportingTests
             ReporterError = reporterError,
             RoleOutdated = roleOutdated,
             LastSnapshotReceivedAt = lastSnapshotReceivedAt,
+            ActiveReporterMachineId = activeReporterMachineId,
         };
     }
 
@@ -81,6 +83,23 @@ public class KubernetesReportingTests
         ReportingState state = KubernetesReporting.Derive(cluster, [Candidate(1), Candidate(2, "tls_ca_changed")], Now);
 
         await Assert.That(state).IsEqualTo(ReportingState.Error);
+    }
+
+    [Test]
+    public async Task Derive_CandidateWithCopiedState_IsError()
+    {
+        // Intent: a host that holds reporter state copied from another host cannot report, which is as
+        // much a failure of the cluster's reporting as a rejected token, so the cluster shows the error
+        // and the reason names the copied state rather than the cluster.
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now);
+        List<KubernetesReporterCandidate> candidates = [Candidate(1), Candidate(2, "state_copied")];
+
+        ReportingState state = KubernetesReporting.Derive(cluster, candidates, Now);
+        string? error = KubernetesReporting.ReporterErrorOf(
+            cluster, candidates, new Dictionary<long, string> { [1] = "alpha", [2] = "beta" });
+
+        await Assert.That(state).IsEqualTo(ReportingState.Error);
+        await Assert.That(error).IsEqualTo("state_copied");
     }
 
     [Test]
@@ -211,6 +230,67 @@ public class KubernetesReportingTests
     public async Task IsStale_FreshSnapshot_IsFalse()
     {
         await Assert.That(KubernetesReporting.IsStale(Cluster(lastSnapshotReceivedAt: Now.AddMinutes(-1)), [Candidate(1)], Now)).IsFalse();
+    }
+
+    // ========== IsActiveReporter ==========
+
+    [Test]
+    public async Task IsActiveReporter_SenderOfAFreshSnapshot_IsTrue()
+    {
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now.AddMinutes(-1), activeReporterMachineId: 21);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 21, Now)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsActiveReporter_SnapshotExactlyAtTheThreshold_IsTrueWhileItsStateIsStillActive()
+    {
+        // Intent: the flag and the cluster's derived state judge the same snapshot by the same rule, so a
+        // snapshot exactly 90 minutes old is not stale for either.
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now - KubernetesReportingPolicy.StaleThreshold, activeReporterMachineId: 21);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 21, Now)).IsTrue();
+        await Assert.That(KubernetesReporting.Derive(cluster, [Candidate(21)], Now)).IsEqualTo(ReportingState.Active);
+    }
+
+    [Test]
+    public async Task IsActiveReporter_SnapshotOneMinutePastTheThreshold_IsFalseWhileItsStateIsStale()
+    {
+        KubernetesCluster cluster = Cluster(
+            lastSnapshotReceivedAt: Now - KubernetesReportingPolicy.StaleThreshold - TimeSpan.FromMinutes(1), activeReporterMachineId: 21);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 21, Now)).IsFalse();
+        await Assert.That(KubernetesReporting.Derive(cluster, [Candidate(21)], Now)).IsEqualTo(ReportingState.Stale);
+    }
+
+    [Test]
+    public async Task IsActiveReporter_ClusterWithNoSnapshot_IsFalse()
+    {
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: null, activeReporterMachineId: 21);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 21, Now)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsActiveReporter_AnotherMachineThanTheSender_IsFalseEvenWithAFreshSnapshot()
+    {
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now.AddMinutes(-1), activeReporterMachineId: 21);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 22, Now)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsActiveReporter_ClusterWithNoSender_IsFalse()
+    {
+        KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now.AddMinutes(-1), activeReporterMachineId: null);
+
+        await Assert.That(KubernetesReporting.IsActiveReporter(cluster, 21, Now)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsActiveReporter_NullCluster_Throws()
+    {
+        await Assert.That(() => KubernetesReporting.IsActiveReporter(null!, 21, Now)).Throws<ArgumentNullException>();
     }
 
     // ========== ReporterErrorOf ==========

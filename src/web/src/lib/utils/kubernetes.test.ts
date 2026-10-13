@@ -110,11 +110,11 @@ describe('reportingBadge', () => {
 		expect(reportingBadge(state, null).label).toBe(label);
 	});
 
-	it('names the holder of an active cluster', () => {
+	it('names the active reporter of an active cluster', () => {
 		expect(reportingBadge('active', 'cp-1').label).toBe('Active (cp-1)');
 	});
 
-	it('names no holder for any other state', () => {
+	it('names no active reporter for any other state', () => {
 		expect(reportingBadge('stale', 'cp-1').label).toBe('Stale');
 	});
 

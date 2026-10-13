@@ -2268,3 +2268,445 @@ func TestOldestQueuedTelemetry_ReportsTheOldestUndeliveredItemOfThatType(t *test
 		t.Errorf("with every snapshot delivered = found %v, err %v; want none", found, err)
 	}
 }
+
+// testClock is a manually advanced clock for the store, so no test depends on the wall clock.
+type testClock struct {
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.now = c.now.Add(d)
+}
+
+// newClockedStore builds a store on an in-memory database whose timestamps come from the returned clock, which
+// starts at a fixed time.
+func newClockedStore(t *testing.T, maxQueueSize int) (*Store, *testClock) {
+	t.Helper()
+
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+
+	t.Cleanup(func() { database.Close() })
+
+	clock := &testClock{now: time.Date(2026, time.October, 11, 9, 0, 0, 0, time.UTC)}
+
+	return NewStore(database, maxQueueSize, WithClock(clock.Now)), clock
+}
+
+// createdAtOf reads when one queued item was created.
+func createdAtOf(t *testing.T, store *Store, id string) time.Time {
+	t.Helper()
+
+	var created string
+	if err := store.DB().QueryRow("SELECT created_at FROM telemetry_queue WHERE id = ?", id).Scan(&created); err != nil {
+		t.Fatalf("created_at of %s: %v", id, err)
+	}
+
+	parsed, err := time.Parse(time.RFC3339, created)
+	if err != nil {
+		t.Fatalf("parse created_at of %s: %v", id, err)
+	}
+
+	return parsed
+}
+
+// requireOldest fails the test unless OldestQueuedTelemetry reports want for the type.
+func requireOldest(t *testing.T, store *Store, itemType TelemetryType, want time.Time) {
+	t.Helper()
+
+	got, found, err := store.OldestQueuedTelemetry(itemType)
+	if err != nil || found == false {
+		t.Fatalf("OldestQueuedTelemetry(%d) = found %v, err %v; want %v", int(itemType), found, err, want)
+	}
+
+	if got.Equal(want) == false {
+		t.Errorf("OldestQueuedTelemetry(%d) = %v, want %v", int(itemType), got, want)
+	}
+}
+
+// undeliveredSinceRows counts the rows of the undelivered-since table, for one type or for every type.
+func undeliveredSinceRows(t *testing.T, store *Store, itemType *TelemetryType) int {
+	t.Helper()
+
+	query := "SELECT COUNT(*) FROM telemetry_undelivered_since"
+	var args []any
+
+	if itemType != nil {
+		query += " WHERE item_type = ?"
+		args = append(args, int(*itemType))
+	}
+
+	var count int
+	if err := store.DB().QueryRow(query, args...).Scan(&count); err != nil {
+		t.Fatalf("count undelivered-since rows: %v", err)
+	}
+
+	return count
+}
+
+// Intent: a snapshot that keeps being replaced without ever being delivered must keep the age of the first one,
+// or the reporter's health gate could never see it stuck. created_at stays the truth about each row: it feeds
+// the collection time the server stores and the order in which a full queue evicts.
+func TestReplaceTelemetryOfType_KeepsTheAgeOfTheOldestUndeliveredSnapshot(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+	first := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("first", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+
+	clock.Advance(10 * time.Minute)
+	second := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("second", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, first)
+
+	if got := queuedIDs(t, store); got != "second" {
+		t.Errorf("rows = %s, want only the second snapshot", got)
+	}
+
+	if got := createdAtOf(t, store, "second"); got.Equal(second) == false {
+		t.Errorf("created_at of the second snapshot = %v, want its own time %v", got, second)
+	}
+
+	clock.Advance(5 * time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("third", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("third replace: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, first)
+}
+
+// Intent: once the previous snapshot was delivered there is nothing left waiting, so the next one starts a new
+// age instead of inheriting the delivered one's.
+func TestReplaceTelemetryOfType_StartsANewAgeAfterTheSnapshotWasDelivered(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+
+	if err := store.ReplaceTelemetryOfType("first", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"first"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	clock.Advance(20 * time.Minute)
+	second := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("second", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, second)
+}
+
+// Intent: a snapshot the sender holds when it is replaced has not been confirmed delivered, so it counts as
+// undelivered and its age carries over to the replacement.
+func TestReplaceTelemetryOfType_KeepsTheAgeOfASnapshotTheSenderIsHolding(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+	first := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("first", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+	}
+
+	clock.Advance(7 * time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("second", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("second replace: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, first)
+}
+
+// Intent: when the snapshot being replaced was queued without a replacement, there is no record of when it began
+// waiting, so the replacement inherits the oldest of the rows it deleted.
+func TestReplaceTelemetryOfType_InheritsTheCreationTimeOfRowsQueuedWithoutReplacement(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+	oldest := clock.Now()
+
+	if err := store.EnqueueTelemetry("old", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue old: %v", err)
+	}
+
+	clock.Advance(3 * time.Minute)
+
+	if err := store.EnqueueTelemetry("newer", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue newer: %v", err)
+	}
+
+	clock.Advance(3 * time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("fresh", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, oldest)
+}
+
+// Intent: each type keeps its own age. A snapshot replaced after another kind of item was replaced must not take
+// that item's age, and rows queued without replacement report their own creation time.
+func TestReplaceTelemetryOfType_TracksEachTypeSeparately(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+	start := clock.Now()
+
+	if err := store.EnqueueTelemetry("cpu", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue cpu: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("node-1", TelemetryKubernetesNode, `{}`); err != nil {
+		t.Fatalf("replace node: %v", err)
+	}
+
+	clock.Advance(10 * time.Minute)
+	later := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("snap-1", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace snapshot: %v", err)
+	}
+
+	clock.Advance(10 * time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("node-2", TelemetryKubernetesNode, `{}`); err != nil {
+		t.Fatalf("replace node again: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("snap-2", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace snapshot again: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesNode, start)
+	requireOldest(t, store, TelemetryKubernetesCluster, later)
+	requireOldest(t, store, TelemetryCpuUsage, start)
+
+	if got := undeliveredSinceRows(t, store, nil); got != 2 {
+		t.Errorf("undelivered-since rows = %d, want one each for the node report and the snapshot", got)
+	}
+}
+
+// Intent: the age is only recorded when the replace commits. A replace that fails after deleting the old rows
+// leaves the queue and the age table as they were.
+func TestReplaceTelemetryOfType_LeavesTheAgeAloneWhenTheReplaceFails(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+
+	if err := store.EnqueueTelemetry("taken-id", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"taken-id"}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	waiting := clock.Now()
+
+	if err := store.EnqueueTelemetry("waiting", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue waiting: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("taken-id", TelemetryKubernetesCluster, `{}`); err == nil {
+		t.Fatal("ReplaceTelemetryOfType succeeded with an id that is already in the queue")
+	}
+
+	if got := undeliveredSinceRows(t, store, nil); got != 0 {
+		t.Errorf("undelivered-since rows = %d after a failed replace, want none", got)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, waiting)
+}
+
+// Intent: the recorded age is only meaningful while something of the type is waiting. Whichever way the last
+// waiting snapshot leaves the queue, the record goes with it, so a snapshot queued later without a replacement
+// reports its own time and not the age of one that is long gone.
+func TestUndeliveredSince_IsClearedWhenNothingOfTheTypeIsWaiting(t *testing.T) {
+	cases := []struct {
+		name         string
+		maxQueueSize int
+		leave        func(t *testing.T, store *Store)
+	}{
+		{"delivered", 0, func(t *testing.T, store *Store) {
+			if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+				t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+			}
+
+			if err := store.MarkTelemetryCompleted([]string{"snap-2"}); err != nil {
+				t.Fatalf("complete: %v", err)
+			}
+		}},
+		{"set to a final status", 0, func(t *testing.T, store *Store) {
+			if err := store.UpdateTelemetryStatus("snap-2", QueueStatusCompleted); err != nil {
+				t.Fatalf("update status: %v", err)
+			}
+		}},
+		{"deleted by type when the lease is lost", 0, func(t *testing.T, store *Store) {
+			if _, err := store.DeleteTelemetryByType(TelemetryKubernetesCluster); err != nil {
+				t.Fatalf("delete by type: %v", err)
+			}
+		}},
+		{"discarded by the sender as unsendable", 0, func(t *testing.T, store *Store) {
+			if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryKubernetesCluster}, 10); err != nil || len(taken) != 1 {
+				t.Fatalf("dequeue: %v (%d items)", err, len(taken))
+			}
+
+			if deleted, err := store.DiscardTelemetry([]string{"snap-2"}); err != nil || deleted != 1 {
+				t.Fatalf("discard: %d rows, %v", deleted, err)
+			}
+		}},
+		{"cleared by a pause", 0, func(t *testing.T, store *Store) {
+			if err := store.ClearTelemetryQueue(); err != nil {
+				t.Fatalf("clear: %v", err)
+			}
+		}},
+		{"evicted to make room for another kind of item", 1, func(t *testing.T, store *Store) {
+			if err := store.EnqueueTelemetry("cpu", TelemetryCpuUsage, `{}`); err != nil {
+				t.Fatalf("enqueue cpu: %v", err)
+			}
+		}},
+		{"evicted to make room for an ssh session", 1, func(t *testing.T, store *Store) {
+			session := &SSHSession{ID: "ssh-1", User: "root", Action: "login", Timestamp: "2026-10-11T09:00:00Z"}
+			if err := store.InsertSSHSessionAndEnqueue(session, "ssh-event", `{}`); err != nil {
+				t.Fatalf("enqueue ssh session: %v", err)
+			}
+		}},
+		{"evicted by a replace of another kind of item", 1, func(t *testing.T, store *Store) {
+			if err := store.ReplaceTelemetryOfType("node", TelemetryKubernetesNode, `{}`); err != nil {
+				t.Fatalf("replace node: %v", err)
+			}
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, clock := newClockedStore(t, tc.maxQueueSize)
+
+			for _, id := range []string{"snap-1", "snap-2"} {
+				if err := store.ReplaceTelemetryOfType(id, TelemetryKubernetesCluster, `{}`); err != nil {
+					t.Fatalf("replace %s: %v", id, err)
+				}
+
+				clock.Advance(time.Minute)
+			}
+
+			tc.leave(t, store)
+
+			snapshot := TelemetryKubernetesCluster
+			if got := undeliveredSinceRows(t, store, &snapshot); got != 0 {
+				t.Fatalf("undelivered-since rows for the snapshot type = %d with none waiting, want none", got)
+			}
+
+			clock.Advance(30 * time.Minute)
+			queued := clock.Now()
+
+			if err := store.EnqueueTelemetry("late", TelemetryKubernetesCluster, `{}`); err != nil {
+				t.Fatalf("enqueue late: %v", err)
+			}
+
+			requireOldest(t, store, TelemetryKubernetesCluster, queued)
+		})
+	}
+}
+
+// Intent: the record is not cleared while a snapshot is still waiting. Items of other types leaving the queue,
+// and one of two snapshots being delivered while the other is still waiting, must not shorten the age.
+func TestUndeliveredSince_SurvivesChangesThatLeaveASnapshotWaiting(t *testing.T) {
+	store, clock := newClockedStore(t, 0)
+	first := clock.Now()
+
+	if err := store.ReplaceTelemetryOfType("snap-1", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.EnqueueTelemetry("cpu", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue cpu: %v", err)
+	}
+
+	if err := store.ReplaceTelemetryOfType("snap-2", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace again: %v", err)
+	}
+
+	if err := store.EnqueueTelemetry("snap-3", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("enqueue a second waiting snapshot: %v", err)
+	}
+
+	if taken, err := store.DequeueTelemetryByTypes([]TelemetryType{TelemetryCpuUsage}, 10); err != nil || len(taken) != 1 {
+		t.Fatalf("dequeue cpu: %v (%d items)", err, len(taken))
+	}
+
+	if err := store.MarkTelemetryCompleted([]string{"cpu"}); err != nil {
+		t.Fatalf("complete cpu: %v", err)
+	}
+
+	if _, err := store.DeleteTelemetryByType(TelemetryKubernetesNode); err != nil {
+		t.Fatalf("delete another type: %v", err)
+	}
+
+	if err := store.UpdateTelemetryStatus("snap-3", QueueStatusCompleted); err != nil {
+		t.Fatalf("complete one snapshot: %v", err)
+	}
+
+	requireOldest(t, store, TelemetryKubernetesCluster, first)
+}
+
+// Intent: eviction order follows when each row was created, not the age a replacement inherited, so a full queue
+// drops the genuinely oldest pending item and not the snapshot that merely replaced an older one.
+func TestReplaceTelemetryOfType_EvictsByCreationTimeNotByInheritedAge(t *testing.T) {
+	store, clock := newClockedStore(t, 3)
+
+	if err := store.ReplaceTelemetryOfType("snap-1", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.EnqueueTelemetry("cpu-1", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue cpu-1: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.ReplaceTelemetryOfType("snap-2", TelemetryKubernetesCluster, `{}`); err != nil {
+		t.Fatalf("replace again: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.EnqueueTelemetry("cpu-2", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue cpu-2: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	if err := store.EnqueueTelemetry("cpu-3", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("enqueue cpu-3: %v", err)
+	}
+
+	if got, want := queuedIDs(t, store), "cpu-2,cpu-3,snap-2"; got != want {
+		t.Errorf("rows = %s, want %s: cpu-1 is the oldest row and goes first", got, want)
+	}
+}

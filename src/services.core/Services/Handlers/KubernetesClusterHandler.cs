@@ -106,10 +106,14 @@ public sealed class KubernetesClusterHandler
         IReadOnlyList<KubernetesNodeWithMachine> nodes = await _kubernetesRepo.ListNodesAsync(tenantId.Value, [cluster.Id], ct);
         IReadOnlyList<KubernetesReporterCandidate> candidates = await _kubernetesRepo.ListCandidatesAsync(tenantId.Value, [cluster.Id], ct);
         IReadOnlyDictionary<long, string> machineNames = await LoadMachineNamesAsync(tenantId.Value, [cluster], candidates, ct);
-        KubernetesReporterMachines machines = await _reporterMachines.LoadAsync(tenantId.Value, cluster, nodes, candidates, machineNames, ct);
+
+        // One reading serves the candidates' active reporter flag and the cluster's reporting state, so the two
+        // always judge the snapshot at the same instant.
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        KubernetesReporterMachines machines = await _reporterMachines.LoadAsync(tenantId.Value, cluster, nodes, candidates, machineNames, now, ct);
 
         return ServiceResult<KubernetesClusterDetailDto>.Ok(
-            KubernetesClusterMapper.ToDetail(cluster, nodes, candidates, machineNames, machines, _timeProvider.GetUtcNow()));
+            KubernetesClusterMapper.ToDetail(cluster, nodes, candidates, machineNames, machines, now));
     }
 
     /// <summary>
@@ -183,8 +187,8 @@ public sealed class KubernetesClusterHandler
     }
 
     /// <summary>
-    /// Loads, in one query, the names of the machines that hold the clusters' reporter Leases and of the
-    /// candidates, which the reporting state and the holder are described with.
+    /// Loads, in one query, the names of the machines that last sent the clusters' snapshots and of the
+    /// candidates, which the reporting state and the last sender are described with.
     /// </summary>
     private async Task<IReadOnlyDictionary<long, string>> LoadMachineNamesAsync(
         int tenantId,

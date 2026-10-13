@@ -95,6 +95,10 @@ func migrate(conn *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_telemetry_queue_status ON telemetry_queue(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_telemetry_queue_type ON telemetry_queue(item_type)`,
+		`CREATE TABLE IF NOT EXISTS telemetry_undelivered_since (
+			item_type INTEGER PRIMARY KEY,
+			since TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS server_config (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			config_json TEXT NOT NULL,

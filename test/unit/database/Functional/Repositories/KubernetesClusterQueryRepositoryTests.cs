@@ -459,33 +459,54 @@ public class KubernetesClusterQueryRepositoryTests
     }
 
     [Test]
-    public async Task GetMachineIdsLinkedToOtherClusters_ReturnsMachinesThatAreNodesOrCandidatesOfAnotherCluster()
+    public async Task GetMachineIdsLinkedToOtherClusters_ReturnsEveryMachineThatIsANodeOrCandidateOfAnotherCluster()
     {
+        // Intent: with no list of machines to look up, the answer is every machine of the tenant that is
+        // linked to a cluster other than the one asked about, through a node or through a candidate row.
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
         int tenantId = await SeedTenantAsync(dbFactory.Context);
         long own = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
         long other = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long third = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintB);
         long nodeElsewhere = await SeedMachineAsync(dbFactory.Context, tenantId, "node-elsewhere");
         long candidateElsewhere = await SeedMachineAsync(dbFactory.Context, tenantId, "candidate-elsewhere");
+        long nodeOfThird = await SeedMachineAsync(dbFactory.Context, tenantId, "node-of-third");
         long nodeHere = await SeedMachineAsync(dbFactory.Context, tenantId, "node-here");
         long candidateHere = await SeedMachineAsync(dbFactory.Context, tenantId, "candidate-here");
-        long unlinked = await SeedMachineAsync(dbFactory.Context, tenantId, "unlinked");
-        long notAsked = await SeedMachineAsync(dbFactory.Context, tenantId, "not-asked");
+        await SeedMachineAsync(dbFactory.Context, tenantId, "unlinked");
         await SeedNodeAsync(dbFactory.Context, tenantId, other, "n-elsewhere", nodeElsewhere);
+        await SeedNodeAsync(dbFactory.Context, tenantId, third, "n-third", nodeOfThird);
         await SeedNodeAsync(dbFactory.Context, tenantId, own, "n-here", nodeHere);
-        await SeedNodeAsync(dbFactory.Context, tenantId, other, "n-not-asked", notAsked);
         await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = other, MachineId = candidateElsewhere, LastReportAt = T0 });
         await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = own, MachineId = candidateHere, LastReportAt = T0 });
 
-        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(
-            tenantId, own, [nodeElsewhere, candidateElsewhere, nodeHere, candidateHere, unlinked], CancellationToken.None);
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
 
-        await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere }.Order().ToArray());
+        await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere, nodeOfThird }.Order().ToArray());
     }
 
     [Test]
-    public async Task GetMachineIdsLinkedToOtherClusters_MachineLinkedByBothARowOfAnotherClusterAndOwnRow_IsReportedOnce()
+    public async Task GetMachineIdsLinkedToOtherClusters_MachineLinkedHereAndElsewhere_IsStillReported()
+    {
+        // Intent: the repository reports only what is linked elsewhere and leaves the machine's own
+        // cluster to the caller, which keeps its members whatever else their rows say.
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
+        int tenantId = await SeedTenantAsync(dbFactory.Context);
+        long own = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long other = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long machine = await SeedMachineAsync(dbFactory.Context, tenantId, "both");
+        await SeedNodeAsync(dbFactory.Context, tenantId, own, "n-here", machine);
+        await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = other, MachineId = machine, LastReportAt = T0 });
+
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
+
+        await Assert.That(linked.ToArray()).IsEquivalentTo(new[] { machine });
+    }
+
+    [Test]
+    public async Task GetMachineIdsLinkedToOtherClusters_MachineLinkedByANodeAndACandidateOfOtherClusters_IsReportedOnce()
     {
         // Intent: a machine that is a node of one cluster and a candidate of another (the transient state
         // the projection repairs) must not appear twice, whatever a caller does with the answer.
@@ -499,30 +520,30 @@ public class KubernetesClusterQueryRepositoryTests
         await SeedNodeAsync(dbFactory.Context, tenantId, first, "n", machine);
         await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = tenantId, ClusterId = second, MachineId = machine, LastReportAt = T0 });
 
-        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, [machine], CancellationToken.None);
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
 
         await Assert.That(linked.ToArray()).IsEquivalentTo(new[] { machine });
         await Assert.That(linked.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task GetMachineIdsLinkedToOtherClusters_AnotherTenantsRowsAndNoMachineIds_AreIgnored()
+    public async Task GetMachineIdsLinkedToOtherClusters_AnotherTenantsRowsAndUnlinkedNodes_AreIgnored()
     {
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = CreateRepo(dbFactory);
         int tenantId = await SeedTenantAsync(dbFactory.Context);
         int otherTenantId = await SeedTenantAsync(dbFactory.Context);
         long own = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
+        long sibling = await SeedClusterAsync(dbFactory.Context, tenantId, FingerprintA);
         long foreignCluster = await SeedClusterAsync(dbFactory.Context, otherTenantId, FingerprintA);
         long machine = await SeedMachineAsync(dbFactory.Context, tenantId, "machine");
         await SeedNodeAsync(dbFactory.Context, otherTenantId, foreignCluster, "foreign-node", machine);
         await dbFactory.Context.InsertAsync(new KubernetesReporterCandidate { TenantId = otherTenantId, ClusterId = foreignCluster, MachineId = machine, LastReportAt = T0 });
+        await SeedNodeAsync(dbFactory.Context, tenantId, sibling, "agentless-node");
 
-        IReadOnlyCollection<long> foreign = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, [machine], CancellationToken.None);
-        IReadOnlyCollection<long> none = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, [], CancellationToken.None);
+        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
 
-        await Assert.That(foreign.Count).IsEqualTo(0);
-        await Assert.That(none.Count).IsEqualTo(0);
+        await Assert.That(linked.Count).IsEqualTo(0);
     }
 
     private static async Task InsertKubernetesTelemetryAsync(

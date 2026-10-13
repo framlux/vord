@@ -44,6 +44,20 @@ public interface IKubernetesInventoryRepository
         long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, int batchSize, CancellationToken ct);
 
     /// <summary>
+    /// Returns the server receipt time of the next row <see cref="GetKubernetesTelemetryBatchAsync"/>
+    /// would return after the same cursor and bounds, which is the oldest row the projector has not yet
+    /// applied, or null when it has none. It repeats the batch read's predicates exactly and takes the
+    /// first row by id, as the batch does, instead of the minimum receipt time, so it never has to visit
+    /// every unprojected row.
+    /// </summary>
+    /// <param name="afterId">Only rows with a greater id count.</param>
+    /// <param name="receivedAfter">The start of the read window, exclusive.</param>
+    /// <param name="visibleBefore">The latest server receipt time of a row that counts, inclusive.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task<DateTimeOffset?> GetOldestUnprojectedKubernetesReceiptAsync(
+        long afterId, DateTimeOffset receivedAfter, DateTimeOffset visibleBefore, CancellationToken ct);
+
+    /// <summary>
     /// Applies one local report in its own transaction under the tenant's Kubernetes lock: resolves the
     /// machine into a cluster by established membership, through a node or a reporter candidate row, or
     /// by CA fingerprint (a machine whose node reports the CA of exactly one other cluster moves to
@@ -122,9 +136,9 @@ public interface IKubernetesInventoryRepository
     /// <item>
     /// A cluster with reporter state, no candidates and no snapshot newer than
     /// <see cref="KubernetesReportingPolicy.StaleThreshold"/> goes back to its local state: nodes no
-    /// local report ever described are deleted, the other nodes lose their reporter columns, and the
-    /// cluster loses its reporter columns and Lease epoch. A cluster still receiving snapshots is
-    /// never reverted.
+    /// local report ever described and nodes no machine is linked to are deleted, the other nodes lose
+    /// their reporter columns, and the cluster loses its reporter columns and Lease epoch. A cluster
+    /// still receiving snapshots is never reverted.
     /// </item>
     /// <item>A cluster with no nodes and no candidates is deleted.</item>
     /// </list>
@@ -201,17 +215,17 @@ public interface IKubernetesInventoryRepository
         int tenantId, IReadOnlyCollection<long> clusterIds, CancellationToken ct);
 
     /// <summary>
-    /// Returns which of the given machines are already a node or a reporter candidate of a different
-    /// cluster than <paramref name="clusterId"/>, in one query. Only the tenant's own rows are read. It
-    /// tells a machine that merely holds a CA shared by several clusters from one that is known to belong
-    /// to another of them.
+    /// Returns every machine of the tenant that is a node or a reporter candidate of a cluster other than
+    /// <paramref name="clusterId"/>, in one query that carries no list of machines. A machine that is also
+    /// linked to <paramref name="clusterId"/> is still returned, because this reports only its other
+    /// links; the caller sets its own cluster's members aside. Only the tenant's own rows are read, and a
+    /// node that no machine is linked to adds nothing.
     /// </summary>
     /// <param name="tenantId">The tenant the nodes and candidate rows must belong to.</param>
-    /// <param name="clusterId">The cluster the machines are being considered for; its own rows do not count.</param>
-    /// <param name="machineIds">The machines to look up.</param>
+    /// <param name="clusterId">The cluster being considered; its own rows do not count.</param>
     /// <param name="ct">A cancellation token.</param>
     Task<IReadOnlyCollection<long>> GetMachineIdsLinkedToOtherClustersAsync(
-        int tenantId, long clusterId, IReadOnlyCollection<long> machineIds, CancellationToken ct);
+        int tenantId, long clusterId, CancellationToken ct);
 
     /// <summary>
     /// Returns the names of the given machines in one query. Only machines of the tenant are

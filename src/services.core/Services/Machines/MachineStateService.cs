@@ -26,19 +26,23 @@ public sealed class MachineStateService : IMachineStateService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<MachineStateService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateService"/> class.
     /// </summary>
-    public MachineStateService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics, ILogger<MachineStateService> logger)
+    public MachineStateService(
+        IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics, TimeProvider timeProvider, ILogger<MachineStateService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _quotaPauseMetrics = quotaPauseMetrics;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -218,7 +222,7 @@ public sealed class MachineStateService : IMachineStateService
         KubernetesNodePayload? kubernetesNode = DeserializePayload<KubernetesNodePayload>(latestByType, TelemetryTypeIds.KubernetesNode);
 
         MachineKubernetesDto? kubernetes = await MachineKubernetesBuilder.BuildAsync(
-            kubernetesRepo, tenantId.Value, machine.Id, machine.Name, kubernetesNode, ct);
+            kubernetesRepo, tenantId.Value, machine.Id, machine.Name, kubernetesNode, _timeProvider.GetUtcNow(), ct);
 
         List<ServiceEntryDto> failedServices = services?.Services
             .Where(s => string.Equals(s.ActiveState, "failed", StringComparison.OrdinalIgnoreCase))

@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineType, OperatingSystem } from '$lib/api/types';
 import type {
@@ -21,7 +21,8 @@ const { api, signPayload, getLocalKeys } = vi.hoisted(() => ({
 		getSigningKeys: vi.fn(),
 		getCommandHistory: vi.fn(),
 		getMachineAuthorizedKeys: vi.fn(),
-		getMachineStatus: vi.fn()
+		getMachineStatus: vi.fn(),
+		authorizeMachineKey: vi.fn()
 	},
 	signPayload: vi.fn(),
 	getLocalKeys: vi.fn()
@@ -46,6 +47,7 @@ vi.mock('$lib/api/client', () => {
 			getCommandHistory = api.getCommandHistory;
 			getMachineAuthorizedKeys = api.getMachineAuthorizedKeys;
 			getMachineStatus = api.getMachineStatus;
+			authorizeMachineKey = api.authorizeMachineKey;
 		}
 	};
 });
@@ -146,8 +148,8 @@ const accepted: CommandDto = {
 	resultMessage: null
 };
 
-async function openCommandsTab() {
-	render(MachinePage, {
+function renderPage(tier: string = subscription.tier) {
+	return render(MachinePage, {
 		props: {
 			data: {
 				machine,
@@ -155,34 +157,40 @@ async function openCommandsTab() {
 				authorizedKeys: [authorization],
 				machineAlertRules: [],
 				allAlertRules: [],
-				subscription,
+				subscription: { ...subscription, tier },
 				user
 			}
 		}
 	});
+}
+
+async function openCommandsTab() {
+	renderPage();
 
 	await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
 	await screen.findByRole('button', { name: 'Send' });
 }
 
+function arrangeMocks() {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(new Date('2026-10-12T09:30:00.123Z'));
+	for (const fn of Object.values(api)) {
+		fn.mockReset();
+	}
+	api.getSigningKeys.mockResolvedValue({ keys: [serverKey], activeCount: 1, maxKeys: 5 });
+	api.getCommandHistory.mockResolvedValue([]);
+	api.getMachineAuthorizedKeys.mockResolvedValue([authorization]);
+	api.sendCommand.mockResolvedValue(accepted);
+	signPayload.mockReset();
+	signPayload.mockResolvedValue('SIGNATURE');
+	getLocalKeys.mockReset();
+	getLocalKeys.mockResolvedValue([
+		{ id: 3, label: 'Laptop', publicKeyBase64: 'PUBLIC-A', createdAt: '2026-10-01T00:00:00Z' }
+	]);
+}
+
 describe('machine page commands', () => {
-	beforeEach(() => {
-		vi.useFakeTimers({ toFake: ['Date'] });
-		vi.setSystemTime(new Date('2026-10-12T09:30:00.123Z'));
-		for (const fn of Object.values(api)) {
-			fn.mockReset();
-		}
-		api.getSigningKeys.mockResolvedValue({ keys: [serverKey], activeCount: 1, maxKeys: 5 });
-		api.getCommandHistory.mockResolvedValue([]);
-		api.getMachineAuthorizedKeys.mockResolvedValue([authorization]);
-		api.sendCommand.mockResolvedValue(accepted);
-		signPayload.mockReset();
-		signPayload.mockResolvedValue('SIGNATURE');
-		getLocalKeys.mockReset();
-		getLocalKeys.mockResolvedValue([
-			{ id: 3, label: 'Laptop', publicKeyBase64: 'PUBLIC-A', createdAt: '2026-10-01T00:00:00Z' }
-		]);
-	});
+	beforeEach(arrangeMocks);
 
 	afterEach(() => {
 		vi.useRealTimers();
@@ -230,5 +238,402 @@ describe('machine page commands', () => {
 
 		expect(await screen.findByText('Remote commands are not enabled on this machine')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+	});
+});
+
+async function chooseCommand(type: string) {
+	await fireEvent.change(screen.getByLabelText('Command'), { target: { value: type } });
+}
+
+async function sentParams() {
+	await waitFor(() => expect(api.sendCommand).toHaveBeenCalledTimes(1));
+	const request = api.sendCommand.mock.calls[0][0];
+	const signed = (JSON.parse(request.canonicalPayload) as { params: unknown }).params;
+
+	return { signed, sent: request.params === null ? null : (JSON.parse(request.params) as unknown) };
+}
+
+describe('machine page command parameters', () => {
+	beforeEach(arrangeMocks);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it.each(['reboot', 'check_updates', 'install_updates'])('shows no parameter fields for %s', async (type) => {
+		await openCommandsTab();
+
+		await chooseCommand(type);
+
+		expect(screen.queryByLabelText('PID')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Force (SIGKILL immediately)')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Session ID')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+	});
+
+	it('signs an empty params object and sends null for a command without parameters', async () => {
+		await openCommandsTab();
+
+		await chooseCommand('check_updates');
+		await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+		expect(await sentParams()).toEqual({ signed: {}, sent: null });
+	});
+
+	describe('Kill Process', () => {
+		it('shows a PID field and a force checkbox, and keeps Send disabled until a PID is entered', async () => {
+			await openCommandsTab();
+
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).toBeInTheDocument();
+			expect(screen.getByLabelText('Force (SIGKILL immediately)')).not.toBeChecked();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it.each(['0', '100', 'abc', '-5', '4 2', '1e3', '4194305', '4294967297'])('keeps Send disabled for the PID %j', async (pid) => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: pid } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+			expect(screen.getByLabelText('PID')).toBeInvalid();
+			expect(api.sendCommand).not.toHaveBeenCalled();
+		});
+
+		it('says why a PID is refused, and does not scold before anything is typed', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).not.toBeInvalid();
+			expect(screen.getByLabelText('PID')).not.toHaveAccessibleDescription(/101 to 4194304/);
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '100' } });
+
+			expect(screen.getByLabelText('PID')).toHaveAccessibleDescription(/101 to 4194304/);
+		});
+
+		it('signs and sends the pid alone when force is not ticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			const { signed, sent } = await sentParams();
+
+			expect(api.sendCommand.mock.calls[0][0]).toMatchObject({ machineId: 7, commandType: 'kill_process' });
+			expect(signed).toEqual({ pid: '4242' });
+			expect(sent).toEqual({ pid: '4242' });
+			expect(signed).not.toHaveProperty('force');
+		});
+
+		it('accepts the highest pid Linux hands out', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4194304' } });
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4194304' }, sent: { pid: '4194304' } });
+		});
+
+		it('trims pasted whitespace around the pid before validating and signing it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '  4242 ' } });
+
+			expect(screen.getByLabelText('PID')).not.toBeInvalid();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4242' }, sent: { pid: '4242' } });
+		});
+
+		it('still refuses a pid with whitespace inside it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: ' 42 42 ' } });
+
+			expect(screen.getByLabelText('PID')).toBeInvalid();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it('adds force="true" to both the signed payload and the request when the box is ticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({
+				signed: { pid: '4242', force: 'true' },
+				sent: { pid: '4242', force: 'true' }
+			});
+		});
+
+		it('leaves force out again once the box is unticked', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { pid: '4242' }, sent: { pid: '4242' } });
+		});
+	});
+
+	describe('Kill Session', () => {
+		it('shows a Session ID field with its helper text, and keeps Send disabled until one is entered', async () => {
+			await openCommandsTab();
+
+			await chooseCommand('kill_session');
+
+			const field = screen.getByLabelText('Session ID');
+
+			expect(field).toBeInTheDocument();
+			expect(field).toHaveAccessibleDescription('The loginctl session id; run loginctl list-sessions on the host');
+			expect(screen.queryByLabelText('PID')).not.toBeInTheDocument();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it.each(['-h', '--help', '_x', 'a b', 'a;b', 'a/b'])('keeps Send disabled for the session id %j', async (id) => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: id } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+			expect(screen.getByLabelText('Session ID')).toBeInvalid();
+			expect(api.sendCommand).not.toHaveBeenCalled();
+		});
+
+		it('trims pasted whitespace around the session id before validating and signing it', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: '  c12   ' } });
+
+			expect(screen.getByLabelText('Session ID')).not.toBeInvalid();
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(await sentParams()).toEqual({ signed: { session_id: 'c12' }, sent: { session_id: 'c12' } });
+		});
+
+		it('keeps Send disabled for a field that holds only whitespace', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: '   ' } });
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it('signs and sends the session id', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_session');
+
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: 'c12' } });
+			await fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+			expect(api.sendCommand.mock.calls[0][0]).toMatchObject({ machineId: 7, commandType: 'kill_session' });
+			expect(await sentParams()).toEqual({ signed: { session_id: 'c12' }, sent: { session_id: 'c12' } });
+		});
+	});
+
+	describe('layout', () => {
+		it.each([
+			['kill_process', 'PID'],
+			['kill_process', 'Force (SIGKILL immediately)'],
+			['kill_session', 'Session ID']
+		])('puts the %s field "%s" before the Send button it gates', async (type, label) => {
+			await openCommandsTab();
+			await chooseCommand(type);
+
+			const field = screen.getByLabelText(label);
+			const send = screen.getByRole('button', { name: 'Send' });
+
+			expect(field.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		});
+	});
+
+	describe('changing the command', () => {
+		it('clears the fields, so a pid typed for Kill Process is not carried to Kill Session or back', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+			await fireEvent.input(screen.getByLabelText('PID'), { target: { value: '4242' } });
+			await fireEvent.click(screen.getByLabelText('Force (SIGKILL immediately)'));
+
+			await chooseCommand('kill_session');
+			await fireEvent.input(screen.getByLabelText('Session ID'), { target: { value: 'c12' } });
+			await chooseCommand('kill_process');
+
+			expect(screen.getByLabelText('PID')).toHaveValue('');
+			expect(screen.getByLabelText('Force (SIGKILL immediately)')).not.toBeChecked();
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+
+			await chooseCommand('kill_session');
+
+			expect(screen.getByLabelText('Session ID')).toHaveValue('');
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+		});
+
+		it('enables Send again for a command without parameters', async () => {
+			await openCommandsTab();
+			await chooseCommand('kill_process');
+			expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+
+			await chooseCommand('reboot');
+
+			expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+		});
+	});
+});
+
+describe('machine page tabs by tier', () => {
+	const teamNotice = 'Remote commands require a Team subscription.';
+
+	beforeEach(arrangeMocks);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it.each(['Free', 'Pro', 'Team', 'Enterprise'])(
+		'shows the Authorized Keys tab on the %s tier, with its form and its keys and no upgrade notice',
+		async (tier) => {
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByLabelText('Signing Key')).toBeInTheDocument();
+			expect(panel.getByRole('button', { name: 'Authorize' })).toBeInTheDocument();
+			expect(panel.getByRole('cell', { name: 'Laptop' })).toBeInTheDocument();
+			expect(panel.queryByText(teamNotice, { exact: false })).not.toBeInTheDocument();
+			expect(panel.queryByRole('link', { name: 'Upgrade your subscription' })).not.toBeInTheDocument();
+			expect(panel.queryByRole('alert')).not.toBeInTheDocument();
+		}
+	);
+
+	it.each(['Free', 'Pro'])(
+		'tells the %s tier what authorized keys are for: cluster reporting on every plan, other commands on Team',
+		async (tier) => {
+			api.getMachineAuthorizedKeys.mockResolvedValue([]);
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByText('No authorized keys')).toBeInTheDocument();
+			expect(panel.getByText(/Signing keys authorized to sign commands for this machine/)).toHaveTextContent(
+				'On every plan they sign cluster reporting commands; other remote commands need a Team subscription.'
+			);
+			expect(panel.getByText(/Authorize a signing key to sign cluster reporting commands/)).toBeInTheDocument();
+			expect(panel.queryByText(/authorized to send remote commands/)).not.toBeInTheDocument();
+			expect(panel.queryByText(/to enable remote commands/)).not.toBeInTheDocument();
+		}
+	);
+
+	it.each(['Team', 'Enterprise'])('keeps the remote commands wording on the Authorized Keys tab for the %s tier', async (tier) => {
+		api.getMachineAuthorizedKeys.mockResolvedValue([]);
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+		const panel = within(screen.getByRole('tabpanel'));
+
+		expect(await panel.findByText('No authorized keys')).toBeInTheDocument();
+		expect(panel.getByText(/Signing keys authorized to send remote commands to this machine/)).toBeInTheDocument();
+		expect(panel.getByText(/Authorize a signing key to enable remote commands/)).toBeInTheDocument();
+		expect(panel.queryByText(/cluster reporting/)).not.toBeInTheDocument();
+	});
+
+	it('authorizes a signing key on the Pro tier', async () => {
+		const secondKey: SigningKeyDto = { ...serverKey, id: 42, label: 'Desk', fingerprint: 'fp-b', publicKey: 'PUBLIC-B' };
+		api.getSigningKeys.mockResolvedValue({ keys: [serverKey, secondKey], activeCount: 2, maxKeys: 5 });
+		api.authorizeMachineKey.mockResolvedValue(undefined);
+		renderPage('Pro');
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+		await screen.findByRole('option', { name: /Desk/ });
+		await fireEvent.change(screen.getByLabelText('Signing Key'), { target: { value: '42' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Authorize' }));
+
+		await waitFor(() => expect(api.authorizeMachineKey).toHaveBeenCalledWith(7, 42));
+	});
+
+	it.each(['Free', 'Pro'])('still shows the Team upgrade notice on the Commands tab on the %s tier', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		const notice = await within(screen.getByRole('tabpanel')).findByRole('alert');
+
+		expect(notice).toHaveTextContent(teamNotice);
+		expect(within(notice).getByRole('link', { name: 'Upgrade your subscription' })).toHaveAttribute(
+			'href',
+			'/settings/billing'
+		);
+		expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+	});
+
+	it.each(['Free', 'Pro'])(
+		'shows the command history on the %s tier beside the upgrade notice, because that is where a reporter command\'s outcome is recorded',
+		async (tier) => {
+			api.getCommandHistory.mockResolvedValue([
+				{
+					...accepted,
+					id: 2,
+					commandType: 'k8s_reporter_uninstall',
+					status: 'Rejected',
+					resultMessage: 'remote commands are disabled on this host'
+				}
+			]);
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByRole('heading', { name: 'Command History' })).toBeInTheDocument();
+			expect(await panel.findByRole('cell', { name: 'k8s_reporter_uninstall' })).toBeInTheDocument();
+			expect(panel.getByText('Rejected')).toBeInTheDocument();
+			expect(panel.getByRole('cell', { name: 'remote commands are disabled on this host' })).toBeInTheDocument();
+			expect(panel.getByRole('alert')).toHaveTextContent(teamNotice);
+			expect(panel.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+			expect(api.getCommandHistory).toHaveBeenCalledWith(7);
+		}
+	);
+
+	it.each(['Free', 'Pro'])('says no commands were sent yet on the %s tier when the history is empty', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		const panel = within(screen.getByRole('tabpanel'));
+
+		expect(await panel.findByText('No commands sent to this machine yet.')).toBeInTheDocument();
+		expect(panel.getByRole('alert')).toHaveTextContent(teamNotice);
+	});
+
+	it.each(['Team', 'Enterprise'])('gives the %s tier the Commands tab form and history without the notice', async (tier) => {
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+		expect(screen.getByRole('heading', { name: 'Command History' })).toBeInTheDocument();
+		expect(screen.queryByText(teamNotice, { exact: false })).not.toBeInTheDocument();
 	});
 });

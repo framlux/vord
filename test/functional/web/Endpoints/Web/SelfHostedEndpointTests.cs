@@ -426,7 +426,7 @@ public sealed class SelfHostedEndpointTests
 
             HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.MachineAdmin);
 
-            string payload = "{}";
+            string payload = TestCanonicalPayload.Build("reboot", machineId: machineId, tenantId: tenantId, userId: userId);
             byte[] signature = NSec.Cryptography.SignatureAlgorithm.Ed25519.Sign(
                 privateKey, Encoding.UTF8.GetBytes(payload));
 

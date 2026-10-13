@@ -88,14 +88,8 @@ public sealed class KubernetesReporterMachineReaderTests
 
                 return Task.FromResult(asked.ToDictionary(id => id, id => _capabilities.GetValueOrDefault(id)));
             });
-        _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(
-                TenantId, ClusterId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                IReadOnlyCollection<long> asked = call.ArgAt<IReadOnlyCollection<long>>(2);
-
-                return (IReadOnlyCollection<long>)_linkedToOtherClusters.Where(asked.Contains).ToList();
-            });
+        _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>())
+            .Returns(_ => (IReadOnlyCollection<long>)_linkedToOtherClusters.ToList());
         _signingKeyRepo.GetActiveSigningKeyIdsForMachinesAsync(TenantId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
@@ -117,7 +111,7 @@ public sealed class KubernetesReporterMachineReaderTests
             NullLogger<KubernetesReporterMachineReader>.Instance);
     }
 
-    private static KubernetesCluster Cluster(long? holder = null)
+    private static KubernetesCluster Cluster(long? activeReporter = null, DateTimeOffset? lastSnapshotReceivedAt = null)
     {
         return new KubernetesCluster
         {
@@ -127,7 +121,8 @@ public sealed class KubernetesReporterMachineReaderTests
             Distro = "k3s",
             FirstSeenAt = Now.AddDays(-2),
             LastSeenAt = Now,
-            ActiveReporterMachineId = holder,
+            ActiveReporterMachineId = activeReporter,
+            LastSnapshotReceivedAt = lastSnapshotReceivedAt,
         };
     }
 
@@ -138,9 +133,10 @@ public sealed class KubernetesReporterMachineReaderTests
         bool reporterEnrolled = false,
         string distro = "k3s",
         string nodeName = "cp-1",
-        bool hasKubelet = true)
+        bool hasKubelet = true,
+        string? reporterError = null)
     {
-        return JsonSerializer.Serialize(new Dictionary<string, object>
+        Dictionary<string, object> payload = new()
         {
             ["distro"] = distro,
             ["kubelet_version"] = "v1.30.4+k3s1",
@@ -151,7 +147,14 @@ public sealed class KubernetesReporterMachineReaderTests
             ["ca_fingerprint"] = fingerprint,
             ["admin_credential_present"] = adminCredentialPresent,
             ["reporter_enrolled"] = reporterEnrolled,
-        });
+        };
+
+        if (reporterError is not null)
+        {
+            payload["reporter_error"] = reporterError;
+        }
+
+        return JsonSerializer.Serialize(payload);
     }
 
     private static KubernetesNodeWithMachine NodeOf(long? machineId)
@@ -204,7 +207,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(1);
         KubernetesEligibleMachineDto machine = result.EligibleMachines[0];
@@ -214,7 +217,42 @@ public sealed class KubernetesReporterMachineReaderTests
         await Assert.That(machine.IsPaused).IsFalse();
         await Assert.That(machine.RemoteCommandsEnabled).IsTrue();
         await Assert.That(machine.Enrolled).IsTrue();
+        await Assert.That(machine.ReporterError).IsNull();
         await Assert.That(machine.AuthorizedSigningKeyIds.ToArray()).IsEquivalentTo(new[] { 3, 9 });
+    }
+
+    [Test]
+    [Arguments("state_copied", "state_copied")]
+    [Arguments("credentials_rejected", "credentials_rejected")]
+    [Arguments("tls_ca_changed", "tls_ca_changed")]
+    [Arguments("something_else", null)]
+    public async Task LoadAsync_EligibleMachine_CarriesTheReporterErrorOfItsOwnLatestReport(string reported, string? expected)
+    {
+        // Intent: a copied reporter record is only visible in the machine's own report, and the page must
+        // not offer an uninstall through such a host. The error is the normalised one, so a code the agent
+        // does not send is not passed on.
+        Machine(21, "cp-host", PayloadJson(reporterEnrolled: true, reporterError: reported));
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Single().ReporterError).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task LoadAsync_EligibleMachineThatIsACandidateWithAnErrorButWhoseReportHasNone_HasNoReporterError()
+    {
+        // Intent: the entry describes the machine's own latest report, not its candidate row, so the two can
+        // differ while the row lags and the page judges each on its own.
+        Machine(21, "cp-host", PayloadJson(reporterEnrolled: true));
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [CandidateOf(21, "state_copied")], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Single().ReporterError).IsNull();
+        await Assert.That(result.Candidates.Single().ReporterError).IsEqualTo("state_copied");
     }
 
     [Test]
@@ -224,7 +262,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [CandidateOf(22)], new Dictionary<long, string> { [22] = "k0s-controller" }, CancellationToken.None);
+            TenantId, Cluster(), [], [CandidateOf(22)], new Dictionary<long, string> { [22] = "k0s-controller" }, Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 22L });
     }
@@ -238,7 +276,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 23L });
         await Assert.That(result.EligibleMachines[0].Enrolled).IsFalse();
@@ -251,7 +289,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
     }
@@ -265,7 +303,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(25)], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(25)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 25L });
     }
@@ -278,7 +316,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(26), NodeOf(27)], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(26), NodeOf(27)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
     }
@@ -293,7 +331,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(28), NodeOf(29), NodeOf(30), NodeOf(31)], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(28), NodeOf(29), NodeOf(30), NodeOf(31)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
     }
@@ -309,7 +347,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(32)], [CandidateOf(32)], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(32)], [CandidateOf(32)], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 21L });
         await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
@@ -333,9 +371,33 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 25L });
+    }
+
+    [Test]
+    public async Task LoadAsync_MachineLinkedOnlyToAnotherCluster_IsNeverInThePayloadRequest()
+    {
+        // Intent: the report read costs a lookup per machine asked about, so a machine that cannot be
+        // listed is left out of the request instead of being read and discarded afterwards. That covers a
+        // machine linked elsewhere that reports this cluster's CA and one that reports another CA.
+        Machine(21, "member", PayloadJson());
+        Machine(24, "elsewhere-same-ca", PayloadJson());
+        Machine(25, "free", PayloadJson());
+        Machine(26, "elsewhere-other-ca", PayloadJson(fingerprint: OtherFingerprint));
+        _linkedToOtherClusters.AddRange([24, 26]);
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 21L, 25L });
+        await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
+            TenantId,
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 21, 25 })),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -343,47 +405,72 @@ public sealed class KubernetesReporterMachineReaderTests
     {
         // Intent: only a match by fingerprint alone is refused. A machine that is a node or candidate of
         // this cluster is a member whatever else its rows say, because the projection repairs a transient
-        // disagreement in favour of the node.
+        // disagreement in favour of the node. It is still asked about, so its report can be read.
         Machine(26, "node-here", PayloadJson());
         Machine(27, "candidate-here", PayloadJson());
         _linkedToOtherClusters.AddRange([26, 27]);
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [NodeOf(26)], [CandidateOf(27)], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [NodeOf(26)], [CandidateOf(27)], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 26L, 27L });
-    }
-
-    [Test]
-    public async Task LoadAsync_FingerprintOnlyMachines_AreCheckedForOtherClustersInOneBatch()
-    {
-        Machine(21, "member", PayloadJson());
-        Machine(22, "a", PayloadJson());
-        Machine(23, "b", PayloadJson());
-        Machine(24, "c", PayloadJson());
-        Machine(25, "elsewhere-fingerprint", PayloadJson(fingerprint: OtherFingerprint));
-        KubernetesReporterMachineReader reader = CreateReader();
-
-        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
-
-        await _kubernetesRepo.Received(1).GetMachineIdsLinkedToOtherClustersAsync(
+        await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
             TenantId,
-            ClusterId,
-            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 22, 23, 24 })),
+            Arg.Is<IReadOnlyCollection<long>>(ids => ids.OrderBy(i => i).SequenceEqual(new long[] { 26, 27 })),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task LoadAsync_NoFingerprintOnlyMachines_SkipsTheOtherClusterLookup()
+    public async Task LoadAsync_OtherClusterLinks_AreReadOnceBeforeTheReportsAndWithoutAListOfMachines()
     {
+        // Intent: the links to other clusters are one query for the tenant that carries no machine ids, and
+        // it runs before the report read, because its answer is what narrows that read.
         Machine(21, "member", PayloadJson());
+        Machine(22, "a", PayloadJson());
+        Machine(23, "b", PayloadJson());
+        Machine(25, "elsewhere-fingerprint", PayloadJson(fingerprint: OtherFingerprint));
         KubernetesReporterMachineReader reader = CreateReader();
 
-        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), CancellationToken.None);
+        await reader.LoadAsync(TenantId, Cluster(), [NodeOf(21)], [], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            _kubernetesRepo.GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>());
+            _kubernetesRepo.GetLatestKubernetesNodePayloadsAsync(
+                TenantId, Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        });
+        await _kubernetesRepo.Received(1).GetMachineIdsLinkedToOtherClustersAsync(TenantId, ClusterId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task LoadAsync_EveryActiveMachineLinkedToAnotherCluster_ReadsNoReports()
+    {
+        Machine(24, "elsewhere-a", PayloadJson());
+        Machine(25, "elsewhere-b", PayloadJson());
+        _linkedToOtherClusters.AddRange([24, 25]);
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
+
+        await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
+        await _kubernetesRepo.DidNotReceive().GetLatestKubernetesNodePayloadsAsync(
+            Arg.Any<int>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task LoadAsync_TenantWithNoActiveMachines_LooksUpNeitherLinksNorReports()
+    {
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        await reader.LoadAsync(TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await _kubernetesRepo.DidNotReceive().GetMachineIdsLinkedToOtherClustersAsync(
-            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
+        await _kubernetesRepo.DidNotReceive().GetLatestKubernetesNodePayloadsAsync(
+            Arg.Any<int>(), Arg.Any<IReadOnlyCollection<long>>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -396,7 +483,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Select(m => m.MachineId).ToArray()).IsEquivalentTo(new[] { 42L, 43L, 44L, 41L });
         await Assert.That(result.EligibleMachines[0].MachineId).IsEqualTo(42L);
@@ -416,7 +503,7 @@ public sealed class KubernetesReporterMachineReaderTests
         Machine(23, "c", PayloadJson());
         KubernetesReporterMachineReader reader = CreateReader();
 
-        await reader.LoadAsync(TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+        await reader.LoadAsync(TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await _kubernetesRepo.Received(1).GetLatestKubernetesNodePayloadsAsync(
             TenantId,
@@ -435,7 +522,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(0);
         await Assert.That(result.Candidates.Count).IsEqualTo(0);
@@ -457,7 +544,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         Dictionary<long, bool?> enabled = result.EligibleMachines.ToDictionary(m => m.MachineId, m => m.RemoteCommandsEnabled);
         await Assert.That(enabled[21]).IsTrue();
@@ -478,7 +565,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader(TestQuotaPause.With(QuotaCutoff.After(21), 1));
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         KubernetesEligibleMachineDto active = result.EligibleMachines.Single(m => m.MachineId == 21);
         KubernetesEligibleMachineDto paused = result.EligibleMachines.Single(m => m.MachineId == 22);
@@ -494,7 +581,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader(TestQuotaPause.Unavailable());
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Single().IsPaused).IsFalse();
     }
@@ -512,7 +599,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         Dictionary<long, bool> online = result.EligibleMachines.ToDictionary(m => m.MachineId, m => m.Online);
         await Assert.That(online[21]).IsTrue();
@@ -528,7 +615,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Single().AuthorizedSigningKeyIds.Count).IsEqualTo(0);
     }
@@ -550,7 +637,7 @@ public sealed class KubernetesReporterMachineReaderTests
         using MetricCollector<long> failures = new(_meterFactory, VordMeter.Name, CapabilityFailureInstrument);
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(result.EligibleMachines.Count).IsEqualTo(2);
         KubernetesEligibleMachineDto first = result.EligibleMachines.Single(m => m.MachineId == 21);
@@ -576,7 +663,7 @@ public sealed class KubernetesReporterMachineReaderTests
         using MetricCollector<long> failures = new(_meterFactory, VordMeter.Name, CapabilityFailureInstrument);
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None);
+            TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None);
 
         await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
         await Assert.That(result.EligibleMachines.Single(m => m.MachineId == 21).RemoteCommandsEnabled == true).IsTrue();
@@ -591,14 +678,14 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader(capabilityFailure: new OperationCanceledException());
 
         await Assert.That(async () => await reader.LoadAsync(
-                TenantId, Cluster(), [], [], new Dictionary<long, string>(), CancellationToken.None))
+                TenantId, Cluster(), [], [], new Dictionary<long, string>(), Now, CancellationToken.None))
             .Throws<OperationCanceledException>();
     }
 
     // ========== Candidates ==========
 
     [Test]
-    public async Task LoadAsync_Candidates_CarryHolderErrorReportTimeAndOnline()
+    public async Task LoadAsync_Candidates_CarryActiveReporterErrorReportTimeAndOnline()
     {
         Summary(21, 0);
         Summary(22, 3);
@@ -608,25 +695,124 @@ public sealed class KubernetesReporterMachineReaderTests
 
         KubernetesReporterMachines result = await reader.LoadAsync(
             TenantId,
-            Cluster(holder: 21),
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-5)),
             [],
             [CandidateOf(22, "credentials_rejected", reported), CandidateOf(21)],
             names,
+            Now,
             CancellationToken.None);
 
         await Assert.That(result.Candidates.Count).IsEqualTo(2);
-        KubernetesCandidateDto holder = result.Candidates[0];
-        await Assert.That(holder.MachineId).IsEqualTo(21L);
-        await Assert.That(holder.MachineName).IsEqualTo("cp-one");
-        await Assert.That(holder.IsHolder).IsTrue();
-        await Assert.That(holder.ReporterError).IsNull();
-        await Assert.That(holder.Online).IsTrue();
+        KubernetesCandidateDto activeReporter = result.Candidates[0];
+        await Assert.That(activeReporter.MachineId).IsEqualTo(21L);
+        await Assert.That(activeReporter.MachineName).IsEqualTo("cp-one");
+        await Assert.That(activeReporter.IsActiveReporter).IsTrue();
+        await Assert.That(activeReporter.ReporterError).IsNull();
+        await Assert.That(activeReporter.Online).IsTrue();
         KubernetesCandidateDto other = result.Candidates[1];
         await Assert.That(other.MachineId).IsEqualTo(22L);
-        await Assert.That(other.IsHolder).IsFalse();
+        await Assert.That(other.IsActiveReporter).IsFalse();
         await Assert.That(other.ReporterError).IsEqualTo("credentials_rejected");
         await Assert.That(other.LastReportAt).IsEqualTo(reported);
         await Assert.That(other.Online).IsFalse();
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(30)]
+    [Arguments(90)]
+    public async Task LoadAsync_SenderOfASnapshotNoOlderThanTheStaleThreshold_IsTheActiveReporter(int snapshotAgeMinutes)
+    {
+        // Intent: the flag claims the machine is reporting now, which the server can only judge from the
+        // snapshot's age. A snapshot exactly at the threshold is not stale, the same boundary the
+        // cluster's reporting state uses.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-snapshotAgeMinutes)),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            Now,
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsTrue();
+    }
+
+    [Test]
+    public async Task LoadAsync_SenderWhoseSnapshotIsOlderThanTheStaleThreshold_IsNoLongerTheActiveReporter()
+    {
+        // Intent: a snapshot 91 minutes old is stale, so the machine that sent it is not shown as
+        // reporting even though the cluster still names it as the last sender.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-91)),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            Now,
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task LoadAsync_SenderOfNoAcceptedSnapshot_IsNotTheActiveReporter()
+    {
+        // Intent: a cluster that has never accepted a snapshot has nothing to call fresh.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: null),
+            [],
+            [CandidateOf(21)],
+            new Dictionary<long, string> { [21] = "cp-one" },
+            Now,
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single().IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task LoadAsync_ActiveReporterFlag_IsJudgedAtTheTimeTheCallerPassesNotAtTheReadersOwnClock()
+    {
+        // Intent: the cluster's reporting state is derived at the caller's reading of the clock, so the flag
+        // must use that same instant. The reader's own clock says the snapshot is 5 minutes old; at the
+        // time the caller passes it is 3 hours old.
+        KubernetesReporterMachineReader reader = CreateReader();
+        KubernetesCluster cluster = Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-5));
+        Dictionary<long, string> names = new() { [21] = "cp-one" };
+
+        KubernetesReporterMachines atReadersTime = await reader.LoadAsync(
+            TenantId, cluster, [], [CandidateOf(21)], names, Now, CancellationToken.None);
+        KubernetesReporterMachines threeHoursLater = await reader.LoadAsync(
+            TenantId, cluster, [], [CandidateOf(21)], names, Now.AddHours(3), CancellationToken.None);
+
+        await Assert.That(atReadersTime.Candidates.Single().IsActiveReporter).IsTrue();
+        await Assert.That(threeHoursLater.Candidates.Single().IsActiveReporter).IsFalse();
+    }
+
+    [Test]
+    public async Task LoadAsync_CandidateThatDidNotSendTheLatestSnapshot_IsNotTheActiveReporterWhileTheSnapshotIsFresh()
+    {
+        // Intent: a fresh snapshot makes only the machine that sent it the active reporter.
+        KubernetesReporterMachineReader reader = CreateReader();
+
+        KubernetesReporterMachines result = await reader.LoadAsync(
+            TenantId,
+            Cluster(activeReporter: 21, lastSnapshotReceivedAt: Now.AddMinutes(-1)),
+            [],
+            [CandidateOf(21), CandidateOf(22)],
+            new Dictionary<long, string> { [21] = "cp-one", [22] = "cp-two" },
+            Now,
+            CancellationToken.None);
+
+        await Assert.That(result.Candidates.Single(c => c.MachineId == 22).IsActiveReporter).IsFalse();
+        await Assert.That(result.Candidates.Single(c => c.MachineId == 21).IsActiveReporter).IsTrue();
     }
 
     [Test]
@@ -636,7 +822,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(), [], [CandidateOf(1), CandidateOf(2), CandidateOf(4), CandidateOf(3)], names, CancellationToken.None);
+            TenantId, Cluster(), [], [CandidateOf(1), CandidateOf(2), CandidateOf(4), CandidateOf(3)], names, Now, CancellationToken.None);
 
         await Assert.That(result.Candidates.Select(c => c.MachineId).ToArray()).IsEquivalentTo(new[] { 2L, 3L, 4L, 1L });
         await Assert.That(result.Candidates[0].MachineId).IsEqualTo(2L);
@@ -652,7 +838,7 @@ public sealed class KubernetesReporterMachineReaderTests
         KubernetesReporterMachineReader reader = CreateReader();
 
         KubernetesReporterMachines result = await reader.LoadAsync(
-            TenantId, Cluster(holder: 21), [], [CandidateOf(21)], new Dictionary<long, string> { [21] = "cp-one" }, CancellationToken.None);
+            TenantId, Cluster(activeReporter: 21), [], [CandidateOf(21)], new Dictionary<long, string> { [21] = "cp-one" }, Now, CancellationToken.None);
 
         await Assert.That(result.Candidates.Single().Online).IsTrue();
         await Assert.That(result.EligibleMachines.Single().Online).IsTrue();
@@ -664,13 +850,13 @@ public sealed class KubernetesReporterMachineReaderTests
     {
         KubernetesReporterMachineReader reader = CreateReader();
 
-        await Assert.That(async () => await reader.LoadAsync(TenantId, null!, [], [], new Dictionary<long, string>(), CancellationToken.None))
+        await Assert.That(async () => await reader.LoadAsync(TenantId, null!, [], [], new Dictionary<long, string>(), Now, CancellationToken.None))
             .Throws<ArgumentNullException>();
-        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), null!, [], new Dictionary<long, string>(), CancellationToken.None))
+        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), null!, [], new Dictionary<long, string>(), Now, CancellationToken.None))
             .Throws<ArgumentNullException>();
-        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), [], null!, new Dictionary<long, string>(), CancellationToken.None))
+        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), [], null!, new Dictionary<long, string>(), Now, CancellationToken.None))
             .Throws<ArgumentNullException>();
-        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), [], [], null!, CancellationToken.None))
+        await Assert.That(async () => await reader.LoadAsync(TenantId, Cluster(), [], [], null!, Now, CancellationToken.None))
             .Throws<ArgumentNullException>();
     }
 

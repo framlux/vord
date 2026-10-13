@@ -373,7 +373,7 @@ TOML config file location: `/etc/framlux/vord-agent.toml`
 | `-data-dir`              | `VORD_DATA_DIR`               | `data_dir`              | Data directory for SQLite and state  | `/var/lib/vord-agent`  |
 | `-log-level`             | `VORD_LOG_LEVEL`              | `log_level`             | Log level (debug, info, warn, error) | `info`                 |
 | `-insecure`              | `VORD_USE_TLS`                | `use_tls`               | TLS for gRPC (`-insecure` disables)  | `true`                 |
-| `-allow-remote-commands` | `VORD_ALLOW_REMOTE_COMMANDS`  | `allow_remote_commands` | Allow server to execute commands     | `false`                |
+| `-allow-remote-commands` | `VORD_ALLOW_REMOTE_COMMANDS`  | `allow_remote_commands` | Allow server to execute commands (a host that enrolled as a cluster reporter still accepts the cleanup commands) | `false`                |
 | `-registration-token`    | `VORD_REGISTRATION_TOKEN`     | `registration_token`    | Token for tenant registration        | —                      |
 
 ### Migration Runner

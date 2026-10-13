@@ -22,6 +22,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/hwid"
+	"github.com/framlux/vord/internal/machineid"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -399,11 +400,7 @@ func readDMIField(field string) string {
 }
 
 func readMachineID() string {
-	data, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
+	return machineid.Read("/")
 }
 
 func detectSerial() string {

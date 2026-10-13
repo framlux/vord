@@ -21,7 +21,13 @@ public interface IKubernetesCommandEligibility
     /// <param name="machine">The target machine, already loaded for the tenant.</param>
     /// <param name="commandType">The command type exactly as submitted.</param>
     /// <param name="commandParams">The JSON-encoded command parameters as submitted, or null.</param>
+    /// <param name="remoteCommandsEnabled">
+    /// Whether the machine's agent reports the remote commands capability, from the same read the capability
+    /// check uses. Uninstall consults it, because an agent with remote commands off can still be sent a
+    /// cleanup command but only when it enrolled.
+    /// </param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A success result, or a 400 result whose message tells the caller why the command is refused.</returns>
-    Task<ServiceResult<bool>> CheckAsync(int tenantId, Machine machine, string commandType, string? commandParams, CancellationToken ct);
+    Task<ServiceResult<bool>> CheckAsync(
+        int tenantId, Machine machine, string commandType, string? commandParams, bool remoteCommandsEnabled, CancellationToken ct);
 }

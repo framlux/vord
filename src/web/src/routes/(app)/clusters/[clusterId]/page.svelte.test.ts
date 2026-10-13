@@ -82,7 +82,7 @@ function makeCandidate(overrides: Partial<KubernetesCandidateDto> = {}): Kuberne
 	return {
 		machineId: 7,
 		machineName: 'web-01',
-		isHolder: false,
+		isActiveReporter: false,
 		reporterError: null,
 		lastReportAt: '2026-10-11T11:45:00Z',
 		online: true,
@@ -98,6 +98,7 @@ function makeEligible(overrides: Partial<KubernetesEligibleMachineDto> = {}): Ku
 		isPaused: false,
 		remoteCommandsEnabled: true,
 		enrolled: false,
+		reporterError: null,
 		authorizedSigningKeyIds: [41],
 		...overrides
 	};
@@ -542,7 +543,7 @@ describe('cluster detail', () => {
 	});
 
 	describe('reporting status', () => {
-		it('shows the reporting state and the machine that holds the reporter', () => {
+		it('shows the reporting state and the machine that last sent a snapshot', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'active',
@@ -579,12 +580,12 @@ describe('cluster detail', () => {
 			return within(within(screen.getByTestId('reporters-table')).getByRole('row', { name }));
 		}
 
-		it('lists each enrolled machine, marking the holder', () => {
+		it('lists each enrolled machine, marking the active reporter', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'active',
 					candidates: [
-						makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true }),
+						makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true }),
 						makeCandidate({ machineId: 8, machineName: 'web-02' })
 					],
 					eligibleMachines: [
@@ -596,8 +597,8 @@ describe('cluster detail', () => {
 
 			const table = within(screen.getByTestId('reporters-table'));
 
-			expect(within(table.getByRole('row', { name: /web-01/ })).getByText('Holder')).toBeInTheDocument();
-			expect(within(table.getByRole('row', { name: /web-02/ })).queryByText('Holder')).not.toBeInTheDocument();
+			expect(within(table.getByRole('row', { name: /web-01/ })).getByText('Reporting')).toBeInTheDocument();
+			expect(within(table.getByRole('row', { name: /web-02/ })).queryByText('Reporting')).not.toBeInTheDocument();
 			expect(table.getByRole('link', { name: 'web-01' })).toHaveAttribute('href', '/machines/7');
 		});
 
@@ -620,6 +621,22 @@ describe('cluster detail', () => {
 
 			expect(row.getByText('Credentials rejected')).toBeInTheDocument();
 			expect(row.getByText('30m ago')).toBeInTheDocument();
+		});
+
+		it('words the state a candidate copied from another host, with the code as its title', () => {
+			renderPage(
+				makeCluster({
+					reportingState: 'error',
+					reporterError: 'state_copied',
+					candidates: [makeCandidate({ machineName: 'web-01', reporterError: 'state_copied' })]
+				})
+			);
+
+			const row = reporterRow(/web-01/);
+
+			expect(
+				row.getByText('Reporter state was copied from another host; unenrol or re-enrol this host')
+			).toHaveAttribute('title', 'state_copied');
 		});
 
 		it('makes a readable label of an error code it has no wording for, and keeps the code as its title', () => {
@@ -702,17 +719,29 @@ describe('cluster detail', () => {
 			expect(within(dialog).getByText(ENABLE_TEXT)).toBeInTheDocument();
 		});
 
-		it('states that remote commands must be enabled on each host and the plan must include them', async () => {
+		it('states that enrolling needs remote commands on the host and that turning reporting off works on any host', async () => {
 			renderPage(offCluster([makeEligible()]));
 
 			await fireEvent.click(screen.getByRole('button', { name: 'Enable cluster reporting' }));
 
 			const dialog = await screen.findByRole('dialog');
 
-			expect(dialog).toHaveTextContent(
-				'Remote commands must be enabled on each host (allow_remote_commands in the agent config)'
-			);
-			expect(dialog).toHaveTextContent("your plan's tier must include remote commands");
+			expect(
+				within(dialog).getByText(
+					'Enrolling a host needs remote commands enabled on that host (allow_remote_commands in the agent config). ' +
+						'Turning reporting off works on any host.'
+				)
+			).toBeInTheDocument();
+		});
+
+		it('says nothing about the subscription tier, because reporting is open to every plan', async () => {
+			renderPage(offCluster([makeEligible()]));
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Enable cluster reporting' }));
+
+			const dialog = await screen.findByRole('dialog');
+
+			expect(dialog).not.toHaveTextContent(/\btier\b|subscription|\bTeam\b|your plan/i);
 		});
 
 		it('sends nothing until the user confirms', async () => {
@@ -859,14 +888,17 @@ describe('cluster detail', () => {
 			);
 		});
 
-		it('explains the bare Forbidden the API client reports for the Team gate', async () => {
+		it('shows a bare Forbidden as it is, without guessing that the plan is the cause', async () => {
 			api.sendCommand.mockRejectedValue(new ApiError(403, 'Forbidden'));
 			renderPage(offCluster([makeEligible({ machineId: 7, machineName: 'web-01' })]));
 
 			await fireEvent.click(screen.getByRole('button', { name: 'Enable cluster reporting' }));
 			await fireEvent.click(await screen.findByRole('button', { name: 'Enable reporting' }));
 
-			expect(await screen.findByTestId('command-results')).toHaveTextContent('Team subscription');
+			const results = await screen.findByTestId('command-results');
+
+			expect(results).toHaveTextContent('Forbidden');
+			expect(results).not.toHaveTextContent('Team subscription');
 		});
 
 		it('does not send to a host with remote commands disabled or a paused host, and says why', async () => {
@@ -946,7 +978,7 @@ describe('cluster detail', () => {
 				activeReporterMachineName: 'web-02',
 				candidates: [
 					makeCandidate({ machineId: 7, machineName: 'web-01' }),
-					makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true }),
+					makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true }),
 					makeCandidate({ machineId: 9, machineName: 'web-03' })
 				],
 				eligibleMachines: [
@@ -1019,10 +1051,11 @@ describe('cluster detail', () => {
 			expect(reasons.getByText('web-02: Offline')).toBeInTheDocument();
 		});
 
-		it('is disabled, and says why, when the only online machine has remote commands disabled', () => {
+		it('is disabled, and says why, when the only online machine has remote commands disabled and never enrolled', () => {
 			renderPage(
 				activeCluster({
-					eligibleMachines: [makeEligible({ machineId: 7, enrolled: true, remoteCommandsEnabled: false })]
+					candidates: [],
+					eligibleMachines: [makeEligible({ machineId: 7, remoteCommandsEnabled: false })]
 				})
 			);
 
@@ -1032,6 +1065,30 @@ describe('cluster detail', () => {
 					'web-01: Remote commands are disabled on this host (allow_remote_commands in the agent config)'
 				)
 			).toBeInTheDocument();
+		});
+
+		it('is available when the only online machine has remote commands disabled but is a candidate', () => {
+			renderPage(
+				activeCluster({
+					activeReporterMachineId: 7,
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
+					eligibleMachines: [makeEligible({ machineId: 7, remoteCommandsEnabled: false })]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeEnabled();
+			expect(screen.queryByTestId('disable-blocked-machines')).not.toBeInTheDocument();
+		});
+
+		it('is available when the only online machine has remote commands disabled but reports itself enrolled', () => {
+			renderPage(
+				activeCluster({
+					candidates: [],
+					eligibleMachines: [makeEligible({ machineId: 7, enrolled: true, remoteCommandsEnabled: false })]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeEnabled();
 		});
 
 		it('is disabled, and says why, once the keys load and none is authorised on the only online machine', async () => {
@@ -1064,7 +1121,7 @@ describe('cluster detail', () => {
 			expect(screen.queryByTestId('disable-blocked-machines')).not.toBeInTheDocument();
 		});
 
-		it('uninstalls through the holder and unenrols every other online candidate', async () => {
+		it('uninstalls through the active reporter and unenrols every other online candidate', async () => {
 			renderPage(activeCluster());
 
 			const dialog = await openDisableDialog();
@@ -1088,12 +1145,83 @@ describe('cluster detail', () => {
 			expect(sentCommands().filter((c) => c.commandType === 'k8s_reporter_uninstall')).toHaveLength(1);
 		});
 
-		it('uninstalls through another online machine when the holder is offline, and skips the offline one with a reason', async () => {
+		it('does not unenrol anyone when the uninstall is refused, because that would revoke the tokens and leave the cluster objects', async () => {
+			api.sendCommand.mockImplementation(async (request: SendCommandRequest) => {
+				if (request.commandType === 'k8s_reporter_uninstall') {
+					throw new ApiError(409, 'This host is paused');
+				}
+
+				return {};
+			});
+			renderPage(activeCluster());
+
+			const dialog = await openDisableDialog();
+			await fireEvent.click(within(dialog).getByRole('button', { name: 'Disable reporting' }));
+			const results = within(await within(dialog).findByTestId('command-results')).getAllByRole('listitem');
+
+			expect(sentSummary()).toEqual([[8, 'k8s_reporter_uninstall']]);
+			expect(results).toHaveLength(3);
+			expect(results[0]).toHaveTextContent('web-02');
+			expect(results[0]).toHaveAttribute('data-outcome', 'failed');
+			expect(results[0]).toHaveTextContent('This host is paused');
+
+			for (const unsent of results.slice(1)) {
+				expect(unsent).toHaveAttribute('data-outcome', 'failed');
+				expect(unsent).toHaveTextContent('Not sent: the uninstall was refused, so reporting is still on');
+			}
+		});
+
+		it('keeps unenrolling the other machines when one unenrol is refused after the uninstall was accepted', async () => {
+			api.sendCommand.mockImplementation(async (request: SendCommandRequest) => {
+				if (request.machineId === 7) {
+					throw new ApiError(400, 'This machine is not an enrolled reporter');
+				}
+
+				return {};
+			});
+			renderPage(activeCluster());
+
+			const dialog = await openDisableDialog();
+			await fireEvent.click(within(dialog).getByRole('button', { name: 'Disable reporting' }));
+			await within(dialog).findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([
+				[8, 'k8s_reporter_uninstall'],
+				[7, 'k8s_reporter_unenrol'],
+				[9, 'k8s_reporter_unenrol']
+			]);
+		});
+
+		it('does not uninstall through a host whose own report says its record was copied, and lists why', async () => {
+			renderPage(
+				activeCluster({
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
+					eligibleMachines: [
+						makeEligible({
+							machineId: 7,
+							machineName: 'web-01',
+							enrolled: true,
+							remoteCommandsEnabled: false,
+							reporterError: 'state_copied'
+						})
+					]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
+			expect(
+				within(screen.getByTestId('disable-blocked-machines')).getByText(
+					'web-01: Remote commands are disabled on this host (allow_remote_commands in the agent config)'
+				)
+			).toBeInTheDocument();
+		});
+
+		it('uninstalls through another online machine when the active reporter is offline, and skips the offline one with a reason', async () => {
 			renderPage(
 				activeCluster({
 					candidates: [
 						makeCandidate({ machineId: 7, machineName: 'web-01' }),
-						makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true, online: false })
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true, online: false })
 					],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
@@ -1116,18 +1244,62 @@ describe('cluster detail', () => {
 		it('sends nothing, and says why, when the only online machines cannot be sent a command', async () => {
 			renderPage(
 				activeCluster({
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true })],
-					eligibleMachines: [
-						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, remoteCommandsEnabled: false })
-					]
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
+					eligibleMachines: [makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, isPaused: true })]
 				})
 			);
 
 			const dialog = await openDisableDialog();
 
 			expect(within(dialog).getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
-			expect(within(dialog).getByTestId('skipped-machines')).toHaveTextContent('allow_remote_commands');
+			expect(within(dialog).getByTestId('skipped-machines')).toHaveTextContent('This host is paused');
 			expect(api.sendCommand).not.toHaveBeenCalled();
+		});
+
+		it('uninstalls through an active reporter whose remote commands are disabled, and unenrols a candidate in the same state', async () => {
+			renderPage(
+				activeCluster({
+					candidates: [
+						makeCandidate({ machineId: 7, machineName: 'web-01' }),
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true })
+					],
+					eligibleMachines: [
+						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, remoteCommandsEnabled: false }),
+						makeEligible({ machineId: 8, machineName: 'web-02', enrolled: true, remoteCommandsEnabled: false })
+					]
+				})
+			);
+
+			const dialog = await openDisableDialog();
+
+			expect(within(dialog).queryByTestId('skipped-machines')).not.toBeInTheDocument();
+
+			await fireEvent.click(within(dialog).getByRole('button', { name: 'Disable reporting' }));
+			await within(dialog).findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([
+				[8, 'k8s_reporter_uninstall'],
+				[7, 'k8s_reporter_unenrol']
+			]);
+		});
+
+		it('does not uninstall through a machine with remote commands disabled that never enrolled', async () => {
+			renderPage(
+				activeCluster({
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true, online: false })],
+					eligibleMachines: [
+						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, online: false }),
+						makeEligible({ machineId: 9, machineName: 'web-03', remoteCommandsEnabled: false })
+					]
+				})
+			);
+
+			expect(screen.getByRole('button', { name: 'Disable reporting' })).toBeDisabled();
+			expect(
+				within(screen.getByTestId('disable-blocked-machines')).getByText(
+					'web-03: Remote commands are disabled on this host (allow_remote_commands in the agent config)'
+				)
+			).toBeInTheDocument();
 		});
 
 		it('explains that revoking the tokens is the effect, before anything is sent', async () => {
@@ -1312,6 +1484,28 @@ describe('cluster detail', () => {
 			expect(sentSummary()).toEqual([[9, 'k8s_reporter_unenrol']]);
 		});
 
+		it('offers Unenrol on a candidate whose remote commands are disabled, and sends it', async () => {
+			renderPage(
+				makeCluster({
+					reportingState: 'active',
+					candidates: [makeCandidate({ machineId: 9, machineName: 'web-03' })],
+					eligibleMachines: [
+						makeEligible({ machineId: 9, machineName: 'web-03', enrolled: true, remoteCommandsEnabled: false })
+					]
+				})
+			);
+
+			const row = within(screen.getByRole('row', { name: /web-03/ }));
+
+			expect(row.queryByText(/allow_remote_commands/)).not.toBeInTheDocument();
+			expect(row.getByRole('button', { name: 'Unenrol' })).toBeEnabled();
+
+			await fireEvent.click(row.getByRole('button', { name: 'Unenrol' }));
+			await screen.findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([[9, 'k8s_reporter_unenrol']]);
+		});
+
 		it('offers a viewer no Unenrol', () => {
 			renderPage(
 				makeCluster({
@@ -1392,6 +1586,7 @@ describe('cluster detail', () => {
 		it.each([
 			['credentials_rejected', 'credentials-rejected-banner'],
 			['tls_ca_changed', 'tls-ca-changed-banner'],
+			['state_copied', 'state-copied-banner'],
 			['api_unreachable', 'api-unreachable-banner'],
 			['namespace_terminating', 'namespace-terminating-banner']
 		])('shows the banner for %s', (reporterError, testId) => {
@@ -1422,6 +1617,28 @@ describe('cluster detail', () => {
 			expect(sentSummary()).toEqual([[7, 'k8s_reporter_enrol']]);
 		});
 
+		it('re-enrols only the host whose reporter state was copied when Re-enrol is pressed', async () => {
+			renderPage(
+				makeCluster({
+					reportingState: 'error',
+					reporterError: 'state_copied',
+					candidates: [
+						makeCandidate({ machineId: 7, machineName: 'web-01', reporterError: null }),
+						makeCandidate({ machineId: 8, machineName: 'web-02', reporterError: 'state_copied' })
+					],
+					eligibleMachines: [
+						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
+						makeEligible({ machineId: 8, machineName: 'web-02', enrolled: true })
+					]
+				})
+			);
+
+			await fireEvent.click(screen.getByRole('button', { name: 'Re-enrol' }));
+			await screen.findByTestId('command-results');
+
+			expect(sentSummary()).toEqual([[8, 'k8s_reporter_enrol']]);
+		});
+
 		it('re-enrols every candidate when none reports the error itself', async () => {
 			renderPage(
 				makeCluster({
@@ -1447,7 +1664,7 @@ describe('cluster detail', () => {
 			]);
 		});
 
-		it('signs one enrol, through the holder, when Update permissions is pressed', async () => {
+		it('signs one enrol, through the active reporter, when Update permissions is pressed', async () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'role_outdated',
@@ -1455,7 +1672,7 @@ describe('cluster detail', () => {
 					activeReporterMachineName: 'web-02',
 					candidates: [
 						makeCandidate({ machineId: 7, machineName: 'web-01' }),
-						makeCandidate({ machineId: 8, machineName: 'web-02', isHolder: true })
+						makeCandidate({ machineId: 8, machineName: 'web-02', isActiveReporter: true })
 					],
 					eligibleMachines: [
 						makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true }),
@@ -1474,7 +1691,7 @@ describe('cluster detail', () => {
 			renderPage(
 				makeCluster({
 					reportingState: 'role_outdated',
-					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isHolder: true })],
+					candidates: [makeCandidate({ machineId: 7, machineName: 'web-01', isActiveReporter: true })],
 					eligibleMachines: [makeEligible({ machineId: 7, machineName: 'web-01', enrolled: true, isPaused: true })]
 				})
 			);

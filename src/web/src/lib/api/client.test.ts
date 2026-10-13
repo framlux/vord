@@ -338,7 +338,7 @@ describe('ApiClient', () => {
             }
         });
 
-        it('should throw ApiError with 403 for forbidden', async () => {
+        it('should throw ApiError with 403 and a bare Forbidden when the body carries no message', async () => {
             fetchFn.mockResolvedValue({
                 ok: false,
                 status: 403,
@@ -353,6 +353,90 @@ describe('ApiClient', () => {
                 expect((e as ApiError).status).toBe(403);
                 expect((e as ApiError).message).toBe('Forbidden');
             }
+        });
+
+        it('should surface the message of a 403 error envelope', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 403,
+                json: () =>
+                    Promise.resolve({
+                        success: false,
+                        data: null,
+                        message: 'Remote commands require a Team subscription',
+                        errors: null
+                    })
+            });
+
+            const error = await client.getAdminSettings().catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(ApiError);
+            expect((error as ApiError).status).toBe(403);
+            expect((error as ApiError).message).toBe('Remote commands require a Team subscription');
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            ['a null message', { success: false, data: null, message: null, errors: null }],
+            ['an empty message', { success: false, data: null, message: '', errors: null }],
+            ['a blank message', { success: false, data: null, message: '   ', errors: null }],
+            ['a message that is not a string', { success: false, data: null, message: 42, errors: null }],
+            ['a body that is not an object', 'denied'],
+            ['a null body', null]
+        ])('should give a bare Forbidden for a 403 whose body has %s', async (_name, body) => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 403,
+                json: () => Promise.resolve(body)
+            });
+
+            const error = await client.getAdminSettings().catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(ApiError);
+            expect((error as ApiError).status).toBe(403);
+            expect((error as ApiError).message).toBe('Forbidden');
+        });
+
+        it('should give a bare Forbidden for a 403 with no body or one that is not JSON', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 403,
+                statusText: 'Forbidden',
+                json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input'))
+            });
+
+            const error = await client.getAdminSettings().catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(ApiError);
+            expect((error as ApiError).status).toBe(403);
+            expect((error as ApiError).message).toBe('Forbidden');
+            expect(fetchFn).toHaveBeenCalledTimes(1);
+        });
+
+        it('should keep a 401 unauthorized whatever its body says', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 401,
+                json: () => Promise.resolve({ success: false, data: null, message: 'Token expired', errors: null })
+            });
+
+            const error = await client.getMe().catch((e: unknown) => e);
+
+            expect((error as ApiError).status).toBe(401);
+            expect((error as ApiError).message).toBe('Unauthorized');
+        });
+
+        it('should keep a 404 not found whatever its body says', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 404,
+                json: () => Promise.resolve({ success: false, data: null, message: 'Machine 999 does not exist', errors: null })
+            });
+
+            const error = await client.getMachine(999).catch((e: unknown) => e);
+
+            expect((error as ApiError).status).toBe(404);
+            expect((error as ApiError).message).toBe('Not found');
         });
 
         it('should throw ApiError with 404 for not found', async () => {

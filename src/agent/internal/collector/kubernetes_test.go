@@ -28,6 +28,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/kubelocal"
+	"github.com/framlux/vord/internal/kubereporter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 )
 
@@ -531,7 +532,7 @@ func (f *kubeFixture) withReporterError(reason string) {
 // Intent: a reporter that cannot use its credentials tells the server through the node report, as the exact
 // reason code, and the key is one the proto knows so the sender accepts it.
 func TestKubernetesCollector_ReporterError_IsReportedWhileEnrolled(t *testing.T) {
-	for _, reason := range []string{"credentials_rejected", "tls_ca_changed"} {
+	for _, reason := range []string{"credentials_rejected", "tls_ca_changed", "state_copied"} {
 		t.Run(reason, func(t *testing.T) {
 			f := newKubeFixture(t)
 			f.withReporterError(reason)
@@ -600,5 +601,75 @@ func TestKubernetesCollector_ReporterError_NotReportedWhenNotEnrolled(t *testing
 
 	if strings.Contains(items[0].Payload, "reporter_error") {
 		t.Errorf("payload = %s, want no reporter_error key without a state file", items[0].Payload)
+	}
+}
+
+// copiedReporterState saves a reporter state file on the fixture's host that records the given machine id, and
+// returns a real reporter runtime reading it, with this host's own machine id laid out under the fixture's root.
+func (f *kubeFixture) copiedReporterState(recordedMachineID string) *kubereporter.Runtime {
+	f.t.Helper()
+
+	ca, _ := newKubeCert(f.t, "k3s-server-ca", 1)
+	f.k3sNode(ca, "k3s-server-1")
+	f.write("/etc/rancher/k3s/k3s.yaml", []byte("admin kubeconfig"))
+	f.write("/etc/machine-id", []byte("0f1e2d3c4b5a69788796a5b4c3d2e1f0\n"))
+
+	state := kubereporter.State{
+		InstanceID:    "0123456789abcdef",
+		Server:        "https://10.0.0.1:6443",
+		CACert:        "pem",
+		Token:         "token",
+		HostMachineID: recordedMachineID,
+	}
+
+	if err := kubereporter.SaveState(f.dataDir, state); err != nil {
+		f.t.Fatalf("SaveState: %v", err)
+	}
+
+	return kubereporter.NewRuntime(kubereporter.RuntimeOptions{DataDir: f.dataDir, Root: f.root})
+}
+
+// Intent: a disk image copied from another host carries that host's reporter state. The copy stays a candidate
+// in the node report, so the page can offer to unenrol or enrol it again, and says why it cannot report: the
+// answer comes from the real runtime, which has no elector for such a state file.
+func TestKubernetesCollector_CopiedReporterState_IsReportedEnrolledWithStateCopied(t *testing.T) {
+	f := newKubeFixture(t)
+	f.reporterError = f.copiedReporterState("ffeeddccbbaa99887766554433221100").ReporterError
+
+	items := collectItems(t, f.collector(), newTestStore(t))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 node report, got %d", len(items))
+	}
+
+	if want := `"reporter_enrolled":true,"reporter_error":"state_copied"}`; strings.HasSuffix(items[0].Payload, want) == false {
+		t.Errorf("payload = %s, want it to end with %s", items[0].Payload, want)
+	}
+
+	var record pb.KubernetesNodeRecord
+	if err := protojson.Unmarshal([]byte(items[0].Payload), &record); err != nil {
+		t.Fatalf("protojson.Unmarshal rejected the payload %s: %v", items[0].Payload, err)
+	}
+
+	if (record.ReporterEnrolled == false) || (record.ReporterError != "state_copied") {
+		t.Errorf("record = %v, want enrolled with state_copied", &record)
+	}
+}
+
+// Intent: the same state file on the host that wrote it reports no error.
+func TestKubernetesCollector_ReporterStateOfThisHost_ReportsNoError(t *testing.T) {
+	f := newKubeFixture(t)
+	f.reporterError = f.copiedReporterState("0f1e2d3c4b5a69788796a5b4c3d2e1f0").ReporterError
+
+	items := collectItems(t, f.collector(), newTestStore(t))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 node report, got %d", len(items))
+	}
+
+	if strings.Contains(items[0].Payload, "reporter_error") {
+		t.Errorf("payload = %s, want no reporter_error key", items[0].Payload)
+	}
+
+	if strings.Contains(items[0].Payload, `"reporter_enrolled":true`) == false {
+		t.Errorf("payload = %s, want an enrolled host", items[0].Payload)
 	}
 }

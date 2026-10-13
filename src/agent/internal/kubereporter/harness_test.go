@@ -106,11 +106,32 @@ func (f *fakeReleaser) ReleaseAndStop(context.Context) {
 	f.atRequestLen = len(f.api.requestLog())
 }
 
+// hostMachineIDValue is the machine id of the host every test runs as, unless it says otherwise, and
+// otherHostMachineID is another host's.
+const (
+	hostMachineIDValue = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	otherHostMachineID = "ffeeddccbbaa99887766554433221100"
+)
+
+// writeMachineID lays out etc/machine-id under root with the given content.
+func writeMachineID(t *testing.T, root string, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "etc", "machine-id"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // harness wires a Reporter to a fake API, a data directory, an admin kubeconfig and a fake clock.
 type harness struct {
 	t          *testing.T
 	api        *fakeAPI
 	dataDir    string
+	root       string
 	kubeconfig string
 	clock      *fakeClock
 	releaser   *fakeReleaser
@@ -150,10 +171,14 @@ contexts:
 		t.Fatalf("write kubeconfig: %v", err)
 	}
 
+	root := t.TempDir()
+	writeMachineID(t, root, hostMachineIDValue+"\n")
+
 	h := &harness{
 		t:          t,
 		api:        api,
 		dataDir:    dataDir,
+		root:       root,
 		kubeconfig: kubeconfig,
 		clock:      newFakeClock(),
 		releaser:   &fakeReleaser{api: api},
@@ -170,6 +195,7 @@ contexts:
 
 	h.reporter = New(Options{
 		DataDir:        dataDir,
+		Root:           root,
 		Facts:          func(context.Context) (kubelocal.Facts, bool) { return h.facts, h.factsOK },
 		Releaser:       h.releaser,
 		OnStateChanged: func(context.Context) { h.changed++ },
@@ -326,4 +352,65 @@ func (h *harness) run(command string) commands.Result {
 	h.t.Fatalf("unknown command %q", command)
 
 	return commands.Result{}
+}
+
+// hasPending reports whether the pending file exists.
+func (h *harness) hasPending() bool {
+	return regularFileExists(pendingPath(h.dataDir))
+}
+
+// pending loads the pending file and fails the test when it is missing or unusable.
+func (h *harness) pending() recordedInstance {
+	h.t.Helper()
+
+	record, ok := readRecordedInstance(h.dataDir, PendingFileName)
+	if ok == false {
+		h.t.Fatal("no usable pending file")
+	}
+
+	return record
+}
+
+// tokenSecrets lists the paths of every token Secret in the cluster.
+func (h *harness) tokenSecrets() []string {
+	return h.api.paths(secretsCollection + "/" + tokenSecretPrefix)
+}
+
+// writeRecordFile writes a record file as a test needs it, content and all.
+func (h *harness) writeRecordFile(name string, content string) {
+	h.t.Helper()
+
+	if err := os.WriteFile(filepath.Join(h.dataDir, name), []byte(content), 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// seedForeignRecord leaves what a disk image copied from another host carries: a state file written there, naming
+// a token Secret that is live in the cluster and belongs to that host. It returns the instance id.
+func (h *harness) seedForeignRecord() string {
+	h.t.Helper()
+
+	const instanceID = "f0f1f2f3f4f5f6f7"
+
+	state := State{InstanceID: instanceID, Server: h.api.url(), CACert: string(h.api.caPEM), Token: "the-original-hosts-token", HostMachineID: otherHostMachineID}
+	if err := SaveState(h.dataDir, state); err != nil {
+		h.t.Fatal(err)
+	}
+
+	h.seedSecret(instanceID, true)
+
+	return instanceID
+}
+
+// touchesSecret returns the requests since start that name the Secret at path, whatever the method.
+func touchesSecret(api *fakeAPI, start int, path string) []recordedRequest {
+	var found []recordedRequest
+
+	for _, request := range api.requestLog()[start:] {
+		if request.Path == path {
+			found = append(found, request)
+		}
+	}
+
+	return found
 }

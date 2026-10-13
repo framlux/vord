@@ -852,6 +852,7 @@ func TestEnrol_ReEnrol_HookReportsNoErrorFromTheReplacedCredentials(t *testing.T
 
 	runtime := NewRuntime(RuntimeOptions{
 		DataDir: h.dataDir,
+		Root:    h.root,
 		Clock:   h.clock,
 		Gate: Gate{
 			Paused:    func() bool { return false },
@@ -877,6 +878,7 @@ func TestEnrol_ReEnrol_HookReportsNoErrorFromTheReplacedCredentials(t *testing.T
 
 	h.reporter = New(Options{
 		DataDir:        h.dataDir,
+		Root:           h.root,
 		Facts:          func(context.Context) (kubelocal.Facts, bool) { return h.facts, h.factsOK },
 		Releaser:       h.releaser,
 		OnStateChanged: func(context.Context) { reported = append(reported, runtime.ReporterError()) },
@@ -1228,5 +1230,487 @@ func TestCommands_NeverLogOrReturnCredentials(t *testing.T) {
 				t.Error("a certificate leaked into a result or a log")
 			}
 		})
+	}
+}
+
+// Intent: The instance id is on disk, private to its owner and with the host's machine id, before the Secret is
+// created, so no token Secret can exist that no local file names. The file is gone once the state file holds the
+// id.
+func TestEnrol_WritesThePendingFileBeforeCreatingTheSecret(t *testing.T) {
+	h := newHarness(t)
+
+	var atCreate recordedInstance
+
+	var seen bool
+
+	var mode os.FileMode
+
+	h.api.inject(fault{method: http.MethodPost, path: secretsCollection, times: -1, onFire: func(*fakeAPI) {
+		atCreate, seen = readRecordedInstance(h.dataDir, PendingFileName)
+
+		if info, err := os.Stat(filepath.Join(h.dataDir, PendingFileName)); err == nil {
+			mode = info.Mode().Perm()
+		}
+	}})
+
+	h.enrol()
+
+	if seen == false {
+		t.Fatal("the pending file did not exist when the Secret was created")
+	}
+
+	if atCreate.InstanceID != h.state().InstanceID {
+		t.Errorf("the pending file named %q, the Secret %q", atCreate.InstanceID, h.state().InstanceID)
+	}
+
+	if atCreate.HostMachineID != hostMachineIDValue {
+		t.Errorf("the pending file recorded machine id %q, want %q", atCreate.HostMachineID, hostMachineIDValue)
+	}
+
+	if mode != 0o600 {
+		t.Errorf("the pending file mode = %v, want 0600", mode)
+	}
+
+	if h.hasPending() {
+		t.Error("the pending file survived a successful enrol")
+	}
+
+	if h.state().HostMachineID != hostMachineIDValue {
+		t.Errorf("the state file recorded machine id %q, want %q", h.state().HostMachineID, hostMachineIDValue)
+	}
+}
+
+// Intent: A state file that already holds the id is the record, so a re-enrol writes no pending file.
+func TestEnrol_ReEnrol_WritesNoPendingFile(t *testing.T) {
+	h := newHarness(t)
+	h.enrol()
+
+	first := h.state()
+	existed := false
+
+	h.api.inject(fault{method: http.MethodPost, path: secretsCollection, times: -1, onFire: func(*fakeAPI) { existed = h.hasPending() }})
+
+	h.enrol()
+
+	if existed {
+		t.Error("a re-enrol wrote a pending file although the state file holds the id")
+	}
+
+	if h.state().InstanceID != first.InstanceID {
+		t.Error("the re-enrol changed the instance id")
+	}
+}
+
+// Intent: A first enrol that fails after the Secret was created but before the state file was written, and whose
+// rollback cannot delete the Secret, leaves the pending file as the only record of the id. The next enrol reuses
+// that id, so it replaces the Secret instead of leaking it, and ends with one Secret, a state file that holds the
+// id and no pending file.
+func TestEnrol_FailedFirstEnrolWhoseRollbackFails_IsCompletedByTheNextEnrol(t *testing.T) {
+	h := newHarness(t)
+
+	h.api.populateAfter = -1
+	h.api.inject(fault{method: http.MethodDelete, pathPrefix: secretsCollection + "/", status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonTokenNotPopulated)
+
+	if h.hasState() {
+		t.Fatal("the failed first enrol left a state file")
+	}
+
+	if h.hasPending() == false {
+		t.Fatal("the pending file was removed although the Secret could not be")
+	}
+
+	id := h.pending().InstanceID
+
+	if got := h.tokenSecrets(); len(got) != 1 || got[0] != secretPath(id) {
+		t.Fatalf("Secrets = %v, want only %s, the one the pending file names", got, secretPath(id))
+	}
+
+	h.api.clearFaults()
+	h.api.populateAfter = 1
+
+	before := len(h.api.requestLog())
+
+	h.enrol()
+
+	if h.state().InstanceID != id {
+		t.Errorf("the next enrol used %q, want the recorded %q", h.state().InstanceID, id)
+	}
+
+	if h.hasPending() {
+		t.Error("the pending file survived the enrol that completed it")
+	}
+
+	if got := h.tokenSecrets(); len(got) != 1 || got[0] != secretPath(id) {
+		t.Errorf("Secrets = %v, want exactly %s", got, secretPath(id))
+	}
+
+	if got := deletedPaths(h.api, before); len(got) != 1 || got[0] != secretPath(id) {
+		t.Errorf("DELETEs = %v, want the earlier Secret replaced once", got)
+	}
+
+	if got := len(h.api.issuedTokens()); got != 1 {
+		t.Errorf("%d tokens are live, want only the new one", got)
+	}
+}
+
+// Intent: A failure that the rollback does clean up leaves no trace: the Secret, the state file and the pending file
+// are all gone. The pending file goes only after the Secret is.
+func TestEnrol_FailedEnrol_RollbackRemovesThePendingFileAfterTheSecret(t *testing.T) {
+	h := newHarness(t)
+
+	pendingWhenDeleted := false
+
+	h.api.populateAfter = -1
+	h.api.inject(fault{method: http.MethodDelete, pathPrefix: secretsCollection + "/", times: -1, onFire: func(*fakeAPI) { pendingWhenDeleted = h.hasPending() }})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonTokenNotPopulated)
+
+	if pendingWhenDeleted == false {
+		t.Error("the pending file was removed before the Secret was deleted")
+	}
+
+	if h.hasPending() {
+		t.Error("the pending file survived a rollback that deleted the Secret")
+	}
+
+	if h.hasState() {
+		t.Error("the state file survived")
+	}
+
+	if got := h.tokenSecrets(); len(got) != 0 {
+		t.Errorf("Secrets left = %v", got)
+	}
+}
+
+// Intent: When the state file cannot be written after the Secret exists, and the rollback cannot delete the Secret
+// either, the pending file still names it, so a following unenrol with the admin credential revokes the token and
+// removes the file. This is the crash between creating the Secret and recording it.
+func TestEnrol_StateWriteFailsWithNoRollback_UnenrolRevokesTheSecretAndRemovesThePendingFile(t *testing.T) {
+	h := newHarness(t)
+
+	blocker := filepath.Join(h.dataDir, StateFileName)
+	if err := os.Mkdir(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	h.api.inject(fault{method: http.MethodDelete, pathPrefix: secretsCollection + "/", status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonStateWriteFailed)
+
+	if h.hasPending() == false {
+		t.Fatal("no pending file names the Secret that was created")
+	}
+
+	id := h.pending().InstanceID
+
+	if h.api.has(secretPath(id)) == false {
+		t.Fatal("the Secret that the pending file names does not exist")
+	}
+
+	// The agent comes back up: nothing is blocking the state file any more and the API answers.
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+
+	h.api.clearFaults()
+
+	result := h.reporter.Unenrol(context.Background())
+
+	requireSuccess(t, result)
+
+	if h.api.has(secretPath(id)) {
+		t.Error("unenrol did not delete the Secret the pending file names")
+	}
+
+	if h.hasPending() {
+		t.Error("unenrol left the pending file")
+	}
+
+	if got := len(h.api.issuedTokens()); got != 0 {
+		t.Errorf("%d tokens are still live", got)
+	}
+}
+
+// Intent: A state file that cannot be loaded as a whole still names a Secret, and an enrol reuses that id, so the
+// Secret is replaced and not orphaned.
+func TestEnrol_UnusableStateFileWithAValidInstanceID_IsReused(t *testing.T) {
+	h := newHarness(t)
+
+	old := h.seedSecret(pinnedInstanceID, true)
+	h.writeRecordFile(StateFileName, `{"instance_id":"`+pinnedInstanceID+`","server":"https://x","host_machine_id":"`+hostMachineIDValue+`"}`)
+
+	before := len(h.api.requestLog())
+
+	h.enrol()
+
+	if h.state().InstanceID != pinnedInstanceID {
+		t.Errorf("enrol used %q, want the id %q that the damaged state file names", h.state().InstanceID, pinnedInstanceID)
+	}
+
+	if got := deletedPaths(h.api, before); len(got) != 1 || got[0] != old {
+		t.Errorf("DELETEs = %v, want the Secret that the damaged file names", got)
+	}
+
+	if got := h.tokenSecrets(); len(got) != 1 || got[0] != old {
+		t.Errorf("Secrets = %v, want only %s", got, old)
+	}
+}
+
+// Intent: The id comes from the first of these that has one: a usable state file, the pending file, the id in a
+// state file that cannot be loaded, and otherwise a new one. A pending file that is damaged, or names something that
+// could not be a Secret name, is no record.
+func TestEnrol_InstanceIDResolutionOrder(t *testing.T) {
+	const (
+		stateID   = "1111111111111111"
+		pendingID = "2222222222222222"
+		damagedID = "3333333333333333"
+	)
+
+	usableState := func(h *harness) {
+		state := State{InstanceID: stateID, Server: h.api.url(), CACert: "pem", Token: "t", HostMachineID: hostMachineIDValue}
+		if err := SaveState(h.dataDir, state); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	pending := func(h *harness) {
+		if err := savePending(h.dataDir, pendingID, hostMachineIDValue); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	damagedState := func(h *harness) {
+		h.writeRecordFile(StateFileName, `{"instance_id":"`+damagedID+`"}`)
+	}
+
+	cases := []struct {
+		name      string
+		arrange   []func(h *harness)
+		want      string
+		fromState bool
+	}{
+		{"usable state beats pending", []func(h *harness){pending, usableState}, stateID, true},
+		{"pending beats a damaged state file", []func(h *harness){damagedState, pending}, pendingID, false},
+		{"damaged state file alone", []func(h *harness){damagedState}, damagedID, false},
+		{"pending alone", []func(h *harness){pending}, pendingID, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+
+			for _, arrange := range tc.arrange {
+				arrange(h)
+			}
+
+			got, fromState, err := h.reporter.instanceID(hostMachineIDValue)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got != tc.want {
+				t.Errorf("instanceID = %q, want %q", got, tc.want)
+			}
+
+			if fromState != tc.fromState {
+				t.Errorf("fromState = %v, want %v", fromState, tc.fromState)
+			}
+		})
+	}
+
+	for name, content := range map[string]string{
+		"not json":           "garbage",
+		"empty":              "",
+		"no id":              `{"host_machine_id":""}`,
+		"uppercase id":       `{"instance_id":"ABCDEF0123456789"}`,
+		"path in id":         `{"instance_id":"../../etc/passwd"}`,
+		"short id":           `{"instance_id":"abc"}`,
+		"id is not a string": `{"instance_id":12}`,
+	} {
+		t.Run("pending file that is "+name, func(t *testing.T) {
+			h := newHarness(t)
+			h.writeRecordFile(PendingFileName, content)
+
+			got, fromState, err := h.reporter.instanceID(hostMachineIDValue)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if hexInstanceID.MatchString(got) == false {
+				t.Errorf("instanceID = %q, want a new 16 hex id", got)
+			}
+
+			if fromState {
+				t.Error("a new id cannot come from the state file")
+			}
+		})
+	}
+}
+
+// Intent: A state file written on another host names a Secret that is that host's. An enrol ignores it as if it
+// were not there: it mints a new id and never reads, deletes or replaces that Secret, and the new state file
+// replaces the copied one.
+func TestEnrol_CopiedState_IsIgnoredAndItsSecretIsNeverTouched(t *testing.T) {
+	h := newHarness(t)
+	copiedID := h.seedForeignRecord()
+
+	before := len(h.api.requestLog())
+
+	h.enrol()
+
+	state := h.state()
+
+	if state.InstanceID == copiedID {
+		t.Fatal("the enrol reused the instance id of a state file copied from another host")
+	}
+
+	if state.HostMachineID != hostMachineIDValue {
+		t.Errorf("the new state file records machine id %q, want this host's %q", state.HostMachineID, hostMachineIDValue)
+	}
+
+	if touched := touchesSecret(h.api, before, secretPath(copiedID)); len(touched) != 0 {
+		t.Errorf("the enrol sent %d requests naming the other host's Secret: %+v", len(touched), touched)
+	}
+
+	if h.api.has(secretPath(copiedID)) == false {
+		t.Error("the other host's Secret is gone")
+	}
+
+	if len(h.tokenSecrets()) != 2 {
+		t.Errorf("Secrets = %v, want the other host's and this host's", h.tokenSecrets())
+	}
+}
+
+// Intent: A pending file copied from another host is ignored in the same way, and, being a local file that the new
+// enrol has outlived, it is removed once this host's own state file exists.
+func TestEnrol_CopiedPendingFile_IsIgnoredAndItsSecretIsNeverTouched(t *testing.T) {
+	h := newHarness(t)
+
+	const copiedID = "f0f1f2f3f4f5f6f7"
+
+	h.seedSecret(copiedID, true)
+
+	if err := savePending(h.dataDir, copiedID, otherHostMachineID); err != nil {
+		t.Fatal(err)
+	}
+
+	before := len(h.api.requestLog())
+
+	h.enrol()
+
+	if h.state().InstanceID == copiedID {
+		t.Fatal("the enrol reused the instance id of a pending file copied from another host")
+	}
+
+	if touched := touchesSecret(h.api, before, secretPath(copiedID)); len(touched) != 0 {
+		t.Errorf("the enrol sent %d requests naming the other host's Secret: %+v", len(touched), touched)
+	}
+
+	if h.hasPending() {
+		t.Error("the copied pending file survived this host's successful enrol")
+	}
+}
+
+// Intent: A state file that cannot be loaded but says it was written on another host is ignored too.
+func TestEnrol_CopiedUnusableStateFile_IsIgnored(t *testing.T) {
+	h := newHarness(t)
+
+	h.seedSecret(pinnedInstanceID, true)
+	h.writeRecordFile(StateFileName, `{"instance_id":"`+pinnedInstanceID+`","host_machine_id":"`+otherHostMachineID+`"}`)
+
+	before := len(h.api.requestLog())
+
+	h.enrol()
+
+	if h.state().InstanceID == pinnedInstanceID {
+		t.Fatal("the enrol reused an instance id from another host's damaged state file")
+	}
+
+	if touched := touchesSecret(h.api, before, secretPath(pinnedInstanceID)); len(touched) != 0 {
+		t.Errorf("the enrol touched the other host's Secret: %+v", touched)
+	}
+}
+
+// Intent: A failed enrol leaves a state file copied from another host as it found it. It is not this host's, so
+// the rollback has no business deleting it, and the host keeps reporting why its state is unusable.
+func TestEnrol_CopiedState_SurvivesAFailedEnrol(t *testing.T) {
+	h := newHarness(t)
+	copiedID := h.seedForeignRecord()
+
+	h.api.populateAfter = -1
+
+	before := len(h.api.requestLog())
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonTokenNotPopulated)
+
+	state := h.state()
+
+	if (state.InstanceID != copiedID) || (state.HostMachineID != otherHostMachineID) {
+		t.Errorf("the copied state file changed: %+v", state)
+	}
+
+	if touched := touchesSecret(h.api, before, secretPath(copiedID)); len(touched) != 0 {
+		t.Errorf("the failed enrol touched the other host's Secret: %+v", touched)
+	}
+
+	if got := h.tokenSecrets(); len(got) != 1 || got[0] != secretPath(copiedID) {
+		t.Errorf("Secrets = %v, want only the other host's", got)
+	}
+}
+
+// Intent: A host that has no usable machine id, as a container without /etc/machine-id or a machine that has not
+// booted far enough to get one, enrols and works: its records carry "" and are never taken for copies.
+func TestEnrol_NoUsableMachineID_StillWorks(t *testing.T) {
+	cases := map[string]func(h *harness){
+		"file missing":  func(h *harness) { _ = os.Remove(filepath.Join(h.root, "etc", "machine-id")) },
+		"file empty":    func(h *harness) { writeMachineID(h.t, h.root, "\n") },
+		"uninitialized": func(h *harness) { writeMachineID(h.t, h.root, "uninitialized\n") },
+	}
+
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			arrange(h)
+
+			h.enrol()
+
+			if h.state().HostMachineID != "" {
+				t.Errorf("HostMachineID = %q, want empty", h.state().HostMachineID)
+			}
+
+			// A state file that has a machine id is not a copy when this host has none to compare with.
+			h.reporter.mu.Lock()
+			copied := copiedFromAnotherHost(otherHostMachineID, h.reporter.hostMachineID())
+			h.reporter.mu.Unlock()
+
+			if copied {
+				t.Error("a host with no machine id took a recorded one for a copy")
+			}
+
+			h.enrol()
+		})
+	}
+}
+
+// Intent: Once the state file is written it is the record of the id and the pending file is gone, so a failure after
+// that point whose rollback cannot delete the Secret leaves the state file, and only it, to find the Secret by.
+func TestEnrol_FailureAfterTheStateFile_RollbackFails_LeavesTheStateFileAndNoPendingFile(t *testing.T) {
+	h := newHarness(t)
+
+	h.api.inject(fault{method: http.MethodGet, path: "/api/v1/nodes", status: http.StatusUnauthorized, reason: "Unauthorized", message: "no", times: -1})
+	h.api.inject(fault{method: http.MethodDelete, pathPrefix: secretsCollection + "/", status: http.StatusInternalServerError, reason: "InternalError", message: "boom", times: -1})
+
+	requireFailure(t, h.reporter.Enrol(context.Background()), reasonCredentialsRejected)
+
+	if h.hasState() == false {
+		t.Fatal("the state file was deleted although the Secret may still be live")
+	}
+
+	if h.state().InstanceID != h.lastInstanceID() {
+		t.Error("the state file does not name the Secret that was created")
+	}
+
+	if h.hasPending() {
+		t.Error("the pending file was left beside the state file")
 	}
 }

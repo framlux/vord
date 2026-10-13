@@ -210,4 +210,81 @@ public sealed class CommandSendValidatorTests
         await Assert.That(result.IsValid).IsFalse();
         await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Expiry must be after timestamp")).IsTrue();
     }
+
+    // ========== Params ==========
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    [Arguments("\t\r\n")]
+    [Arguments("{}")]
+    [Arguments(" { } ")]
+    [Arguments("""{"pid":"42"}""")]
+    [Arguments("""{"pid":"42","signal":"9"}""")]
+    [Arguments("""{"empty":""}""")]
+    [Arguments("""{"pid":"1","PID":"2"}""")]
+    public async Task ParamsThatAreNullBlankOrAnObjectOfStrings_PassValidation(string? commandParams)
+    {
+        CommandSendRequest request = ValidRequest();
+        request.Params = commandParams;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    [Arguments("""{"pid":42}""")]
+    [Arguments("""{"pid":4.2}""")]
+    [Arguments("""{"pid":true}""")]
+    [Arguments("""{"pid":false}""")]
+    [Arguments("""{"pid":null}""")]
+    [Arguments("""{"pid":{"a":"b"}}""")]
+    [Arguments("""{"pid":["42"]}""")]
+    [Arguments("""{"ok":"1","pid":42}""")]
+    [Arguments("[]")]
+    [Arguments("""["a"]""")]
+    [Arguments("42")]
+    [Arguments("\"text\"")]
+    [Arguments("null")]
+    [Arguments("true")]
+    [Arguments("{")]
+    [Arguments("not json")]
+    [Arguments("""{"a":"b"}{"c":"d"}""")]
+    [Arguments("""{"\ud800":"x"}""")]
+    [Arguments("""{"a":"\ud800"}""")]
+    [Arguments("""{"a":"\u0000"}""")]
+    [Arguments("""{"\u0000":"x"}""")]
+    public async Task ParamsThatAreNotAnObjectOfStrings_FailValidationWithTheParamsMessage(string commandParams)
+    {
+        // Intent: the agent refuses a signed params value that is not a string, so the server refuses it
+        // when it is sent instead of queueing a command that can never run.
+        CommandSendRequest request = ValidRequest();
+        request.Params = commandParams;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        ValidationFailure failure = result.Errors.Single();
+        await Assert.That(failure.PropertyName).IsEqualTo("Params");
+        await Assert.That(failure.ErrorMessage).IsEqualTo("Params must be a JSON object of string values");
+    }
+
+    [Test]
+    [Arguments("""{"pid":"1","pid":"2"}""")]
+    [Arguments("""{"pid":"1","pid":"1"}""")]
+    [Arguments("""{"pid":"1","signal":"9","pid":"3"}""")]
+    public async Task ParamsWithADuplicateKey_FailValidation(string commandParams)
+    {
+        // Intent: the agent's reader refuses a duplicate key rather than keeping one of the two values, so
+        // a request that carries one is refused here.
+        CommandSendRequest request = ValidRequest();
+        request.Params = commandParams;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Single().ErrorMessage).IsEqualTo("Params must be a JSON object of string values");
+    }
 }

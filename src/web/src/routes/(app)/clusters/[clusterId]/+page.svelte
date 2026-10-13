@@ -19,10 +19,8 @@
 		AGENT_UNENROL,
 		describeBlockReason,
 		describeReporterError,
-		describeSendError,
 		describeSkip,
 		disableBlock,
-		OFFLINE_HOST_ACCEPTED,
 		planDisable,
 		planEnable,
 		planEnrolOne,
@@ -33,6 +31,7 @@
 		type ReporterCommandType,
 		type ReportingPlan,
 		sendBlock,
+		sendPlanned,
 		type SkipReason
 	} from '$lib/utils/clusterReporting';
 	import { formatDateTime, formatRelativeTime } from '$lib/utils/format';
@@ -68,8 +67,8 @@
 		'obtains the token, for example from a backup of /var/lib/vord-agent, gets the same access. Disabling ' +
 		'reporting revokes every token.';
 	const requirementsText =
-		"Remote commands must be enabled on each host (allow_remote_commands in the agent config), and your plan's " +
-		'tier must include remote commands.';
+		'Enrolling a host needs remote commands enabled on that host (allow_remote_commands in the agent config). ' +
+		'Turning reporting off works on any host.';
 	const disableText = [
 		"Disabling reporting removes the reporter's ServiceAccount, token and other objects from your cluster, which " +
 			'revokes every token. Nodes that only the reporter listed leave the node table, and node health and pod ' +
@@ -151,47 +150,35 @@
 			: 'No eligible machine can be sent the uninstall command right now.';
 	});
 
-	// A machine that cannot be sent a command, as the row should explain it. The key is only blamed
-	// once the keys have loaded, and only when there are keys to blame: with none, the notice above
-	// the tables says so once instead of every row saying it. A pause and a disabled capability are
-	// facts about the machine, so they show without waiting for the keys.
+	// A machine that cannot be sent the row's command, as the row should explain it. The key is only
+	// blamed once the keys have loaded, and only when there are keys to blame: with none, the notice
+	// above the tables says so once instead of every row saying it. A pause and a disabled capability
+	// are facts about the machine, so they show without waiting for the keys. A disabled capability
+	// only blocks an enrol; a candidate can always be unenrolled.
 	function rowBlock(machine: KubernetesEligibleMachineDto): SkipReason | null {
-		return sendBlock(machine, keysLoaded ? usableKeys : null);
+		return sendBlock(machine, keysLoaded ? usableKeys : null, AGENT_ENROL);
 	}
 
 	function candidateBlock(candidate: KubernetesCandidateDto): SkipReason | null {
 		const described = cluster.eligibleMachines.find((m) => m.machineId === candidate.machineId);
 
-		return described === undefined ? null : rowBlock(described);
+		return described === undefined ? null : sendBlock(described, keysLoaded ? usableKeys : null, AGENT_UNENROL);
 	}
 
 	async function execute(plan: ReportingPlan): Promise<CommandResult[]> {
 		const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
-		const results: CommandResult[] = [];
-		for (const planned of plan.commands) {
-			const result = {
+
+		return sendPlanned(plan.commands, async (planned) => {
+			await sendSignedCommand(api, {
 				machineId: planned.machineId,
-				machineName: planned.machineName,
-				commandType: planned.commandType
-			};
-
-			try {
-				await sendSignedCommand(api, {
-					machineId: planned.machineId,
-					commandType: planned.commandType,
-					localKeyId: planned.localKeyId,
-					localKeys,
-					serverKeys,
-					userId: data.user?.id ?? 0,
-					tenantId: data.user?.activeTenantId ?? 0
-				});
-				results.push({ ...result, accepted: true, message: planned.online ? 'Accepted' : OFFLINE_HOST_ACCEPTED });
-			} catch (error) {
-				results.push({ ...result, accepted: false, message: describeSendError(error) });
-			}
-		}
-
-		return results;
+				commandType: planned.commandType,
+				localKeyId: planned.localKeyId,
+				localKeys,
+				serverKeys,
+				userId: data.user?.id ?? 0,
+				tenantId: data.user?.activeTenantId ?? 0
+			});
+		});
 	}
 
 	async function refresh(): Promise<void> {
@@ -559,8 +546,8 @@
 									>
 										{candidate.machineName}
 									</a>
-									{#if candidate.isHolder}
-										<span class="{chipClass} ml-2 {toneClasses.ok}">Holder</span>
+									{#if candidate.isActiveReporter}
+										<span class="{chipClass} ml-2 {toneClasses.ok}">Reporting</span>
 									{/if}
 								</td>
 								<td class="px-6 py-4 text-surface-700 dark:text-surface-300">

@@ -835,14 +835,19 @@ export interface KubernetesClusterSummaryDto {
 	notReadyCount: number;
 	unknownCount: number;
 	reportingState: KubernetesReportingState;
-	/** The machine holding the cluster's reporter Lease that sent the latest snapshot, or null when none has. */
+	/**
+	 * The machine that sent the cluster's most recent accepted snapshot (the last sender), or null when none has.
+	 * It names the last sender whether or not that snapshot is still fresh; a candidate's isActiveReporter
+	 * additionally requires it to be fresh, and neither proves the machine holds the Lease.
+	 */
 	activeReporterMachineId: number | null;
 	activeReporterMachineName: string | null;
 	/** The Kubernetes server version the latest snapshot reported, or null when there has been none. */
 	clusterVersion: string | null;
 	/**
 	 * The code that puts the cluster in the error state: credentials_rejected, tls_ca_changed,
-	 * api_unreachable or namespace_terminating. Null in every other state.
+	 * api_unreachable, namespace_terminating or, from a candidate's own report, state_copied. Null in
+	 * every other state.
 	 */
 	reporterError: string | null;
 	/** True when the latest snapshot listed only some of the cluster's nodes to fit its size cap. */
@@ -899,9 +904,15 @@ export interface KubernetesNodeDto {
 export interface KubernetesCandidateDto {
 	machineId: number;
 	machineName: string;
-	/** True while the machine holds the cluster's reporter Lease. */
-	isHolder: boolean;
-	/** The error the machine's own reporter last reported, as a bare code, or null when it reported none. */
+	/**
+	 * True when this machine sent the cluster's most recent accepted snapshot and that snapshot is not stale.
+	 * The server cannot see the Lease, so this is not proof the machine holds it now.
+	 */
+	isActiveReporter: boolean;
+	/**
+	 * The error the machine's own reporter last reported, as a bare code (credentials_rejected,
+	 * tls_ca_changed or state_copied), or null when it reported none.
+	 */
 	reporterError: string | null;
 	lastReportAt: string;
 	online: boolean;
@@ -918,6 +929,8 @@ export interface KubernetesEligibleMachineDto {
 	remoteCommandsEnabled: boolean | null;
 	/** True when the machine's latest report says it is already enrolled as a reporter. */
 	enrolled: boolean;
+	/** The reporter error in the machine's own latest report (for example state_copied), or null. */
+	reporterError: string | null;
 	/** The ids of the signing keys authorized to send commands to the machine. */
 	authorizedSigningKeyIds: number[];
 }
@@ -949,7 +962,11 @@ export interface MachineKubernetesLocalDto {
 /** A machine's state as a reporter candidate. */
 export interface MachineKubernetesCandidateDto {
 	clusterId: number;
-	isHolder: boolean;
+	/**
+	 * True when this machine sent the cluster's most recent accepted snapshot and that snapshot is not stale.
+	 * The server cannot see the Lease, so this is not proof the machine holds it now.
+	 */
+	isActiveReporter: boolean;
 	reporterError: string | null;
 	lastReportAt: string;
 }

@@ -82,8 +82,9 @@ type Gate struct {
 	// StartedAt is when the agent started. The last ack counts from this moment until a first ack arrives, so
 	// a freshly started holder does not fail its own gate before its first send.
 	StartedAt time.Time
-	// OldestPendingSnapshot returns the creation time of the oldest cluster snapshot that is pending or
-	// processing in the queue, and false when there is none.
+	// OldestPendingSnapshot returns when the oldest cluster snapshot that is pending or processing in the queue
+	// began waiting, and false when there is none. A snapshot that replaced an undelivered one began waiting when
+	// that one did.
 	OldestPendingSnapshot func() (time.Time, bool)
 	// SlowSendInterval returns how often the slow telemetry tier, which carries the snapshots, is sent. It sets
 	// how long a waiting snapshot is normal; nil means the shortest limit applies.
@@ -97,8 +98,9 @@ type Gate struct {
 // goroutine.
 //
 // A candidate holds the Lease under an identity made from the instance id in its state file. A host cloned after
-// it enrolled keeps that id, so the clone shares the identity: each would see the other's claim as its own and
-// both could lead. That is not detected; a clone has to be enrolled afresh.
+// it enrolled keeps that id, so the clone would share the identity: each would see the other's claim as its own and
+// both could lead. The runtime refuses a state file whose recorded machine id differs from the host's, so only a
+// clone that also keeps /etc/machine-id goes undetected; it has to be enrolled afresh.
 type Elector struct {
 	clientFactory func() (*kube.Client, error)
 	identity      string

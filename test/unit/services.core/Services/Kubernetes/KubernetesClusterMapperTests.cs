@@ -386,7 +386,7 @@ public class KubernetesClusterMapperTests
     public async Task ToDetail_CarriesTheUidTheCandidatesAndTheEligibleMachines()
     {
         KubernetesCluster cluster = Cluster(lastSnapshotReceivedAt: Now, holder: 21, kubeSystemUid: "3f0c2d9e-aaaa-4bbb-8ccc-0123456789ab");
-        KubernetesCandidateDto candidate = new() { MachineId = 21, MachineName = "cp-host", IsHolder = true, Online = true, LastReportAt = Now };
+        KubernetesCandidateDto candidate = new() { MachineId = 21, MachineName = "cp-host", IsActiveReporter = true, Online = true, LastReportAt = Now };
         KubernetesEligibleMachineDto eligible = new() { MachineId = 22, MachineName = "cp-two", AuthorizedSigningKeyIds = [3, 4] };
         KubernetesReporterMachines machines = new([candidate], [eligible]);
 

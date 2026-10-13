@@ -48,7 +48,11 @@ public class KubernetesClusterSummaryDto
     /// </summary>
     public string ReportingState { get; set; } = "off";
 
-    /// <summary>The ID of the machine that holds the cluster's reporter Lease and sent the latest snapshot, or null when none has.</summary>
+    /// <summary>
+    /// The ID of the machine that sent the cluster's most recent accepted snapshot (the last sender), or null when
+    /// none has. It names the last sender whether or not that snapshot is still fresh; a candidate's
+    /// <c>IsActiveReporter</c> additionally requires it to be fresh, and neither proves the machine holds the Lease.
+    /// </summary>
     public long? ActiveReporterMachineId { get; set; }
 
     /// <summary>The name of the machine in <see cref="ActiveReporterMachineId"/>.</summary>
@@ -59,7 +63,8 @@ public class KubernetesClusterSummaryDto
 
     /// <summary>
     /// The error that puts the cluster in the <c>error</c> state (<c>credentials_rejected</c>,
-    /// <c>tls_ca_changed</c>, <c>api_unreachable</c> or <c>namespace_terminating</c>), and null in every other state.
+    /// <c>tls_ca_changed</c>, <c>api_unreachable</c>, <c>namespace_terminating</c> or, from a candidate's own
+    /// report, <c>state_copied</c>), and null in every other state.
     /// </summary>
     public string? ReporterError { get; set; }
 

@@ -55,7 +55,7 @@ function makeNode(overrides: Partial<KubernetesNodeDto> = {}): KubernetesNodeDto
 function makeCandidate(overrides: Partial<MachineKubernetesCandidateDto> = {}): MachineKubernetesCandidateDto {
 	return {
 		clusterId: 12,
-		isHolder: false,
+		isActiveReporter: false,
 		reporterError: null,
 		lastReportAt: '2026-10-11T11:30:00Z',
 		...overrides
@@ -268,14 +268,14 @@ describe('KubernetesSection', () => {
 			expect(screen.queryByTestId('kubernetes-reporter-error')).not.toBeInTheDocument();
 		});
 
-		it('says a candidate that holds the Lease is the holder', () => {
-			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isHolder: true }) }) } });
+		it('says a candidate that is the active reporter is reporting', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isActiveReporter: true }) }) } });
 
-			expect(text('kubernetes-reporter')).toBe('Holder');
+			expect(text('kubernetes-reporter')).toBe('Reporting');
 		});
 
-		it('says a candidate that does not hold the Lease is on standby', () => {
-			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isHolder: false }) }) } });
+		it('says a candidate that is not the active reporter is a candidate', () => {
+			render(KubernetesSection, { props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ isActiveReporter: false }) }) } });
 
 			expect(text('kubernetes-reporter')).toBe('Candidate');
 		});
@@ -302,6 +302,16 @@ describe('KubernetesSection', () => {
 			expect(text('kubernetes-reporter-error')).toBe('Credentials rejected');
 		});
 
+		it('tells a host whose reporter state was copied to unenrol or enrol it again', () => {
+			render(KubernetesSection, {
+				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'state_copied' }) }) }
+			});
+
+			expect(text('kubernetes-reporter-error')).toBe(
+				'Reporter state was copied from another host; unenrol or re-enrol this host'
+			);
+		});
+
 		it('makes a readable label of an error code it has no wording for', () => {
 			render(KubernetesSection, {
 				props: { kubernetes: makeKubernetes({ candidate: makeCandidate({ reporterError: 'disk_full' }) }) }
@@ -316,12 +326,12 @@ describe('KubernetesSection', () => {
 					kubernetes: makeKubernetes({
 						local: makeLocal({ nodeName: null, nodeNameSource: null, hasKubelet: false, reporterEnrolled: true }),
 						node: null,
-						candidate: makeCandidate({ isHolder: true })
+						candidate: makeCandidate({ isActiveReporter: true })
 					})
 				}
 			});
 
-			expect(text('kubernetes-reporter')).toBe('Holder');
+			expect(text('kubernetes-reporter')).toBe('Reporting');
 		});
 	});
 });

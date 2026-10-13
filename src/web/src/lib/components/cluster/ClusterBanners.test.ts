@@ -114,7 +114,8 @@ describe('ClusterBanners', () => {
 
 	describe.each([
 		['credentials_rejected', 'credentials-rejected-banner', 'The cluster rejected the reporter\'s credentials.'],
-		['tls_ca_changed', 'tls-ca-changed-banner', 'The cluster\'s certificate authority changed']
+		['tls_ca_changed', 'tls-ca-changed-banner', 'The cluster\'s certificate authority changed'],
+		['state_copied', 'state-copied-banner', 'copied from another host']
 	])('%s', (code, testId, text) => {
 		it('explains the failure', () => {
 			renderBanners(makeCluster({ reportingState: 'error', reporterError: code }));

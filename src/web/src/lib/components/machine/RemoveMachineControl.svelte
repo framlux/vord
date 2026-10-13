@@ -20,8 +20,10 @@
 	} = $props();
 
 	const uninstallGuide = 'https://vordfleet.dev/support/fleet-management/agent-troubleshooting';
-	// The API client reports every 403 as a bare "Forbidden" without reading the response body, so the
-	// server's reason (a read-only subscription or an insufficient role) never reaches this component.
+	// The API client carries the server's message on a 403, and that is what is shown. A refusal for an
+	// insufficient role has no body and reads as a bare "Forbidden", which says nothing a person can
+	// act on, so only that case gets this wording, which names both likely causes and the way out of
+	// the second.
 	const forbiddenMessage =
 		"You can't remove hosts right now. Your role or subscription doesn't allow changes; if your subscription is canceled, reactivate it from the billing page.";
 
@@ -51,7 +53,7 @@
 				alreadyGone = true;
 				error = 'This host has already been removed.';
 			} else if (err instanceof ApiError && err.status === 403) {
-				error = forbiddenMessage;
+				error = err.message === 'Forbidden' ? forbiddenMessage : err.message;
 			} else {
 				error = err instanceof Error ? err.message : 'Failed to remove the host.';
 			}

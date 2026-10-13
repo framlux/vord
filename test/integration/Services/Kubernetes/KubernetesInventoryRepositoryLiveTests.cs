@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
@@ -39,6 +40,18 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
     private const string FingerprintA = "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718";
     private const string FingerprintB = "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978";
+
+    /// <summary>
+    /// The most parameters, and the longest text, one statement may have while a large snapshot is
+    /// applied: the repository puts at most 500 values in a list, and LinqToDB writes a list of the
+    /// 11-character names these tests use into the text, so a chunk makes a statement of about 7,100
+    /// characters while the whole 1,201-name list makes one of over 16,000.
+    /// </summary>
+    private const int LargestStatementParameters = 520;
+    private const int LargestStatementLength = 8_000;
+
+    /// <summary>The most values the repository puts in one <c>IN</c> list, which is its chunk size.</summary>
+    private const int LargestInList = 500;
 
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
@@ -140,6 +153,140 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await Assert.That(loadedPartitionScans.Count).IsGreaterThan(0);
         await Assert.That(everyScanUsesPartialIndex).IsTrue();
         await Assert.That(sequentialScans.Contains(loadedPartition)).IsFalse();
+    }
+
+    [Test]
+    public async Task Live_OldestUnprojectedReceipt_ReadsOneRowThroughThePartialIndex()
+    {
+        // Intent: the lag gauge asks for the next unprojected row while the backlog may be at its
+        // largest, so the statement must stop at the first row by id through the partial index over the
+        // Kubernetes types, never aggregate the minimum receipt time over every unprojected row. Thousands
+        // of rows of other types and a handful of Kubernetes rows sit in one daily partition; the
+        // partition holding the data must be read through an index descended from the partial index,
+        // and no aggregate may appear anywhere in the plan.
+        await using DatabaseContext seedDb = CreateContext();
+        int tenantId = await SeedTenantAsync(seedDb);
+        long machineId = await SeedMachineAsync(seedDb, tenantId);
+        try
+        {
+            long cursor = await seedDb.MachineTelemetry.MaxAsync(t => (long?)t.Id) ?? 0;
+
+            await using NpgsqlConnection connection = new(_migratedConnectionString);
+            await connection.OpenAsync();
+            await ExecuteAsync(
+                connection,
+                """
+                INSERT INTO "MachineTelemetry"
+                    ("MachineId", "TenantId", "RetentionClass", "TelemetryType", "Payload", "ReceivedAt", "ServerReceivedAt", "SourceEventId")
+                SELECT @machineId, @tenantId, 0, (g % 5) + 1, '{}', now(), now(), 'other-' || g
+                FROM generate_series(1, 6000) AS g
+                """,
+                ("machineId", machineId), ("tenantId", tenantId));
+            await ExecuteAsync(
+                connection,
+                """
+                INSERT INTO "MachineTelemetry"
+                    ("MachineId", "TenantId", "RetentionClass", "TelemetryType", "Payload", "ReceivedAt", "ServerReceivedAt", "SourceEventId")
+                SELECT @machineId, @tenantId, 0, 14 + (g % 2), '{}', now(), now(), 'kubernetes-' || g
+                FROM generate_series(1, 5) AS g
+                """,
+                ("machineId", machineId), ("tenantId", tenantId));
+            await ExecuteAsync(connection, "ANALYZE \"MachineTelemetry\"");
+
+            string loadedPartition = await ScalarAsync(
+                connection,
+                $"""
+                SELECT c.relname FROM "MachineTelemetry" t JOIN pg_class c ON c.oid = t.tableoid
+                WHERE t."TelemetryType" = 14 AND t."MachineId" = {machineId} LIMIT 1
+                """);
+
+            (string statement, DateTimeOffset? oldest) = await CaptureStatementAsync(repo => repo.GetOldestUnprojectedKubernetesReceiptAsync(
+                cursor, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), CancellationToken.None));
+            string explain = await ScalarAsync(connection, $"EXPLAIN (FORMAT JSON) {statement}");
+
+            JsonElement plan = JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan");
+            List<(string Relation, string Index)> indexScans = [];
+            List<string> sequentialScans = [];
+            CollectScans(plan, null, indexScans, sequentialScans);
+
+            List<(string Relation, string Index)> loadedPartitionScans = indexScans.Where(scan => scan.Relation == loadedPartition).ToList();
+            bool everyScanUsesPartialIndex = true;
+            foreach ((string _, string indexName) in loadedPartitionScans)
+            {
+                List<string> ancestors = await IndexAncestorsAsync(connection, indexName);
+                everyScanUsesPartialIndex = everyScanUsesPartialIndex && ancestors.Contains(PartialIndexName);
+            }
+
+            await Assert.That(oldest).IsNotNull();
+            await Assert.That(loadedPartition).StartsWith("MachineTelemetry_Short_");
+            await Assert.That(loadedPartitionScans.Count).IsGreaterThan(0);
+            await Assert.That(everyScanUsesPartialIndex).IsTrue();
+            await Assert.That(sequentialScans.Contains(loadedPartition)).IsFalse();
+            await Assert.That(ContainsNodeType(plan, "Aggregate")).IsFalse();
+            await Assert.That(plan.GetProperty("Node Type").GetString()).IsEqualTo("Limit");
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(seedDb, tenantId);
+        }
+    }
+
+    [Test]
+    public async Task Live_OldestUnprojectedReceipt_IsTheReceiptOfTheRowTheBatchReadReturnsFirst()
+    {
+        // Intent: lag counts only rows the projector will read, so on the production database the answer
+        // must be the server receipt time of the first row the batch read returns past the same cursor,
+        // whatever other rows sit before it: another type, one outside the read window, one not yet
+        // visible. After the last readable row both reads come back empty.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        long machineId = await SeedMachineAsync(db, tenantId);
+        try
+        {
+            DateTimeOffset now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
+            DateTimeOffset receivedAfter = now.AddDays(-8);
+            DateTimeOffset visibleBefore = now.AddSeconds(-5);
+            long cursor = await db.MachineTelemetry.MaxAsync(t => (long?)t.Id) ?? 0;
+
+            async Task<long> InsertAsync(short type, DateTimeOffset receivedAt, DateTimeOffset serverReceivedAt)
+            {
+                return await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+                {
+                    MachineId = machineId,
+                    TenantId = tenantId,
+                    TelemetryType = type,
+                    Payload = "{}",
+                    ReceivedAt = receivedAt,
+                    ServerReceivedAt = serverReceivedAt,
+                    SourceEventId = Guid.NewGuid().ToString("N"),
+                });
+            }
+
+            await InsertAsync(6, now.AddMinutes(-9), now.AddMinutes(-9));
+            await InsertAsync(14, receivedAfter, now.AddMinutes(-8));
+            await InsertAsync(14, now.AddSeconds(-3), visibleBefore.AddSeconds(1));
+            long node = await InsertAsync(14, now.AddMinutes(-2), now.AddMinutes(-2));
+            long snapshot = await InsertAsync(15, now.AddSeconds(-30), now.AddSeconds(-30));
+
+            DateTimeOffset? beforeAny = await repo.GetOldestUnprojectedKubernetesReceiptAsync(cursor, receivedAfter, visibleBefore, CancellationToken.None);
+            DateTimeOffset? afterNode = await repo.GetOldestUnprojectedKubernetesReceiptAsync(node, receivedAfter, visibleBefore, CancellationToken.None);
+            DateTimeOffset? afterSnapshot = await repo.GetOldestUnprojectedKubernetesReceiptAsync(snapshot, receivedAfter, visibleBefore, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> firstBatch = await repo.GetKubernetesTelemetryBatchAsync(cursor, receivedAfter, visibleBefore, 1, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> secondBatch = await repo.GetKubernetesTelemetryBatchAsync(node, receivedAfter, visibleBefore, 1, CancellationToken.None);
+            IReadOnlyList<MachineTelemetry> thirdBatch = await repo.GetKubernetesTelemetryBatchAsync(snapshot, receivedAfter, visibleBefore, 1, CancellationToken.None);
+
+            await Assert.That(beforeAny).IsEqualTo(now.AddMinutes(-2));
+            await Assert.That(beforeAny).IsEqualTo(firstBatch[0].ServerReceivedAt);
+            await Assert.That(afterNode).IsEqualTo(now.AddSeconds(-30));
+            await Assert.That(afterNode).IsEqualTo(secondBatch[0].ServerReceivedAt);
+            await Assert.That(afterSnapshot).IsNull();
+            await Assert.That(thirdBatch.Count).IsEqualTo(0);
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(db, tenantId);
+        }
     }
 
     [Test]
@@ -270,7 +417,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await collect;
 
-        await Assert.That(deleted).IsEqualTo(2);
+        // Collection visits every tenant of the shared database, so the total may include rows other
+        // tests left; the tenant's own rows below pin what this test is about.
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(2);
         await Assert.That(await seedDb.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
         await Assert.That(await seedDb.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
     }
@@ -442,10 +591,10 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     [Test]
     public async Task Live_LatestNodePayloads_AnswersForSeveralMachinesInOneQueryAndScopesToTheTenant()
     {
-        // Intent: the latest-report read runs on the production database as one DISTINCT ON statement
-        // over an array of machine ids. It returns each asked-for machine's newest type-14 payload by
-        // server receipt time, and ignores other types, machines nobody asked for, rows outside the
-        // window, and another tenant's rows that carry an asked-for machine id.
+        // Intent: the latest-report read runs on the production database as one statement with a
+        // per-machine lookup over an array of machine ids. It returns each asked-for machine's newest
+        // type-14 payload by server receipt time, and ignores other types, machines nobody asked for,
+        // rows outside the window, and another tenant's rows that carry an asked-for machine id.
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
         int tenantId = await SeedTenantAsync(db);
@@ -540,6 +689,119 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LatestNodePayloads_MachineWithManyReports_ReturnsTheNewestRowAndBreaksTheTieByRowId()
+    {
+        // Intent: a machine that has reported for days has hundreds of type-14 rows. The read must still
+        // answer with the one the server accepted last, and when several were accepted at that same
+        // instant the row stored last wins, whatever the agent's own clock says about them.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        try
+        {
+            long other = await SeedMachineAsync(db, tenantId);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            SeededReports seeded = await SeedManyReportsAsync(db, tenantId, now);
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = other,
+                TenantId = tenantId,
+                TelemetryType = 14,
+                Payload = "other-machine-report",
+                ReceivedAt = now.AddMinutes(-3),
+                ServerReceivedAt = now.AddMinutes(-3),
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+
+            IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+                tenantId, [seeded.MachineId, other], now.AddDays(-7), CancellationToken.None);
+
+            await Assert.That(payloads.Count).IsEqualTo(2);
+            await Assert.That(payloads[seeded.MachineId]).IsEqualTo(seeded.NewestPayload);
+            await Assert.That(payloads[other]).IsEqualTo("other-machine-report");
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(db, tenantId);
+        }
+    }
+
+    [Test]
+    public async Task Live_LatestNodePayloads_DuplicateMachineIds_AreAskedAboutOnce()
+    {
+        // Intent: the statement looks up each element of the id array, so an id given twice would come
+        // back twice and the keyed result could not be built. A caller that lists a machine twice still
+        // gets its one latest report.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+        try
+        {
+            long machineId = await SeedMachineAsync(db, tenantId);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            foreach ((string payload, int minutesAgo) in new[] { ("older", 20), ("newer", 2) })
+            {
+                await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+                {
+                    MachineId = machineId,
+                    TenantId = tenantId,
+                    TelemetryType = 14,
+                    Payload = payload,
+                    ReceivedAt = now.AddMinutes(-minutesAgo),
+                    ServerReceivedAt = now.AddMinutes(-minutesAgo),
+                    SourceEventId = Guid.NewGuid().ToString("N"),
+                });
+            }
+
+            IReadOnlyDictionary<long, string> payloads = await repo.GetLatestKubernetesNodePayloadsAsync(
+                tenantId, [machineId, machineId], now.AddDays(-7), CancellationToken.None);
+
+            await Assert.That(payloads.Count).IsEqualTo(1);
+            await Assert.That(payloads[machineId]).IsEqualTo("newer");
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(db, tenantId);
+        }
+    }
+
+    [Test]
+    public async Task Live_LatestNodePayloads_PlanReadsAboutOneRowPerPartitionInsteadOfEveryReport()
+    {
+        // Intent: the cluster detail asks for every active machine of the tenant on every view, so the
+        // statement must cost about one row per machine and partition, not one per report the machine has
+        // ever sent in the window. Two hundred reports sit in the machine's partitions; the leaf scans
+        // may produce only the newest row of each partition, the rows tied with it and the one row that
+        // shows the tie has ended. The plan is the one the production statement gets, read back with
+        // EXPLAIN ANALYZE, and the rows are what the scans really produced.
+        await using DatabaseContext db = CreateContext();
+        int tenantId = await SeedTenantAsync(db);
+        try
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            SeededReports seeded = await SeedManyReportsAsync(db, tenantId, now);
+
+            await using NpgsqlConnection connection = new(_migratedConnectionString);
+            await connection.OpenAsync();
+            await ExecuteAsync(connection, "ANALYZE \"MachineTelemetry\"");
+
+            string statement = await CaptureLatestNodePayloadsStatementAsync(tenantId, [seeded.MachineId], now.AddDays(-7));
+            string explain = await ScalarAsync(connection, $"EXPLAIN (ANALYZE, FORMAT JSON) {statement}");
+            JsonElement plan = JsonDocument.Parse(explain).RootElement[0].GetProperty("Plan");
+
+            double rowsProduced = SumLeafScanRows(plan);
+
+            await Assert.That(seeded.RowCount).IsEqualTo(200);
+            await Assert.That(rowsProduced).IsGreaterThan(0);
+            await Assert.That(rowsProduced).IsLessThan(50);
+        }
+        finally
+        {
+            await DeleteTelemetryAsync(db, tenantId);
+        }
+    }
+
+    [Test]
     public async Task Live_CandidateForMachine_ScopesToTheTenant()
     {
         await using DatabaseContext db = CreateContext();
@@ -593,29 +855,39 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         DatabaseRepository repo = CreateRepo(db);
         int tenantId = await SeedTenantAsync(db);
         int otherTenantId = await SeedTenantAsync(db);
-        string sharedCa = NewFingerprint();
-        long own = await SeedLiveClusterAsync(db, tenantId, sharedCa);
-        long sibling = await SeedLiveClusterAsync(db, tenantId, sharedCa);
-        long foreignCluster = await SeedLiveClusterAsync(db, otherTenantId, sharedCa);
-        long nodeElsewhere = await SeedMachineAsync(db, tenantId);
-        long candidateElsewhere = await SeedMachineAsync(db, tenantId);
-        long candidateHere = await SeedMachineAsync(db, tenantId);
-        long foreignLinked = await SeedMachineAsync(db, tenantId);
-        await db.InsertWithInt64IdentityAsync(new KubernetesNode
+        try
         {
-            TenantId = tenantId,
-            ClusterId = sibling,
-            NodeName = "sibling-node",
-            MachineId = nodeElsewhere,
-        });
-        await SeedLiveCandidateAsync(db, tenantId, sibling, candidateElsewhere, DateTimeOffset.UtcNow);
-        await SeedLiveCandidateAsync(db, tenantId, own, candidateHere, DateTimeOffset.UtcNow);
-        await SeedLiveCandidateAsync(db, otherTenantId, foreignCluster, foreignLinked, DateTimeOffset.UtcNow);
+            string sharedCa = NewFingerprint();
+            long own = await SeedLiveClusterAsync(db, tenantId, sharedCa);
+            long sibling = await SeedLiveClusterAsync(db, tenantId, sharedCa);
+            long foreignCluster = await SeedLiveClusterAsync(db, otherTenantId, sharedCa);
+            long nodeElsewhere = await SeedMachineAsync(db, tenantId);
+            long candidateElsewhere = await SeedMachineAsync(db, tenantId);
+            long candidateHere = await SeedMachineAsync(db, tenantId);
+            long foreignLinked = await SeedMachineAsync(db, tenantId);
+            await db.InsertWithInt64IdentityAsync(new KubernetesNode
+            {
+                TenantId = tenantId,
+                ClusterId = sibling,
+                NodeName = "sibling-node",
+                MachineId = nodeElsewhere,
+            });
+            await SeedLiveCandidateAsync(db, tenantId, sibling, candidateElsewhere, DateTimeOffset.UtcNow);
+            await SeedLiveCandidateAsync(db, tenantId, own, candidateHere, DateTimeOffset.UtcNow);
+            await SeedLiveCandidateAsync(db, otherTenantId, foreignCluster, foreignLinked, DateTimeOffset.UtcNow);
 
-        IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(
-            tenantId, own, [nodeElsewhere, candidateElsewhere, candidateHere, foreignLinked], CancellationToken.None);
+            IReadOnlyCollection<long> linked = await repo.GetMachineIdsLinkedToOtherClustersAsync(tenantId, own, CancellationToken.None);
 
-        await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere }.Order().ToArray());
+            await Assert.That(linked.Order().ToArray()).IsEquivalentTo(new[] { nodeElsewhere, candidateElsewhere }.Order().ToArray());
+        }
+        finally
+        {
+            // The node above has no report time, which garbage collection treats as stale, and it visits
+            // every tenant of the shared database, so a failed assertion must not leave the row behind for
+            // the collection test to count.
+            await CleanUpKubernetesRowsAsync(db, tenantId);
+            await CleanUpKubernetesRowsAsync(db, otherTenantId);
+        }
     }
 
     [Test]
@@ -811,7 +1083,9 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await repo.CollectGarbageAsync(new DateTimeOffset(2026, 10, 12, 0, 0, 0, TimeSpan.Zero), CancellationToken.None);
 
-        await Assert.That(deleted).IsEqualTo(3);
+        // Collection visits every tenant of the shared database, so the total may include rows other
+        // tests left; the tenant's own rows below pin what this test is about.
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(3);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.TenantId == tenantId)).IsEqualTo(0);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.TenantId == tenantId)).IsEqualTo(0);
     }
@@ -903,7 +1177,8 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     {
         // Intent: the reporting rules of garbage collection run as set-based SQL on Postgres: an expired
         // candidate is removed, a cluster with no candidate and a stale snapshot goes back to its local
-        // state with its Lease epoch cleared, an agentless node survives a stale snapshot while a
+        // state with its Lease epoch cleared (including the node no machine is linked to any more, which
+        // a fresh local report once described), an agentless node survives a stale snapshot while a
         // candidate remains, and a cluster with neither nodes nor candidates is deleted.
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
@@ -965,6 +1240,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         });
         long linkedNode = await SeedNodeAsync(reverted, "linked", expiredMachine, now.AddHours(-1), now.AddHours(-3));
         long agentlessGone = await SeedNodeAsync(reverted, "agentless", null, null, now.AddHours(-3));
+        long unlinkedGone = await SeedNodeAsync(reverted, "moved-away", null, now.AddMinutes(-5), now.AddHours(-3));
 
         long kept = await SeedClusterWithReporterStateAsync(FingerprintB, liveMachine, now.AddHours(-3));
         await db.InsertAsync(new KubernetesReporterCandidate
@@ -986,10 +1262,11 @@ public sealed class KubernetesInventoryRepositoryLiveTests
 
         int deleted = await repo.CollectGarbageAsync(now, CancellationToken.None);
 
-        await Assert.That(deleted).IsGreaterThanOrEqualTo(3);
+        await Assert.That(deleted).IsGreaterThanOrEqualTo(4);
         await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == expiredMachine)).IsEqualTo(0);
         await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == liveMachine)).IsEqualTo(1);
         await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == agentlessGone)).IsEqualTo(0);
+        await Assert.That(await db.KubernetesNodes.CountAsync(n => n.Id == unlinkedGone)).IsEqualTo(0);
         await Assert.That(await db.KubernetesClusters.CountAsync(c => c.Id == empty)).IsEqualTo(0);
 
         KubernetesNode node = await db.KubernetesNodes.SingleAsync(n => n.Id == linkedNode);
@@ -1025,46 +1302,54 @@ public sealed class KubernetesInventoryRepositoryLiveTests
         await using DatabaseContext db = CreateContext();
         DatabaseRepository repo = CreateRepo(db);
         int tenantId = await SeedTenantAsync(db);
-        long machineId = await SeedMachineAsync(db, tenantId);
-        DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
-        long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
-        {
-            TenantId = tenantId,
-            CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            Distro = "k3s",
-            FirstSeenAt = seenAt,
-            LastSeenAt = seenAt,
-            ActiveReporterMachineId = machineId,
-            LastSnapshotReceivedAt = seenAt,
-        });
-        long nodeId = await db.InsertWithInt64IdentityAsync(new KubernetesNode
-        {
-            TenantId = tenantId,
-            ClusterId = clusterId,
-            NodeName = "node-1",
-            MachineId = machineId,
-            LastLocalReportAt = seenAt,
-        });
-        await db.InsertAsync(new KubernetesReporterCandidate
-        {
-            TenantId = tenantId,
-            ClusterId = clusterId,
-            MachineId = machineId,
-            LastReportAt = seenAt,
-        });
 
-        using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+        try
         {
-            string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
-            await transaction.CommitAsync(CancellationToken.None);
-            await Assert.That(deletedKeyHash).IsNotNull();
+            long machineId = await SeedMachineAsync(db, tenantId);
+            DateTimeOffset seenAt = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+            long clusterId = await db.InsertWithInt64IdentityAsync(new KubernetesCluster
+            {
+                TenantId = tenantId,
+                CaFingerprint = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+                Distro = "k3s",
+                FirstSeenAt = seenAt,
+                LastSeenAt = seenAt,
+                ActiveReporterMachineId = machineId,
+                LastSnapshotReceivedAt = seenAt,
+            });
+            long nodeId = await db.InsertWithInt64IdentityAsync(new KubernetesNode
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                NodeName = "node-1",
+                MachineId = machineId,
+                LastLocalReportAt = seenAt,
+            });
+            await db.InsertAsync(new KubernetesReporterCandidate
+            {
+                TenantId = tenantId,
+                ClusterId = clusterId,
+                MachineId = machineId,
+                LastReportAt = seenAt,
+            });
+
+            using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+            {
+                string? deletedKeyHash = await repo.SoftDeleteMachineAsync(machineId, tenantId, 1, CancellationToken.None);
+                await transaction.CommitAsync(CancellationToken.None);
+                await Assert.That(deletedKeyHash).IsNotNull();
+            }
+
+            await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
+            await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
+            KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
+            await Assert.That(cluster.ActiveReporterMachineId).IsNull();
+            await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
         }
-
-        await Assert.That(await db.KubernetesReporterCandidates.CountAsync(c => c.MachineId == machineId)).IsEqualTo(0);
-        await Assert.That((await db.KubernetesNodes.SingleAsync(n => n.Id == nodeId)).MachineId).IsNull();
-        KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.Id == clusterId);
-        await Assert.That(cluster.ActiveReporterMachineId).IsNull();
-        await Assert.That(cluster.LastSnapshotReceivedAt).IsEqualTo(seenAt);
+        finally
+        {
+            await CleanUpKubernetesRowsAsync(db, tenantId);
+        }
     }
 
     [Test]
@@ -1296,6 +1581,58 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     [Test]
+    public async Task Live_LargeSnapshot_UpsertsEveryNodeAndALaterCompleteOneRemovesTheRestOnPostgres()
+    {
+        // Intent: a snapshot of 1,201 nodes on a new cluster is upserted in full, and a second complete
+        // snapshot that lists 600 of them removes the other 601, on Postgres, where an IN list and a
+        // delete by id are real statements with a real parameter limit. No statement may carry the whole
+        // list, and the rows are removed again afterwards because the class shares one database.
+        await using DatabaseContext db = CreateContext();
+        StatementSizeRecorder recorder = new();
+        db.AddInterceptor(recorder);
+        DatabaseRepository repo = CreateRepo(db);
+        int tenantId = await SeedTenantAsync(db);
+
+        try
+        {
+            long sender = await SeedMachineAsync(db, tenantId);
+            string uid = Guid.NewGuid().ToString();
+            string fingerprint = NewFingerprint();
+            DateTimeOffset at = new(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+            List<int> kept = Enumerable.Range(0, 300).Concat(Enumerable.Range(901, 300)).ToList();
+
+            SnapshotOutcome first = await repo.ApplyClusterSnapshotAsync(
+                LiveSnapshot(10, tenantId, sender, at, uid, fingerprint, nodes: LargeSnapshotNodes(Enumerable.Range(0, 1201))),
+                at, CancellationToken.None);
+
+            await Assert.That(first).IsEqualTo(SnapshotOutcome.Accepted);
+            KubernetesCluster cluster = await db.KubernetesClusters.SingleAsync(c => c.TenantId == tenantId);
+            List<string> created = await db.KubernetesNodes
+                .Where(n => n.ClusterId == cluster.Id).Select(n => n.NodeName).ToListAsync();
+            await Assert.That(created.Count).IsEqualTo(1201);
+            await Assert.That(created).IsEquivalentTo(Enumerable.Range(0, 1201).Select(LargeSnapshotNodeName));
+
+            SnapshotOutcome second = await repo.ApplyClusterSnapshotAsync(
+                LiveSnapshot(11, tenantId, sender, at.AddMinutes(1), uid, fingerprint, nodes: LargeSnapshotNodes(kept)),
+                at.AddMinutes(1), CancellationToken.None);
+
+            await Assert.That(second).IsEqualTo(SnapshotOutcome.Accepted);
+            List<string> remaining = await db.KubernetesNodes
+                .Where(n => n.ClusterId == cluster.Id).Select(n => n.NodeName).ToListAsync();
+            await Assert.That(remaining.Count).IsEqualTo(600);
+            await Assert.That(remaining).IsEquivalentTo(kept.Select(LargeSnapshotNodeName));
+            await Assert.That(recorder.MaxParameters).IsLessThanOrEqualTo(LargestStatementParameters);
+            await Assert.That(recorder.MaxTextLength).IsLessThanOrEqualTo(LargestStatementLength);
+            await Assert.That(recorder.MaxInListItems).IsLessThanOrEqualTo(LargestInList);
+            await Assert.That(recorder.DeleteStatements).IsEqualTo(2);
+        }
+        finally
+        {
+            await CleanUpKubernetesRowsAsync(db, tenantId);
+        }
+    }
+
+    [Test]
     public async Task Live_SnapshotFencing_IsPerLeaseEpochOnPostgres()
     {
         // Intent: the epoch comparison reads back what Postgres stored. A new Lease epoch restarts the
@@ -1352,6 +1689,16 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     private static ClusterSnapshotNode LiveNode(string name, string? machineId = null)
     {
         return new ClusterSnapshotNode(name, machineId, ["worker"], "True", null, [], false, "v1.30.4+k3s1", "containerd://1.7.23", 3, 110);
+    }
+
+    private static string LargeSnapshotNodeName(int index)
+    {
+        return $"node-{index:D4}";
+    }
+
+    private static List<ClusterSnapshotNode> LargeSnapshotNodes(IEnumerable<int> indexes)
+    {
+        return indexes.Select(i => LiveNode(LargeSnapshotNodeName(i))).ToList();
     }
 
     private static ClusterSnapshot LiveSnapshot(
@@ -1516,10 +1863,56 @@ public sealed class KubernetesInventoryRepositoryLiveTests
     }
 
     /// <summary>
-    /// Runs the repository's batch read and returns the statement it sent with every parameter
-    /// replaced by a literal, because a plain EXPLAIN cannot take parameters, along with the rows.
+    /// The machine seeded by <see cref="SeedManyReportsAsync"/>, the payload of the report the server
+    /// accepted last and how many reports the machine has.
     /// </summary>
-    private static async Task<(string Statement, IReadOnlyList<MachineTelemetry> Rows)> CaptureBatchStatementAsync()
+    private sealed record SeededReports(long MachineId, string NewestPayload, int RowCount);
+
+    /// <summary>
+    /// Gives a new machine 200 type-14 reports accepted over the last five and a half days. The three newest
+    /// were accepted at the same instant, with the agent's own clock ordering them the other way round, so
+    /// only the row id can say which of them was stored last.
+    /// </summary>
+    private static async Task<SeededReports> SeedManyReportsAsync(DatabaseContext db, int tenantId, DateTimeOffset now)
+    {
+        const int reportCount = 200;
+        long machineId = await SeedMachineAsync(db, tenantId);
+        DateTimeOffset newest = now.AddMinutes(-1);
+        TimeSpan step = TimeSpan.FromMinutes(40);
+
+        for (int index = 0; index < reportCount; index++)
+        {
+            DateTimeOffset serverReceivedAt = newest - ((reportCount - 1 - index) * step);
+            DateTimeOffset receivedAt = serverReceivedAt;
+            if (index >= 197)
+            {
+                serverReceivedAt = newest;
+                receivedAt = newest - TimeSpan.FromHours(index - 197);
+            }
+
+            await db.InsertWithInt64IdentityAsync(new MachineTelemetry
+            {
+                MachineId = machineId,
+                TenantId = tenantId,
+                TelemetryType = 14,
+                Payload = $"report-{index}",
+                ReceivedAt = receivedAt,
+                ServerReceivedAt = serverReceivedAt,
+                SourceEventId = Guid.NewGuid().ToString("N"),
+            });
+        }
+
+        int stored = await db.MachineTelemetry.CountAsync(t => (t.MachineId == machineId) && (t.TelemetryType == 14));
+
+        return new SeededReports(machineId, $"report-{reportCount - 1}", stored);
+    }
+
+    /// <summary>
+    /// Runs the repository's latest-report read and returns the statement it sent with every parameter
+    /// replaced by a literal, because a plain EXPLAIN cannot take parameters.
+    /// </summary>
+    private static async Task<string> CaptureLatestNodePayloadsStatementAsync(
+        int tenantId, long[] machineIds, DateTimeOffset serverReceivedAfter)
     {
         string statement = string.Empty;
         DataOptions<DatabaseContext> options = new(new DataOptions()
@@ -1533,12 +1926,80 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             }));
         await using DatabaseContext db = new(options);
 
+        await CreateRepo(db).GetLatestKubernetesNodePayloadsAsync(tenantId, machineIds, serverReceivedAfter, CancellationToken.None);
+
+        return statement;
+    }
+
+    /// <summary>
+    /// Adds up the rows every scan of a telemetry partition produced, counting each loop of a scan that
+    /// ran more than once. Only the scans that read a table are counted: the joins and sorts above them
+    /// pass on rows the scans already produced.
+    /// </summary>
+    private static double SumLeafScanRows(JsonElement node)
+    {
+        double rows = 0;
+        if (node.TryGetProperty("Relation Name", out JsonElement relation)
+            && relation.GetString()!.StartsWith("MachineTelemetry_", StringComparison.Ordinal))
+        {
+            rows += node.GetProperty("Actual Rows").GetDouble() * node.GetProperty("Actual Loops").GetDouble();
+        }
+
+        if (node.TryGetProperty("Plans", out JsonElement children))
+        {
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                rows += SumLeafScanRows(child);
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Removes the telemetry a test seeded for its tenant. The projector's batch read takes the first 500
+    /// Kubernetes rows of the shared database, so a test that stores hundreds of reports must not leave them
+    /// behind for that test to read past.
+    /// </summary>
+    private static async Task DeleteTelemetryAsync(DatabaseContext db, int tenantId)
+    {
+        await db.MachineTelemetry.Where(t => t.TenantId == tenantId).DeleteAsync();
+    }
+
+    /// <summary>
+    /// Runs the repository's batch read and returns the statement it sent with every parameter
+    /// replaced by a literal, because a plain EXPLAIN cannot take parameters, along with the rows.
+    /// </summary>
+    private static async Task<(string Statement, IReadOnlyList<MachineTelemetry> Rows)> CaptureBatchStatementAsync()
+    {
         // The window bounds are fixed, far outside any time the seeded rows can carry, so the result
         // does not depend on the clocks of the test host and the database.
-        IReadOnlyList<MachineTelemetry> rows = await CreateRepo(db).GetKubernetesTelemetryBatchAsync(
-            0, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), 500, CancellationToken.None);
+        return await CaptureStatementAsync(repo => repo.GetKubernetesTelemetryBatchAsync(
+            0, new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2100, 1, 1, 0, 0, 0, TimeSpan.Zero), 500, CancellationToken.None));
+    }
 
-        return (statement, rows);
+    /// <summary>
+    /// Runs one repository read and returns the statement it sent with every parameter replaced by a
+    /// literal, because a plain EXPLAIN cannot take parameters, along with what the read returned.
+    /// </summary>
+    private static async Task<(string Statement, TResult Result)> CaptureStatementAsync<TResult>(
+        Func<IKubernetesInventoryRepository, Task<TResult>> read)
+    {
+        string statement = string.Empty;
+        DataOptions<DatabaseContext> options = new(new DataOptions()
+            .UsePostgreSQL(_migratedConnectionString)
+            .UseTracing(TraceLevel.Info, info =>
+            {
+                if ((info.TraceInfoStep == TraceInfoStep.BeforeExecute) && (info.Command != null))
+                {
+                    statement = InlineParameters(info.Command);
+                }
+            }));
+        await using DatabaseContext db = new(options);
+
+        TResult result = await read(CreateRepo(db));
+
+        return (statement, result);
     }
 
     private static string InlineParameters(DbCommand command)
@@ -1550,6 +2011,7 @@ public sealed class KubernetesInventoryRepositoryLiveTests
             {
                 DateTimeOffset timestamp => $"'{timestamp.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}'::timestamptz",
                 IFormattable number => number.ToString(null, CultureInfo.InvariantCulture),
+                long[] numbers => $"ARRAY[{string.Join(",", numbers.Select(n => n.ToString(CultureInfo.InvariantCulture)))}]::bigint[]",
                 _ => throw new InvalidOperationException($"Unexpected parameter value for {parameter.ParameterName}"),
             };
             text = text.Replace($"@{parameter.ParameterName.TrimStart('@')}", literal, StringComparison.Ordinal);
@@ -1587,6 +2049,28 @@ public sealed class KubernetesInventoryRepositoryLiveTests
                 CollectScans(child, relation, indexScans, sequentialScans);
             }
         }
+    }
+
+    /// <summary>Reports whether a JSON plan contains a node of the given type anywhere.</summary>
+    private static bool ContainsNodeType(JsonElement node, string nodeType)
+    {
+        if (node.GetProperty("Node Type").GetString() == nodeType)
+        {
+            return true;
+        }
+
+        if (node.TryGetProperty("Plans", out JsonElement children))
+        {
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                if (ContainsNodeType(child, nodeType))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

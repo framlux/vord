@@ -147,6 +147,7 @@ func TestOpen_MigrationsRun(t *testing.T) {
 		"server_config",
 		"ssh_sessions",
 		"collector_state",
+		"telemetry_undelivered_since",
 	}
 
 	for _, table := range requiredTables {

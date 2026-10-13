@@ -2241,8 +2241,9 @@ type KubernetesNodeRecord struct {
 	CaFingerprint          string                 `protobuf:"bytes,7,opt,name=ca_fingerprint,json=caFingerprint,proto3" json:"ca_fingerprint,omitempty"`
 	AdminCredentialPresent bool                   `protobuf:"varint,8,opt,name=admin_credential_present,json=adminCredentialPresent,proto3" json:"admin_credential_present,omitempty"`
 	ReporterEnrolled       bool                   `protobuf:"varint,9,opt,name=reporter_enrolled,json=reporterEnrolled,proto3" json:"reporter_enrolled,omitempty"`
-	// Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed. Empty
-	// when the last Lease call worked or none has been made.
+	// Why this host's reporter cannot use its Lease credentials: credentials_rejected or tls_ca_changed, or
+	// state_copied when its state file was written on another host and is not used. Empty when the last Lease
+	// call worked or none has been made.
 	ReporterError string `protobuf:"bytes,10,opt,name=reporter_error,json=reporterError,proto3" json:"reporter_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

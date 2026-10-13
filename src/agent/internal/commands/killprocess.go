@@ -23,7 +23,7 @@ type KillProcessExecutor struct {
 
 // Execute terminates a process by PID.
 // Params:
-//   - "pid": process ID (required)
+//   - "pid": process ID, a decimal number that fits a 32-bit pid_t (required)
 //   - "force": "true" to send SIGKILL immediately instead of SIGTERM first
 func (e *KillProcessExecutor) Execute(ctx context.Context, params map[string]string) Result {
 	pidStr, ok := params["pid"]
@@ -35,7 +35,9 @@ func (e *KillProcessExecutor) Execute(ctx context.Context, params map[string]str
 		}
 	}
 
-	pid, err := strconv.Atoi(pidStr)
+	// The kernel's pid_t is 32 bits and kill(2) truncates a wider value, so a number past that range
+	// (4294967297 is pid 1, 4294967296 is the agent's own process group) would slip past the checks below.
+	parsedPID, err := strconv.ParseInt(pidStr, 10, 32)
 	if err != nil {
 
 		return Result{
@@ -43,6 +45,7 @@ func (e *KillProcessExecutor) Execute(ctx context.Context, params map[string]str
 			Error:   fmt.Errorf("invalid pid: %w", err),
 		}
 	}
+	pid := int(parsedPID)
 
 	if pid <= minProtectedPID {
 

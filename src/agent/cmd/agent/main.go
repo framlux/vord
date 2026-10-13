@@ -152,27 +152,28 @@ func main() {
 		Facts:     kubelocal.Detector{Root: "/"}.Detect,
 	})
 
-	// Initialize command processor if remote commands are enabled. The cluster reporter commands report a state
+	// The command processor is always built, because the cluster reporter's cleanup commands must reach a host that
+	// has since turned remote commands off. With the flag off the processor refuses everything else, and the
+	// cleanup commands too unless this host holds a reporter record. The cluster reporter commands report a state
 	// change through a hook that runs the local Kubernetes collector, which the scheduler also runs, so the
 	// collector is shared. The collector reports why the reporter cannot use its credentials, if it cannot.
 	kubeCollector := collector.NewKubernetesCollector(cfg.DataDir, reporterRuntime.ReporterError)
 
-	var cmdProcessor *commands.Processor
-	if cfg.AllowRemoteCommands {
-		kubeReporter := kubereporter.New(kubereporter.Options{
-			DataDir:  cfg.DataDir,
-			Facts:    kubelocal.Detector{Root: "/"}.Detect,
-			Releaser: reporterRuntime,
-			OnStateChanged: newReporterStateHook(
-				func(c context.Context) error { return kubeCollector.Collect(c, store) },
-				pauseCoordinator.Paused,
-			),
-		})
-		cmdHandler := commands.NewHandler(commands.HandlerDeps{KubeReporter: kubeReporter})
-		nonceAdapter := &storeNonceAdapter{store: store}
-		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
-		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
-	}
+	processorOptions, shouldPoll := newCommandAdmission(cfg.AllowRemoteCommands, cfg.DataDir)
+
+	kubeReporter := kubereporter.New(kubereporter.Options{
+		DataDir:  cfg.DataDir,
+		Facts:    kubelocal.Detector{Root: "/"}.Detect,
+		Releaser: reporterRuntime,
+		OnStateChanged: newReporterStateHook(
+			func(c context.Context) error { return kubeCollector.Collect(c, store) },
+			pauseCoordinator.Paused,
+		),
+	})
+	cmdHandler := commands.NewHandler(commands.HandlerDeps{KubeReporter: kubeReporter})
+	nonceAdapter := &storeNonceAdapter{store: store}
+	ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
+	cmdProcessor := commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay, processorOptions)
 
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
@@ -224,17 +225,18 @@ func main() {
 		reporterRuntime.Run(ctx)
 	}()
 
-	// Start command poll loop in background (opt-in only).
-	if cfg.AllowRemoteCommands {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer recoverPanic("command-poll")
-			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit, pauseCoordinator)
-		}()
-	} else {
-		slog.Info("remote command polling disabled by configuration")
+	// Start the command poll loop in background. With remote commands off it still runs, but each tick polls only
+	// while this host holds a reporter record, so a host that never enrolled adds no load and accepts nothing.
+	if cfg.AllowRemoteCommands == false {
+		slog.Info("remote commands are disabled by configuration; cluster reporter cleanup commands are accepted only while this host holds a reporter record")
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer recoverPanic("command-poll")
+		runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit, pauseCoordinator.Paused, shouldPoll)
+	}()
 
 	// Start telemetry sender in background.
 	wg.Add(1)
@@ -455,7 +457,43 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 	}
 }
 
-func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter, pauseCoordinator *pause.Coordinator) {
+// newCommandAdmission decides which commands this host takes and when it asks for them, from the one fact that
+// settles both: whether remote commands are allowed. The processor options and the poll gate share the same two
+// reporter-record checks on the agent's data directory, so what the poll fetches and what the processor accepts
+// cannot disagree.
+func newCommandAdmission(allowRemoteCommands bool, dataDir string) (commands.ProcessorOptions, func() bool) {
+	return commandAdmissionFrom(
+		allowRemoteCommands,
+		func() bool { return kubereporter.LocalRecordPresent(dataDir) },
+		func() bool { return kubereporter.CopiedRecordPresent(dataDir) },
+	)
+}
+
+// commandAdmissionFrom is newCommandAdmission for the given record checks: whether the host holds a reporter
+// record of its own, and whether it holds one that was written on another host.
+func commandAdmissionFrom(allowRemoteCommands bool, localRecordPresent func() bool, copiedRecordPresent func() bool) (commands.ProcessorOptions, func() bool) {
+	options := commands.ProcessorOptions{
+		AllowAll:            allowRemoteCommands,
+		LocalRecordPresent:  localRecordPresent,
+		CopiedRecordPresent: copiedRecordPresent,
+	}
+
+	return options, commandPollGate(allowRemoteCommands, localRecordPresent, copiedRecordPresent)
+}
+
+// commandPollGate answers, on each tick, whether this host should ask the server for commands. A host that
+// allows remote commands always should. One that does not accepts only the cleanup commands, and only while it
+// holds a reporter record of its own or one copied from another host (which it can only unenrol), so it asks only
+// then. The records are read on every call, which is a file stat each.
+func commandPollGate(allowRemoteCommands bool, localRecordPresent func() bool, copiedRecordPresent func() bool) func() bool {
+	if allowRemoteCommands {
+		return func() bool { return true }
+	}
+
+	return func() bool { return localRecordPresent() || copiedRecordPresent() }
+}
+
+func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter, paused func() bool, shouldPoll func() bool) {
 	interval := rs.CommandPollInterval()
 	timer := time.NewTimer(jit.StartupPhase(interval))
 	defer timer.Stop()
@@ -465,13 +503,7 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, proce
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			// A paused host's commands are not delivered, and one created before the pause is bounded by its own
-			// expiry, so there is nothing to poll for until the pause ends.
-			if pauseCoordinator.Paused() {
-				slog.Debug("command poll skipped, host is paused")
-			} else {
-				pollCommands(ctx, cfgClient, processor, rs)
-			}
+			commandPollTick(ctx, cfgClient, processor, rs, paused, shouldPoll)
 
 			if newInterval := rs.CommandPollInterval(); newInterval != interval {
 				interval = newInterval
@@ -479,6 +511,25 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, proce
 			timer.Reset(jit.Apply(interval, 0.15))
 		}
 	}
+}
+
+// commandPollTick runs one tick of the command poll. A paused host's commands are not delivered, and one created
+// before the pause is bounded by its own expiry, so there is nothing to poll for until the pause ends. A host
+// the gate refuses has nothing to receive, so it makes no call.
+func commandPollTick(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, paused func() bool, shouldPoll func() bool) {
+	if paused() {
+		slog.Debug("command poll skipped, host is paused")
+
+		return
+	}
+
+	if shouldPoll() == false {
+		slog.Debug("command poll skipped, remote commands are off and this host holds no cluster reporter record")
+
+		return
+	}
+
+	pollCommands(ctx, cfgClient, processor, rs)
 }
 
 // pollCommands fetches the commands waiting for this machine and hands each to the processor.

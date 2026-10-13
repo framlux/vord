@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -96,6 +97,33 @@ func TestNewHandler_AllExecutorsRegistered(t *testing.T) {
 
 	if len(h.executors) != len(expectedTypes) {
 		t.Errorf("expected %d executors, got %d", len(expectedTypes), len(h.executors))
+	}
+}
+
+// Intent: Only unenrol and uninstall are cleanup commands, and the match is exact: the exemption from the
+// remote-commands flag must not extend to enrol, to any machine command, or to a spelling that differs in case.
+func TestCommandType_IsCleanup(t *testing.T) {
+	cases := []struct {
+		commandType CommandType
+		want        bool
+	}{
+		{CommandK8sReporterUnenrol, true},
+		{CommandK8sReporterUninstall, true},
+		{CommandK8sReporterEnrol, false},
+		{CommandReboot, false},
+		{CommandKillProcess, false},
+		{CommandKillSession, false},
+		{CommandCheckUpdate, false},
+		{CommandInstallUpdate, false},
+		{CommandType("K8S_REPORTER_UNINSTALL"), false},
+		{CommandType("k8s_reporter_unenrol "), false},
+		{CommandType(""), false},
+	}
+
+	for _, tc := range cases {
+		if got := tc.commandType.IsCleanup(); got != tc.want {
+			t.Errorf("CommandType(%q).IsCleanup() = %v, want %v", string(tc.commandType), got, tc.want)
+		}
 	}
 }
 
@@ -195,6 +223,63 @@ func TestKillProcess_ProtectedPID(t *testing.T) {
 				t.Errorf("expected 'protected range' error for pid %s, got %v", pid, result.Error)
 			}
 		})
+	}
+}
+
+// Intent: A PID that does not fit the kernel's 32-bit pid_t must be refused. Parsed as a 64-bit int it
+// would pass the protected-range and self checks, then be truncated by kill(2): 4294967297 becomes pid 1
+// and 4294967296 becomes pid 0, the agent's own process group.
+func TestKillProcess_PIDBeyond32Bits(t *testing.T) {
+	tooBig := []string{"2147483648", "4294967295", "4294967296", "4294967297", "9223372036854775807", "99999999999999999999"}
+	for _, pid := range tooBig {
+		for _, force := range []string{"true", "false"} {
+			t.Run("pid_"+pid+"_force_"+force, func(t *testing.T) {
+				sig := &mockSignaler{}
+				e := &KillProcessExecutor{signaler: sig}
+
+				result := e.Execute(context.Background(), map[string]string{"pid": pid, "force": force})
+
+				if result.Success {
+					t.Errorf("expected Success=false for out-of-range pid %s", pid)
+				}
+				if result.Error == nil || (strings.Contains(result.Error.Error(), "invalid pid") == false) {
+					t.Errorf("expected 'invalid pid' error for pid %s, got %v", pid, result.Error)
+				}
+				if len(sig.calls) != 0 {
+					t.Errorf("no signal may be sent for pid %s, got %d call(s)", pid, len(sig.calls))
+				}
+			})
+		}
+	}
+}
+
+// Intent: The largest PID that fits pid_t is still a legitimate target, and it reaches the signaler as given.
+func TestKillProcess_LargestInt32PID(t *testing.T) {
+	sig := &mockSignaler{}
+	e := &KillProcessExecutor{signaler: sig}
+
+	result := e.Execute(context.Background(), map[string]string{"pid": "2147483647", "force": "true"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(sig.calls) != 1 || sig.calls[0].PID != 2147483647 {
+		t.Errorf("expected one signal to pid 2147483647, got %v", sig.calls)
+	}
+}
+
+// Intent: An ordinary PID is parsed and signaled exactly as given.
+func TestKillProcess_OrdinaryPIDReachesSignaler(t *testing.T) {
+	sig := &mockSignaler{}
+	e := &KillProcessExecutor{signaler: sig}
+
+	result := e.Execute(context.Background(), map[string]string{"pid": "4242", "force": "true"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(sig.calls) != 1 || sig.calls[0].PID != 4242 {
+		t.Errorf("expected one signal to pid 4242, got %v", sig.calls)
 	}
 }
 
@@ -388,6 +473,25 @@ func TestKillSession_Success(t *testing.T) {
 	}
 }
 
+// Intent: The id is passed after "--" so loginctl can never read it as an option.
+func TestKillSession_PassesIDAfterEndOfOptions(t *testing.T) {
+	runner := &mockRunner{}
+	e := &KillSessionExecutor{runner: runner}
+
+	result := e.Execute(context.Background(), map[string]string{"session_id": "abc123"})
+
+	if result.Success == false {
+		t.Fatalf("expected Success=true, got error: %v", result.Error)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 run call, got %d", len(runner.calls))
+	}
+	want := []string{"terminate-session", "--", "abc123"}
+	if slices.Equal(runner.calls[0].Args, want) == false {
+		t.Errorf("expected argv %v, got %v", want, runner.calls[0].Args)
+	}
+}
+
 // Intent: loginctl fails -> error result with output.
 func TestKillSession_LoginctlFails(t *testing.T) {
 	runner := &mockRunner{
@@ -450,10 +554,35 @@ func TestKillSession_InvalidSessionID(t *testing.T) {
 	}
 }
 
+// Intent: An id that starts with "-" (or any non-alphanumeric) must be refused before loginctl runs,
+// so it can never be parsed as an option.
+func TestKillSession_LeadingNonAlphanumericRefused(t *testing.T) {
+	badIDs := []string{"-h", "--help", "-1", "-", "--", "-abc", "_abc", "-_"}
+
+	for _, id := range badIDs {
+		t.Run(id, func(t *testing.T) {
+			runner := &mockRunner{}
+			e := &KillSessionExecutor{runner: runner}
+
+			result := e.Execute(context.Background(), map[string]string{"session_id": id})
+
+			if result.Success {
+				t.Errorf("expected Success=false for session_id %q", id)
+			}
+			if result.Error == nil || (strings.Contains(result.Error.Error(), "invalid session_id format") == false) {
+				t.Errorf("expected 'invalid session_id format' for %q, got %v", id, result.Error)
+			}
+			if len(runner.calls) != 0 {
+				t.Errorf("loginctl must not run for %q, got %d call(s)", id, len(runner.calls))
+			}
+		})
+	}
+}
+
 // Intent: Alphanumeric session IDs pass validation.
 func TestKillSession_ValidSessionID(t *testing.T) {
 	runner := &mockRunner{}
-	validIDs := []string{"abc123", "session-42", "sess_01"}
+	validIDs := []string{"abc123", "session-42", "sess_01", "7", "c1"}
 	for _, id := range validIDs {
 		t.Run(id, func(t *testing.T) {
 			e := &KillSessionExecutor{runner: runner}

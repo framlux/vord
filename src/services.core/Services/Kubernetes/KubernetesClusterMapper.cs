@@ -93,7 +93,7 @@ internal static class KubernetesClusterMapper
     /// <param name="cluster">The cluster.</param>
     /// <param name="nodes">The cluster's nodes.</param>
     /// <param name="candidates">The cluster's reporter candidates.</param>
-    /// <param name="machineNames">The names of the holder and of the candidates' machines by machine id.</param>
+    /// <param name="machineNames">The names of the last snapshot sender and of the candidates' machines by machine id.</param>
     /// <param name="now">The time staleness is measured from.</param>
     public static KubernetesClusterSummaryDto ToSummary(
         KubernetesCluster cluster,
@@ -114,7 +114,7 @@ internal static class KubernetesClusterMapper
     /// <param name="cluster">The cluster.</param>
     /// <param name="nodes">The cluster's nodes.</param>
     /// <param name="candidates">The cluster's reporter candidates.</param>
-    /// <param name="machineNames">The names of the holder and of the candidates' machines by machine id.</param>
+    /// <param name="machineNames">The names of the last snapshot sender and of the candidates' machines by machine id.</param>
     /// <param name="machines">The cluster's candidates and eligible machines, as described for the page.</param>
     /// <param name="now">The time staleness is measured from.</param>
     public static KubernetesClusterDetailDto ToDetail(

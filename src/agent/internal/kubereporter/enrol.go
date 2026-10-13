@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"time"
@@ -26,8 +25,10 @@ import (
 // and keeps in memory only.
 //
 // Everything shared between candidates is created only when it is missing, and an object that has the name of
-// one of ours but not the Vord label is a conflict that stops the command before anything else is written. A
-// failure after the Secret step removes this host's Secret and state file and nothing shared.
+// one of ours but not the Vord label is a conflict that stops the command before anything else is written. The
+// instance id is written to the pending file before the Secret is created, so that no Secret can exist that no
+// local file names. A failure after the Secret step removes this host's Secret, the pending file and the state
+// file and nothing shared. A record written on another host is ignored as if it were not there.
 func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,13 +43,21 @@ func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 	}
 
 	hadState := stateFileExists(r.dataDir)
+	host := r.hostMachineID()
 
-	instanceID, err := r.instanceID()
+	instanceID, stateHoldsID, err := r.instanceID(host)
 	if err != nil {
 		return newFailure(reasonStateWriteFailed, "", err).result()
 	}
 
-	run := &enrolRun{reporter: r, session: session, instanceID: instanceID, hadState: hadState}
+	run := &enrolRun{
+		reporter:      r,
+		session:       session,
+		instanceID:    instanceID,
+		hostMachineID: host,
+		stateHoldsID:  stateHoldsID,
+		hadState:      hadState,
+	}
 
 	if fail := run.execute(ctx); fail != nil {
 		if run.secretTouched {
@@ -63,26 +72,34 @@ func (r *Reporter) Enrol(ctx context.Context) commands.Result {
 	return commands.Result{Success: true, Message: messageEnrolled}
 }
 
-// stateFileExists reports whether the state file is there, usable or not.
-func stateFileExists(dataDir string) bool {
-	_, err := os.Stat(statePath(dataDir))
-
-	return err == nil
-}
-
-// instanceID returns the id this host enrolled with before, or makes a new one. A state file that cannot be used
-// is replaced rather than trusted.
-func (r *Reporter) instanceID() (string, error) {
+// instanceID returns the id this enrol uses, and whether a usable state file already holds it. A host that
+// enrolled before keeps its id, so a re-enrol replaces its Secret instead of leaking it. The first of these that
+// has an id wins: the usable state file, then the pending file, then the instance id in a state file that cannot
+// be loaded as a whole, and otherwise a new id is made. A record written on another host is skipped at every step,
+// because the Secret it names is that host's.
+func (r *Reporter) instanceID(host string) (string, bool, error) {
 	state, found, err := LoadState(r.dataDir)
 	if err != nil {
-		slog.Warn("the reporter state file cannot be used, enrolling with a new instance id", "error", err)
+		slog.Warn("the reporter state file cannot be used", "error", err)
 	}
 
 	if (err == nil) && found {
-		return state.InstanceID, nil
+		if copiedFromAnotherHost(state.HostMachineID, host) == false {
+			return state.InstanceID, true, nil
+		}
+
+		slog.Warn("the reporter state file was written on another host, ignoring it", "instance", state.InstanceID)
 	}
 
-	return newInstanceID()
+	if id, ok := recordedInstanceID(r.dataDir, host); ok {
+		slog.Info("enrolling with the instance id this host recorded earlier", "instance", id)
+
+		return id, false, nil
+	}
+
+	id, err := newInstanceID()
+
+	return id, false, err
 }
 
 // enrolRun is the part of an enrol that starts with this host's Secret: what it has changed, so a failure can
@@ -92,11 +109,18 @@ type enrolRun struct {
 	session    *adminSession
 	instanceID string
 
+	// hostMachineID is this host's machine id, written into the pending and state files so that a copy of either
+	// on another host can be told from the original.
+	hostMachineID string
+	// stateHoldsID is whether a usable state file of this host already names instanceID. It is then the record
+	// of the Secret, and no pending file is needed.
+	stateHoldsID bool
 	// hadState is whether a state file existed before the run, which is what the server last heard about.
 	hadState bool
-	// secretTouched is set once the old Secret is confirmed gone (or there was none), from which point an earlier
-	// state file names a dead token and a new Secret may exist. Until then a failure changes nothing, and the
-	// state file, the only record of the instance id, must stay.
+	// secretTouched is set once the old Secret is confirmed gone (or there was none) and the instance id is
+	// recorded on disk, immediately before the new Secret is created. From that point an earlier state file names
+	// a dead token and a new Secret may exist, so a failure is rolled back. Until then a failure changes nothing,
+	// and the files that record the instance id must stay.
 	secretTouched bool
 	// secretCreated and secretUID identify the Secret this run created.
 	secretCreated bool
@@ -105,8 +129,8 @@ type enrolRun struct {
 	secretMaybeCreated bool
 }
 
-// execute runs steps 4 to 7: the Secret, the wait for its token, the shared objects again, the state file and
-// the verification.
+// execute runs the Secret, the wait for its token, the shared objects again, the state file and the
+// verification.
 func (run *enrolRun) execute(ctx context.Context) *failure {
 	if fail := run.replaceSecret(ctx); fail != nil {
 		return fail
@@ -128,19 +152,28 @@ func (run *enrolRun) execute(ctx context.Context) *failure {
 		CACert:        caPEM,
 		Token:         token,
 		TLSServerName: run.session.tlsServerName,
+		HostMachineID: run.hostMachineID,
 	}
 
 	if err := SaveState(run.reporter.dataDir, state); err != nil {
 		return newFailure(reasonStateWriteFailed, "", err)
 	}
 
+	// The state file is the record from here on. A pending file that cannot be removed is only a leftover: the
+	// next successful enrol, unenrol or uninstall removes it.
+	if err := deletePending(run.reporter.dataDir); err != nil {
+		slog.Warn("could not remove the reporter pending file after writing the state file", "error", err)
+	}
+
 	return run.reporter.verify(ctx, state)
 }
 
 // replaceSecret deletes this host's old token Secret, when it has one that is ours, and creates a fresh one, so
-// a re-enrol always mints a new token. An unlabelled Secret of that name is never touched. The run only counts
-// as having touched the Secret once the old one is confirmed gone: if its delete fails the old token may be
-// live, and nothing may be undone.
+// a re-enrol always mints a new token. An unlabelled Secret of that name is never touched. The instance id is
+// written to the pending file just before the create, unless a usable state file already holds it, so a Secret
+// never exists without a local file naming it. The run only counts as having touched the Secret once the old one
+// is confirmed gone and the id is recorded: if the delete fails the old token may be live, and nothing may be
+// undone.
 func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 	client := run.session.client
 	secret := secretPath(run.instanceID)
@@ -164,6 +197,12 @@ func (run *enrolRun) replaceSecret(ctx context.Context) *failure {
 	case kube.IsNotFound(err):
 	default:
 		return run.session.classify(err)
+	}
+
+	if run.stateHoldsID == false {
+		if err := savePending(run.reporter.dataDir, run.instanceID, run.hostMachineID); err != nil {
+			return newFailure(reasonStateWriteFailed, "", err)
+		}
 	}
 
 	run.secretTouched = true
@@ -245,27 +284,43 @@ func decodeSecretField(obj map[string]any, key string) string {
 	return string(decoded)
 }
 
-// rollback removes the Secret this run created, or may have created, and then the state file, on a context of
-// its own so that a cancelled command still cleans up. It never touches a shared object, nor a Secret this run
-// did not create.
+// rollback removes the Secret this run created, or may have created, and then the pending file and the state
+// file, on a context of its own so that a cancelled command still cleans up. It never touches a shared object, nor
+// a Secret this run did not create, nor a state file written on another host.
 //
-// When the Secret's fate is unknown because deleting it failed, the state file stays: it is the only record of
-// the instance id, so a later unenrol or re-enrol can still find and revoke the Secret. The hook runs when the
-// state file's presence ended up different from what it was before the run.
+// When the Secret's fate is unknown because deleting it failed, both files stay: they are the only record of the
+// instance id, so a later unenrol or re-enrol can still find and revoke the Secret. The hook runs when the state
+// file's presence ended up different from what it was before the run.
 func (run *enrolRun) rollback(ctx context.Context) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 
 	if run.removeOwnSecret(cleanup) {
-		if err := DeleteState(run.reporter.dataDir); err != nil {
-			slog.Warn("could not remove the reporter state file while rolling back an enrol", "error", err)
-		}
+		run.removeOwnRecords()
 	} else {
-		slog.Warn("the reporter token Secret could not be removed, keeping the state file so that it can still be unenrolled")
+		slog.Warn("the reporter token Secret could not be removed, keeping the record of its instance id so that it can still be unenrolled")
 	}
 
 	if stateFileExists(run.reporter.dataDir) != run.hadState {
 		run.reporter.stateChanged(ctx)
+	}
+}
+
+// removeOwnRecords deletes the pending file and this host's own state file once the Secret they name is gone. A
+// state file that another host wrote is left alone, because it was never this run's to replace.
+func (run *enrolRun) removeOwnRecords() {
+	dataDir := run.reporter.dataDir
+
+	if err := deletePending(dataDir); err != nil {
+		slog.Warn("could not remove the reporter pending file while rolling back an enrol", "error", err)
+	}
+
+	if copiedFromAnotherHost(recordedHostMachineID(statePath(dataDir)), run.hostMachineID) {
+		return
+	}
+
+	if err := DeleteState(dataDir); err != nil {
+		slog.Warn("could not remove the reporter state file while rolling back an enrol", "error", err)
 	}
 }
 
