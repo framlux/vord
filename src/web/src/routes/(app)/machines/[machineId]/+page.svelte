@@ -47,6 +47,18 @@
 	const healthStatus = $derived(liveStatus?.healthStatus ?? data.machineDetail?.healthStatus ?? MachineHealthStatus.Offline);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
 	const isTeamTier = $derived(hasTeamFeatures(data.subscription?.tier));
+	// Authorising a key is open to every plan because cluster reporting commands are, so below Team the
+	// tab says what the keys are for instead of promising remote commands the plan cannot send.
+	const authorizedKeysIntro = $derived(
+		isTeamTier
+			? 'Signing keys authorized to send remote commands to this machine.'
+			: 'Signing keys authorized to sign commands for this machine. On every plan they sign cluster reporting commands; other remote commands need a Team subscription.'
+	);
+	const authorizedKeysEmptyHint = $derived(
+		isTeamTier
+			? 'Authorize a signing key to enable remote commands.'
+			: 'Authorize a signing key to sign cluster reporting commands.'
+	);
 	// svelte-ignore state_referenced_locally
 	let authorizedKeys = $state<MachineAuthorizedKeyDto[]>(data.authorizedKeys ?? []);
 
@@ -1207,7 +1219,7 @@
 	{:else if activeTab === 'authorized-keys'}
 		<div class="space-y-4">
 			<p class="text-sm text-surface-500 dark:text-surface-400">
-				Signing keys authorized to send remote commands to this machine. Only MachineAdmin or higher can manage authorized keys.
+				{authorizedKeysIntro} Only MachineAdmin or higher can manage authorized keys.
 			</p>
 
 			<!-- Authorize form -->
@@ -1241,7 +1253,7 @@
 			{#if authorizedKeys.length === 0}
 				<EmptyState
 					title="No authorized keys"
-					description="No signing keys have been authorized for this machine. Authorize a signing key to enable remote commands."
+					description="No signing keys have been authorized for this machine. {authorizedKeysEmptyHint}"
 				/>
 			{:else}
 				<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">

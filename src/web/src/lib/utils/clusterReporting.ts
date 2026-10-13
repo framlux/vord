@@ -64,27 +64,45 @@ export type MachineAssessment = { key: UsableSigningKey } | { skip: SkipReason }
 // accepts with the capability off, but an uninstall only reaches such a host when it once enrolled:
 // the server wants a candidate row or a report that says so, and the agent wants its reporter record.
 // A machine whose capabilities could not be read (null) is allowed: unknown is not disabled.
-function lacksCapabilityFor(machine: KubernetesEligibleMachineDto, commandType: ReporterCommandType, enrolled: boolean): boolean {
+function lacksCapabilityFor(
+	machine: KubernetesEligibleMachineDto,
+	commandType: ReporterCommandType,
+	enrolled: boolean | undefined
+): boolean {
 	if (machine.remoteCommandsEnabled !== false) {
 		return false;
 	}
 
-	return commandType === AGENT_ENROL || (commandType === AGENT_UNINSTALL && enrolled === false);
+	return commandType === AGENT_ENROL || (commandType === AGENT_UNINSTALL && enrolled !== true);
 }
+
+/** The commands whose capability rule does not depend on whether the machine is enrolled. */
+type EnrolmentIndependentCommand = typeof AGENT_ENROL | typeof AGENT_UNENROL;
 
 /**
  * Decides whether a machine can be sent a command and with which of the user's keys. The order of
  * the reasons follows the server's: the key is checked before the pause, and the pause before the
- * capability. The capability only counts for the commands that need it (see lacksCapabilityFor);
- * `enrolled` says whether the machine is known to be enrolled and only matters for an uninstall. It
- * defaults to what the machine's own report says; a caller that knows the machine is a candidate of the
- * cluster passes true.
+ * capability. The capability only counts for the commands that need it (see lacksCapabilityFor).
+ * An uninstall must be told whether the machine is known to be enrolled, which is the caller's to
+ * decide because a candidate row of the cluster counts as well as the machine's own report (see
+ * isEnrolled); the other commands do not take the flag.
  */
 export function assessMachine(
 	machine: KubernetesEligibleMachineDto,
 	keys: UsableSigningKey[],
+	commandType: EnrolmentIndependentCommand
+): MachineAssessment;
+export function assessMachine(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[],
+	commandType: typeof AGENT_UNINSTALL,
+	enrolled: boolean
+): MachineAssessment;
+export function assessMachine(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[],
 	commandType: ReporterCommandType,
-	enrolled: boolean = machine.enrolled
+	enrolled?: boolean
 ): MachineAssessment {
 	const key = keys.find((k) => machine.authorizedSigningKeyIds.includes(k.serverKeyId));
 	if (key === undefined) {
@@ -109,8 +127,19 @@ export function assessMachine(
 export function sendBlock(
 	machine: KubernetesEligibleMachineDto,
 	keys: UsableSigningKey[] | null,
+	commandType: EnrolmentIndependentCommand
+): SkipReason | null;
+export function sendBlock(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[] | null,
+	commandType: typeof AGENT_UNINSTALL,
+	enrolled: boolean
+): SkipReason | null;
+export function sendBlock(
+	machine: KubernetesEligibleMachineDto,
+	keys: UsableSigningKey[] | null,
 	commandType: ReporterCommandType,
-	enrolled: boolean = machine.enrolled
+	enrolled?: boolean
 ): SkipReason | null {
 	if (keys === null || keys.length === 0) {
 		if (machine.isPaused) {
@@ -120,7 +149,10 @@ export function sendBlock(
 		return lacksCapabilityFor(machine, commandType, enrolled) ? 'remote_commands_disabled' : null;
 	}
 
-	const assessment = assessMachine(machine, keys, commandType, enrolled);
+	const assessment =
+		commandType === AGENT_UNINSTALL
+			? assessMachine(machine, keys, commandType, enrolled === true)
+			: assessMachine(machine, keys, commandType);
 
 	return 'skip' in assessment ? assessment.skip : null;
 }
@@ -162,7 +194,7 @@ function isEnrolled(context: ReportingContext, machine: KubernetesEligibleMachin
 export function planEnable(context: ReportingContext, keys: UsableSigningKey[]): ReportingPlan {
 	const plan = emptyPlan();
 	for (const machine of context.eligibleMachines) {
-		if (machine.enrolled || isCandidate(context, machine.machineId)) {
+		if (isEnrolled(context, machine)) {
 			continue;
 		}
 

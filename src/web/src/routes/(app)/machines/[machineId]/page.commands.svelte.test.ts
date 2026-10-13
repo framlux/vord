@@ -268,6 +268,40 @@ describe('machine page tabs by tier', () => {
 		}
 	);
 
+	it.each(['Free', 'Pro'])(
+		'tells the %s tier what authorized keys are for: cluster reporting on every plan, other commands on Team',
+		async (tier) => {
+			api.getMachineAuthorizedKeys.mockResolvedValue([]);
+			renderPage(tier);
+
+			await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+			const panel = within(screen.getByRole('tabpanel'));
+
+			expect(await panel.findByText('No authorized keys')).toBeInTheDocument();
+			expect(panel.getByText(/Signing keys authorized to sign commands for this machine/)).toHaveTextContent(
+				'On every plan they sign cluster reporting commands; other remote commands need a Team subscription.'
+			);
+			expect(panel.getByText(/Authorize a signing key to sign cluster reporting commands/)).toBeInTheDocument();
+			expect(panel.queryByText(/authorized to send remote commands/)).not.toBeInTheDocument();
+			expect(panel.queryByText(/to enable remote commands/)).not.toBeInTheDocument();
+		}
+	);
+
+	it.each(['Team', 'Enterprise'])('keeps the remote commands wording on the Authorized Keys tab for the %s tier', async (tier) => {
+		api.getMachineAuthorizedKeys.mockResolvedValue([]);
+		renderPage(tier);
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Authorized Keys' }));
+
+		const panel = within(screen.getByRole('tabpanel'));
+
+		expect(await panel.findByText('No authorized keys')).toBeInTheDocument();
+		expect(panel.getByText(/Signing keys authorized to send remote commands to this machine/)).toBeInTheDocument();
+		expect(panel.getByText(/Authorize a signing key to enable remote commands/)).toBeInTheDocument();
+		expect(panel.queryByText(/cluster reporting/)).not.toBeInTheDocument();
+	});
+
 	it('authorizes a signing key on the Pro tier', async () => {
 		const secondKey: SigningKeyDto = { ...serverKey, id: 42, label: 'Desk', fingerprint: 'fp-b', publicKey: 'PUBLIC-B' };
 		api.getSigningKeys.mockResolvedValue({ keys: [serverKey, secondKey], activeCount: 2, maxKeys: 5 });

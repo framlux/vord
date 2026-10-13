@@ -26,7 +26,6 @@ import {
 	planUnenrolOne,
 	planUpdatePermissions,
 	sendBlock,
-	type ReporterCommandType,
 	type ReportingContext
 } from './clusterReporting';
 
@@ -100,11 +99,12 @@ describe('assessMachine', () => {
 	});
 
 	it('still allows a machine whose remote commands are unknown, because unknown is not disabled', () => {
-		const commandTypes: ReporterCommandType[] = [AGENT_ENROL, AGENT_UNENROL, AGENT_UNINSTALL];
+		const unknown = machine({ remoteCommandsEnabled: null });
 
-		for (const commandType of commandTypes) {
-			expect(assessMachine(machine({ remoteCommandsEnabled: null }), [KEY], commandType)).toEqual({ key: KEY });
-		}
+		expect(assessMachine(unknown, [KEY], AGENT_ENROL)).toEqual({ key: KEY });
+		expect(assessMachine(unknown, [KEY], AGENT_UNENROL)).toEqual({ key: KEY });
+		expect(assessMachine(unknown, [KEY], AGENT_UNINSTALL, false)).toEqual({ key: KEY });
+		expect(assessMachine(unknown, [KEY], AGENT_UNINSTALL, true)).toEqual({ key: KEY });
 	});
 
 	it('names the authorisation first when a machine is both unauthorised and paused', () => {
@@ -118,34 +118,46 @@ describe('assessMachine', () => {
 	});
 
 	it('uninstalls through a machine whose remote commands are disabled when it is enrolled', () => {
-		const disabled = machine({ remoteCommandsEnabled: false });
-
-		expect(assessMachine({ ...disabled, enrolled: true }, [KEY], AGENT_UNINSTALL)).toEqual({ key: KEY });
-		expect(assessMachine(disabled, [KEY], AGENT_UNINSTALL, true)).toEqual({ key: KEY });
+		expect(assessMachine(machine({ remoteCommandsEnabled: false }), [KEY], AGENT_UNINSTALL, true)).toEqual({ key: KEY });
 	});
 
 	it('refuses to uninstall through a machine whose remote commands are disabled and that never enrolled', () => {
-		expect(assessMachine(machine({ remoteCommandsEnabled: false, enrolled: false }), [KEY], AGENT_UNINSTALL)).toEqual({
+		expect(assessMachine(machine({ remoteCommandsEnabled: false }), [KEY], AGENT_UNINSTALL, false)).toEqual({
 			skip: 'remote_commands_disabled'
 		});
 	});
 
+	it('takes the enrolled flag the caller passes, not the machine entry, to judge an uninstall', () => {
+		const reportsEnrolled = machine({ remoteCommandsEnabled: false, enrolled: true });
+
+		expect(assessMachine(reportsEnrolled, [KEY], AGENT_UNINSTALL, false)).toEqual({ skip: 'remote_commands_disabled' });
+	});
+
 	it('uninstalls through a machine whose remote commands are enabled whether or not it is enrolled', () => {
-		expect(assessMachine(machine({ enrolled: false }), [KEY], AGENT_UNINSTALL)).toEqual({ key: KEY });
-		expect(assessMachine(machine({ enrolled: true }), [KEY], AGENT_UNINSTALL)).toEqual({ key: KEY });
+		expect(assessMachine(machine(), [KEY], AGENT_UNINSTALL, false)).toEqual({ key: KEY });
+		expect(assessMachine(machine(), [KEY], AGENT_UNINSTALL, true)).toEqual({ key: KEY });
 	});
 
 	it('keeps the authorisation and the pause rules for the cleanup commands', () => {
-		const disabled = machine({ remoteCommandsEnabled: false, enrolled: true });
+		const disabled = machine({ remoteCommandsEnabled: false });
+		const unauthorised = { ...disabled, authorizedSigningKeyIds: [99] };
+		const paused = { ...disabled, isPaused: true };
 
-		const cleanupTypes: ReporterCommandType[] = [AGENT_UNENROL, AGENT_UNINSTALL];
+		expect(assessMachine(unauthorised, [KEY], AGENT_UNENROL)).toEqual({ skip: 'key_not_authorised' });
+		expect(assessMachine(unauthorised, [KEY], AGENT_UNINSTALL, true)).toEqual({ skip: 'key_not_authorised' });
+		expect(assessMachine(paused, [KEY], AGENT_UNENROL)).toEqual({ skip: 'paused' });
+		expect(assessMachine(paused, [KEY], AGENT_UNINSTALL, true)).toEqual({ skip: 'paused' });
+	});
 
-		for (const commandType of cleanupTypes) {
-			expect(assessMachine({ ...disabled, authorizedSigningKeyIds: [99] }, [KEY], commandType)).toEqual({
-				skip: 'key_not_authorised'
-			});
-			expect(assessMachine({ ...disabled, isPaused: true }, [KEY], commandType)).toEqual({ skip: 'paused' });
-		}
+	it('cannot judge an uninstall without being told whether the machine is enrolled', () => {
+		const judgeWithoutSayingEnrolled = () =>
+			// @ts-expect-error an uninstall needs the enrolled flag
+			assessMachine(machine(), [KEY], AGENT_UNINSTALL);
+		const blockWithoutSayingEnrolled = () =>
+			// @ts-expect-error an uninstall needs the enrolled flag
+			sendBlock(machine(), [KEY], AGENT_UNINSTALL);
+
+		expect([judgeWithoutSayingEnrolled, blockWithoutSayingEnrolled]).toHaveLength(2);
 	});
 });
 
@@ -162,9 +174,8 @@ describe('sendBlock', () => {
 	it('blocks an uninstall on a disabled machine only while it has not enrolled', () => {
 		const disabled = machine({ remoteCommandsEnabled: false });
 
-		expect(sendBlock(disabled, [KEY], AGENT_UNINSTALL)).toBe('remote_commands_disabled');
+		expect(sendBlock(disabled, [KEY], AGENT_UNINSTALL, false)).toBe('remote_commands_disabled');
 		expect(sendBlock(disabled, [KEY], AGENT_UNINSTALL, true)).toBeNull();
-		expect(sendBlock({ ...disabled, enrolled: true }, [KEY], AGENT_UNINSTALL)).toBeNull();
 	});
 
 	it('does not judge the key before the keys are known, or when the user has none, but judges the machine', () => {
@@ -175,8 +186,10 @@ describe('sendBlock', () => {
 			expect(sendBlock(machine({ isPaused: true }), keys, AGENT_UNENROL)).toBe('paused');
 			expect(sendBlock(machine({ remoteCommandsEnabled: false }), keys, AGENT_ENROL)).toBe('remote_commands_disabled');
 			expect(sendBlock(machine({ remoteCommandsEnabled: false }), keys, AGENT_UNENROL)).toBeNull();
-			expect(sendBlock(machine({ remoteCommandsEnabled: false }), keys, AGENT_UNINSTALL)).toBe('remote_commands_disabled');
-			expect(sendBlock(machine({ remoteCommandsEnabled: false, enrolled: true }), keys, AGENT_UNINSTALL)).toBeNull();
+			expect(sendBlock(machine({ remoteCommandsEnabled: false }), keys, AGENT_UNINSTALL, false)).toBe(
+				'remote_commands_disabled'
+			);
+			expect(sendBlock(machine({ remoteCommandsEnabled: false }), keys, AGENT_UNINSTALL, true)).toBeNull();
 		}
 	});
 });
