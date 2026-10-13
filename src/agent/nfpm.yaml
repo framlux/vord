@@ -38,6 +38,10 @@ scripts:
   postremove: ./packaging/postremove.sh
 
 rpm:
+  scripts:
+    # An rpm upgrade runs the old package's pre-remove after the new package's post-install, so
+    # only a script that runs after the whole transaction can leave the service enabled and running.
+    posttrans: ./packaging/posttrans.sh
   signature:
     # Path to the armoured private key, materialized from the RPM_SIGNING_KEY secret by the
     # release workflow. An empty value builds an unsigned package — which is the state the

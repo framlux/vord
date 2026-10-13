@@ -1,11 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Copyright (c) 2026 Framlux LLC
 # Licensed under the MIT License
 # See LICENSE for details.
 
 set -e
-
-systemctl daemon-reload || true
 
 # Create default config on fresh install only
 mkdir -p /etc/framlux
@@ -22,19 +20,36 @@ EOF
     chmod 0600 /etc/framlux/vord-agent.toml
 fi
 
-# Determine if this is a fresh install or upgrade
-# deb: $1 = "configure", $2 = old-version (empty on fresh install)
-# rpm: $1 = number of installed instances (1 = fresh, 2+ = upgrade)
-is_upgrade=false
-if [ "${1:-}" = "configure" ] && [ -n "${2:-}" ]; then
-    is_upgrade=true
-elif [ "${1:-}" -ge 2 ] 2>/dev/null; then
-    is_upgrade=true
-fi
-
-if [ "${is_upgrade}" = "true" ]; then
-    systemctl restart vord-agent || true
-else
-    systemctl enable vord-agent || true
-    systemctl start vord-agent || true
-fi
+# What happens to the unit depends on the operation, which $1 names. An upgrade enables the unit
+# again because the outgoing package's pre-remove has already run by now, and every release before
+# this fix disabled the unit there; an operator who wants the agent off masks it, which makes the
+# enable and the start below fail harmlessly.
+#   deb: "configure", with the previously configured version in $2 when there was one (an upgrade,
+#        a downgrade, or a reinstall after a removal), then the "abort-*" forms dpkg uses to undo a
+#        failed removal or upgrade.
+#   rpm: the number of copies installed, which says nothing about whether the service needs
+#        starting; posttrans.sh does that once the whole transaction, including the old package's
+#        pre-remove, is behind it.
+case "${1:-}" in
+    configure)
+        systemctl daemon-reload || true
+        systemctl enable vord-agent || true
+        if [ -z "${2:-}" ]; then
+            systemctl start vord-agent || true
+        else
+            systemctl restart vord-agent || true
+        fi
+        ;;
+    abort-remove | abort-deconfigure)
+        systemctl enable vord-agent || true
+        systemctl start vord-agent || true
+        ;;
+    abort-upgrade)
+        systemctl start vord-agent || true
+        ;;
+    [0-9]*)
+        systemctl daemon-reload || true
+        ;;
+    *)
+        ;;
+esac
