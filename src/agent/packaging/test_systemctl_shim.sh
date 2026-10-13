@@ -7,14 +7,22 @@
 # have systemd's tools installed but no running systemd. enable, disable, is-enabled, mask and
 # unmask go straight to the real binary: they only manage symlinks, work without a running
 # manager, and are exactly the calls whose outcome the tests are about. The verbs that need a live
-# manager are faked: start and restart record that the unit is active, stop clears it, and
-# is-active reads the record back. A masked unit refuses to start, as it does under real systemd.
-# The real binary is kept beside this one as systemctl.real.
+# manager are faked: start and restart record that the unit is active, stop clears it, is-active
+# reads the record back, and daemon-reload and reset-failed do nothing. A masked unit refuses to
+# start, as it does under real systemd. The real binary is kept beside this one as systemctl.real.
+#
+# Every call is also appended to a log, one line of arguments per call, so the tests can check
+# exactly which systemctl calls a maintainer script made and in what order.
+# test_packages_scenarios.sh reads the log from the same path.
 
 set -eu
 
 REAL="/usr/bin/systemctl.real"
 STATE_DIR="/run/systemctl-shim"
+CALL_LOG="${STATE_DIR}/calls"
+
+mkdir -p "${STATE_DIR}"
+printf '%s\n' "$*" >> "${CALL_LOG}"
 
 verb=""
 unit=""
@@ -37,7 +45,6 @@ case "${verb}" in
             echo "Failed to ${verb} ${unit}.service: Unit ${unit}.service is masked." >&2
             exit 1
         fi
-        mkdir -p "${STATE_DIR}"
         : > "${STATE_DIR}/${unit}.active"
         ;;
     stop)

@@ -280,8 +280,11 @@ test-packages` (CI job `test-agent-packages`) pins all of this against the real 
 packages with the nfpm pinned in `packaging/install_nfpm.sh` (the release workflow installs it from the same script),
 builds the baseline from the `agent-v3.3.0` scripts in git rather than downloading a published package, and checks the
 unit after a fresh install, an upgrade from the released package, an upgrade to a newer version, a downgrade, a
-removal, a reinstall after removal and a masked unit, with real systemd enablement and only start, stop, restart and
-is-active faked.
+removal, a reinstall after removal and a masked unit, with real systemd enablement and only start, stop, restart,
+is-active, daemon-reload and reset-failed faked. The same job runs every maintainer script directly with each argument
+form dpkg and rpm pass it and checks the exact, ordered `systemctl` calls it makes, counts the start and restart calls
+in each package transaction (exactly one for an install, upgrade or downgrade), and fails on a scriptlet error in the
+package manager's output, because dnf exits 0 when an rpm scriptlet fails.
 
 Cutting a release:
 
