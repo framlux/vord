@@ -35,7 +35,7 @@ public sealed class MachineStatusFilter
     public bool PausedOnly { get; }
 
     /// <summary>
-    /// Parses a status filter name, ignoring case.
+    /// Parses a status filter name, ignoring case and surrounding whitespace.
     /// </summary>
     /// <param name="value">
     /// One of healthy, warning, critical, offline, online or paused. Online means any health other
@@ -49,7 +49,7 @@ public sealed class MachineStatusFilter
             return null;
         }
 
-        return value.ToLowerInvariant() switch
+        return value.Trim().ToLowerInvariant() switch
         {
             "healthy" => new MachineStatusFilter([MachineHealthStatus.Healthy], false),
             "warning" => new MachineStatusFilter([MachineHealthStatus.Warning], false),

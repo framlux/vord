@@ -71,6 +71,19 @@ public class MachineStatusFilterTests
     }
 
     [Test]
+    [Arguments(" critical")]
+    [Arguments("critical ")]
+    [Arguments("  Critical\t")]
+    public async Task Parse_IgnoresSurroundingWhitespace(string name)
+    {
+        // A typed or bookmarked URL can carry stray spaces; the web loader trims them, so the server must agree.
+        MachineStatusFilter? filter = MachineStatusFilter.Parse(name);
+
+        await Assert.That(filter).IsNotNull();
+        await Assert.That(filter!.HealthStatuses).IsEquivalentTo(new List<MachineHealthStatus> { MachineHealthStatus.Critical });
+    }
+
+    [Test]
     [Arguments(null)]
     [Arguments("")]
     [Arguments("   ")]
